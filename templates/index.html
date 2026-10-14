@@ -1,0 +1,85 @@
+{% extends "base.html" %}
+{% block title %}XFEL Maps{% endblock %}
+{% block body %}
+<section class="hero">
+  <div class="glass hero-card">
+    <p class="eyebrow">Batista Lab · Yale</p>
+    <h1>Electron-density maps from XFEL structures</h1>
+    <p class="lede">Three calculations from the tutorial notebooks. Each one builds a CCP4 map, clips the site you choose, and draws isodensity surfaces in PyMOL.</p>
+  </div>
+</section>
+
+<section class="wrap" id="workflows">
+  <h2>Choose a workflow</h2>
+  <div class="cards">
+    {% for spec in workflows.values() %}
+    <article class="glass card">
+      <p class="kicker">{{ spec.kicker }}</p>
+      <h3>{{ spec.title }}</h3>
+      <p>{{ spec.card }}</p>
+      <p class="method">{{ spec.how }}</p>
+      <a class="pill" href="{{ url_for('workflow', slug=spec.slug) }}">Open</a>
+    </article>
+    {% endfor %}
+  </div>
+</section>
+
+<section class="wrap" id="installation">
+  <div class="glass install">
+    <h2>Required installations</h2>
+    <p class="lede tight">The page is a local front end. The map is calculated by CCP4, clipped by Coot, and drawn by PyMOL. Python only needs Flask.</p>
+
+    <ol class="steps">
+      <li>
+        <h3>CCP4</h3>
+        <p>Install the <a href="https://www.ccp4.ac.uk/download/" target="_blank" rel="noreferrer">CCP4 suite</a>. On this Mac the usual location is <code>/Applications/ccp4-9</code>. The workflows call <code>cif2mtz</code>, <code>refmac5</code>, <code>cad</code>, <code>scaleit</code>, <code>fft</code>, <code>extends</code>, <code>mtzdump</code>, <code>ctruncate</code>, and <code>libcheck</code> after sourcing <code>bin/ccp4.setup-sh</code>.</p>
+      </li>
+      <li>
+        <h3>Coot</h3>
+        <p>Use the Coot binary shipped with CCP4, typically <code>$CCP4/bin/coot</code>. It runs without a window and writes a map fragment around the residue you choose. The contour slider inside Coot is not the figure; PyMOL draws the surfaces.</p>
+      </li>
+      <li>
+        <h3>PyMOL</h3>
+        <p>PyMOL must be on <code>PATH</code>. The conda-forge package is enough:</p>
+        <pre><code>conda install -c conda-forge pymol</code></pre>
+        <p>Headless PyMOL writes the PNG and a <code>.pml</code> script. If ray tracing needs a display, the same scene is rendered again without ray tracing.</p>
+      </li>
+      <li>
+        <h3>This application</h3>
+        <pre><code>cd web-application
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+python app.py</code></pre>
+        <p>Then open <a href="http://127.0.0.1:5050">http://127.0.0.1:5050</a>. Uploaded files and every intermediate — MTZ, logs, the extended map, the site fragment, and the PyMOL script — are saved in the output directory you enter.</p>
+      </li>
+      <li>
+        <h3>Input files</h3>
+        <p>Coordinates, structure-factor mmCIF, and validation <span class="nowrap">2Fo−Fc</span> coefficients come from the <a href="https://www.rcsb.org" target="_blank" rel="noreferrer">RCSB PDB</a>. Validation coefficients are also at</p>
+        <pre><code>https://files.rcsb.org/pub/pdb/validation_reports/xx/{pdbid}/{pdbid}_validation_2fo-fc_map_coef.cif.gz</code></pre>
+        <p>The omit-model workflow expects deposited intensities (<code>I</code>, <code>SIGI</code>) and a <code>FREE</code> flag, which is how 6w1v is distributed. <code>ctruncate</code> converts those intensities to amplitudes.</p>
+      </li>
+    </ol>
+
+    <div class="status-head">
+      <h3>What this computer can see</h3>
+      <form id="probe-form" class="probe">
+        <label for="ccp4_root">CCP4 directory</label>
+        <input id="ccp4_root" name="ccp4_root" value="{{ ccp4_root }}" autocomplete="off">
+        <button type="submit" class="pill ghost">Recheck</button>
+      </form>
+    </div>
+    <ul class="status" id="status-list">
+      <li class="{{ 'ok' if software.ccp4_ok else 'bad' }}"><span>CCP4</span><code>{{ software.ccp4_setup if software.ccp4_ok else 'setup script not found' }}</code></li>
+      <li class="{{ 'ok' if software.coot_ok else 'bad' }}"><span>Coot</span><code>{{ software.coot_path or 'not found' }}</code></li>
+      <li class="{{ 'ok' if software.pymol_ok else 'bad' }}"><span>PyMOL</span><code>{{ software.pymol_path or 'not on PATH' }}</code></li>
+      {% for program in software.programs %}
+      <li class="{{ 'ok' if program.ok else 'bad' }}"><span>{{ program.name }}</span><code>{{ program.path or 'not found' }}</code></li>
+      {% endfor %}
+    </ul>
+  </div>
+</section>
+{% endblock %}
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/home.js') }}"></script>
+{% endblock %}

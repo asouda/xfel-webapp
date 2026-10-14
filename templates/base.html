@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}XFEL Maps{% endblock %} · Batista Lab</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/app.css') }}">
+</head>
+<body>
+  <canvas id="field" aria-hidden="true"></canvas>
+  <header class="nav">
+    <a class="brand" href="{{ url_for('index') }}">XFEL Maps</a>
+    <nav>
+      <a href="{{ url_for('index') }}" {% if request.path == '/' %}aria-current="page"{% endif %}>Home</a>
+      <a href="{{ url_for('index') }}#workflows">Workflows</a>
+      <a href="{{ url_for('index') }}#installation">Installation</a>
+    </nav>
+  </header>
+  <main>
+    {% block body %}{% endblock %}
+  </main>
+  <footer class="site-footer">
+    <p>Batista Group · Yale University</p>
+    <p>Local calculations for the XFEL map notebooks. Files are written on the computer that runs this application.</p>
+  </footer>
+  <script src="{{ url_for('static', filename='js/particles.js') }}"></script>
+  {% block scripts %}{% endblock %}
+</body>
+</html>

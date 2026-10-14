@@ -1,0 +1,63 @@
+site_name: XFEL electron density maps
+site_description: Theory and step-by-step workflows for isomorphous Fo−Fo, omit-model mFo−DFc, and sharpened 2mFo−DFc maps.
+site_author: Alexander Soudackov
+repo_url: https://github.com/asouda/xfel-webapp
+repo_name: asouda/xfel-webapp
+copyright: Copyright &copy; 2026 Alexander Soudackov
+
+nav:
+  - Overview: index.md
+  - Shared background: concepts.md
+  - Workflows:
+      - Isomorphous Fo−Fo: fo-fo.md
+      - Omit-model mFo−DFc: omit-map.md
+      - Sharpened 2mFo−DFc: two-fo-fc.md
+  - Parameters: parameters.md
+
+theme:
+  name: material
+  language: en
+  features:
+    - navigation.instant
+    - navigation.tracking
+    - navigation.sections
+    - navigation.expand
+    - toc.follow
+    - content.code.copy
+    - search.suggest
+    - search.highlight
+  palette:
+    - scheme: slate
+      primary: blue
+      accent: indigo
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+    - scheme: default
+      primary: blue
+      accent: indigo
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.arithmatex:
+      generic: true
+  - pymdownx.details
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+  - pymdownx.superfences
+
+extra_javascript:
+  - javascripts/mathjax.js
+  - https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js
+
+plugins:
+  - search

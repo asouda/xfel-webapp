@@ -1,0 +1,24 @@
+[project]
+name = "xfel-webapp"
+version = "0.1.0"
+description = "Workflows for XFEL electron density maps"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+    "flask>=3.0",
+]
+
+authors = [
+    {name = "Alexander Soudackov", email = "asoudakov@icloud.com"}
+]
+
+license = { text = "MIT" }
+
+[project.urls]
+Homepage = "https://github.com/asouda/xfel-webapp"
+
+[dependency-groups]
+docs = [
+    "mkdocs>=1.6",
+    "mkdocs-material>=9.6",
+]

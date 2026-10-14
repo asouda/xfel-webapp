@@ -1,0 +1,252 @@
+{% extends "base.html" %}
+{% block title %}{{ spec.title }}{% endblock %}
+{% block body %}
+<section class="wrap workflow">
+  <a class="back" href="{{ url_for('index') }}#workflows">All workflows</a>
+  <div class="glass intro">
+    <p class="kicker">{{ spec.kicker }}</p>
+    <h1>{{ spec.title }}</h1>
+    {% if spec.slug == 'fofo' %}
+    <p class="equation">Δρ(r) ∝ Σ (|F<sub>LIGHT</sub>| − |F<sub>DARK</sub>|) exp(iφ<sub>ref</sub>)</p>
+    <p>This is the difference-Fourier map between two isomorphous datasets. Positive density means more electrons in the light structure. Negative density means more electrons in the dark structure. A real shift is a negative peak on the old position next to a positive peak on the new one.</p>
+    <h2>How it is calculated</h2>
+    <ol>
+      <li>Both structure-factor mmCIF files, and both validation coefficient files, are converted to MTZ with <code>cif2mtz</code>.</li>
+      <li><code>refmac5</code> runs for zero cycles so the amplitudes sit in a consistent MTZ. The deposited atoms are not moved.</li>
+      <li><code>cad</code> puts light amplitudes, dark amplitudes, and one phase column in a single file. The default phases are <code>PHWT</code> from the light validation 2Fo−Fc coefficients. You can switch to the dark validation file, or to phases from either zero-cycle REFMAC job.</li>
+      <li><code>scaleit</code> scales the light amplitudes onto the dark reference. <code>fft</code> transforms |F<sub>LIGHT</sub>| − |F<sub>DARK</sub>| with those phases, and <code>extends</code> pads the map around the light model.</li>
+      <li>Headless Coot clips a sphere around the site. PyMOL draws nested ±nσ isosurfaces, green through blue for positive density and red through magenta for negative density, and writes a PNG plus a <code>.pml</code> script.</li>
+    </ol>
+    {% elif spec.slug == 'refinement' %}
+    <p class="equation">Δρ(r) ∝ Σ (m|F<sub>o</sub>| − D|F<sub>c</sub>|) exp(iφ<sub>c</sub>)</p>
+    <p>REFMAC stores that coefficient as <code>DELFWT</code> / <code>PHDELWT</code>. Positive density is present in the observations and missing from the omit model. Negative density is where the model places electrons the data do not support. No second dataset is scaled in.</p>
+    <h2>How it is calculated</h2>
+    <ol>
+      <li>The observed mmCIF is converted to MTZ. <code>ctruncate</code> turns intensities <code>I, SIGI</code> into amplitudes, and <code>cad</code> copies the <code>FREE</code> flag onto those amplitudes.</li>
+      <li><code>refmac5</code> refines the omit coordinates for the number of cycles you set. Zero cycles calculate the map without moving atoms. Loose site distances can be external restraints, or a widened <code>libcheck</code> monomer library. Site angles are always external restraints, in degrees.</li>
+      <li><code>fft</code> transforms <code>DELFWT</code> / <code>PHDELWT</code>. <code>extends</code> pads the map around the refined model.</li>
+      <li>Coot clips the site from that difference map. PyMOL draws the refined coordinates and the ±nσ surfaces, and saves the PNG and the <code>.pml</code> script beside the map.</li>
+    </ol>
+    {% else %}
+    <p class="equation">ρ(r) ∝ Σ F<sub>WT</sub> exp(−ΔB (sinθ/λ)<sup>2</sup>) exp(iφ<sub>WT</sub>)</p>
+    <p>This is not a difference map. <code>FWT</code> is already the weighted 2m|F<sub>o</sub>| − D|F<sub>c</sub>| amplitude from the wwPDB validation file, and <code>PHWT</code> is the model phase. Mesh that covers an atom is accounted-for density. A gap on an atom, or a blob with no atom, is the usual hint that the model and the data disagree. Levels of 1–2σ are the normal view; 3–5σ is for difference maps and will often leave this mesh empty.</p>
+    <h2>How it is calculated</h2>
+    <ol>
+      <li>The structure-factor mmCIF and the validation coefficient mmCIF are converted to MTZ.</li>
+      <li><code>fft</code> sharpens <code>FWT</code> with <code>SCALE F1 1 ΔB</code> and transforms it with <code>PHWT</code>. Negative ΔB boosts the high-resolution terms. The default −40 Å<sup>2</sup> is a sharpening of 40 Å<sup>2</sup>. ΔB = 0 leaves <code>FWT</code> unchanged.</li>
+      <li><code>extends</code> pads the map around the model. Coot exports a normal map fragment, not a difference map.</li>
+      <li>PyMOL superimposes the site and neighbouring residues and draws one isosurface at each requested σ. The scene script is saved next to the extended map and the PNG.</li>
+    </ol>
+    {% endif %}
+  </div>
+
+  <form id="job-form" class="glass form" action="{{ url_for('start_job', slug=spec.slug) }}" method="post" enctype="multipart/form-data">
+    <h2>Input files</h2>
+    <p class="hint">Upload a file, or enter its full path on this computer. A path is better for the large mmCIF files. The tutorial paths below are filled in when those files are already in <code>data/</code>.</p>
+    <div class="file-grid">
+      {% for key, label, hint in spec.files %}
+      <fieldset>
+        <legend>{{ label }}</legend>
+        <p class="hint">{{ hint }}</p>
+        <label class="file-btn">
+          <input type="file" name="file_{{ key }}" accept=".pdb,.cif,.ent,.gz">
+          <span>Choose file</span>
+        </label>
+        <label class="path-label" for="path_{{ key }}">or path</label>
+        <input id="path_{{ key }}" name="path_{{ key }}" value="{{ paths.get(key, '') }}" placeholder="/path/to/file" autocomplete="off">
+      </fieldset>
+      {% endfor %}
+    </div>
+
+    <h2>Parameters</h2>
+    <div class="fields">
+      {% if spec.slug == 'twofofc' %}
+      <label>Structure name<input name="pdb_id" value="{{ defaults.pdb_id }}" required></label>
+      <label>Sharpening ΔB (Å²)<input name="delta_b" type="number" step="any" value="{{ defaults.delta_b }}" required></label>
+      {% else %}
+      <label>{% if spec.slug == 'refinement' %}Omit-model name{% else %}Dark name{% endif %}
+        <input name="dark_id" value="{{ defaults.dark_id }}" required>
+      </label>
+      <label>{% if spec.slug == 'refinement' %}Observed-data name{% else %}Light name{% endif %}
+        <input name="light_id" value="{{ defaults.light_id }}" required>
+      </label>
+      {% endif %}
+
+      {% if spec.slug == 'fofo' %}
+      <label>Phase source
+        <select name="phase_source">
+          <option value="light_validation" selected>Light validation PHWT</option>
+          <option value="dark_validation">Dark validation PHWT</option>
+          <option value="light_refmac">Light REFMAC phases</option>
+          <option value="dark_refmac">Dark REFMAC phases</option>
+        </select>
+      </label>
+      {% endif %}
+
+      <label>CCP4 directory<input name="ccp4_root" value="{{ defaults.ccp4_root }}" required></label>
+      <label>Resolution
+        <select name="resolution_source">
+          <option value="sf" selected>Common shell of the structure-factor MTZ</option>
+          <option value="explicit">Explicit cutoffs below</option>
+        </select>
+      </label>
+      <label>Low-resolution cutoff (Å)<input name="lowres" type="number" step="any" value="{{ defaults.lowres }}"></label>
+      <label>High-resolution cutoff (Å)<input name="dmin" type="number" step="any" value="{{ defaults.dmin }}"></label>
+      <label>Map border (Å)<input name="map_border" type="number" step="any" value="{{ defaults.map_border }}"></label>
+
+      {% if spec.slug == 'refinement' %}
+      <label>REFMAC cycles<input name="refmac_ncyc" type="number" min="0" step="1" value="{{ defaults.refmac_ncyc }}"></label>
+      <label>Distance sigma (Å)<input name="distance_sigma" type="number" step="any" value="{{ defaults.distance_sigma }}"></label>
+      <label>Angle sigma (degrees)<input name="angle_sigma" type="number" step="any" value="{{ defaults.angle_sigma }}"></label>
+      <label class="check"><input type="checkbox" name="use_libcheck"> Widen distances in a libcheck library instead of external distances</label>
+      <label class="wide">Monomer names for libcheck
+        <input name="lib_monomers" placeholder="blank = site residue plus every non-water hetero residue">
+      </label>
+      <label class="wide">Distance restraints
+        <textarea name="distance_restraints">{{ defaults.distance_restraints }}</textarea>
+        <span class="hint">One pair per line: <code>MN1 O5</code>, or <code>MN1 O5 2.40</code>, or <code>MN1 O5 2.40 0.50</code>. A missing distance keeps the distance in the starting model. Clear the box to add none.</span>
+      </label>
+      <label class="wide">Angle restraints
+        <textarea name="angle_restraints">{{ defaults.angle_restraints }}</textarea>
+        <span class="hint">The middle atom is the vertex: <code>MN3 O5 MN4</code>, optionally followed by the angle and sigma in degrees.</span>
+      </label>
+      {% endif %}
+    </div>
+
+    <h2>Site and figure</h2>
+    <div class="fields">
+      <label>Chain<input name="site_chain" value="{{ defaults.site_chain }}" maxlength="1" required></label>
+      <label>Residue<input name="site_resi" type="number" step="1" value="{{ defaults.site_resi }}" required></label>
+      <label>Label<input name="site_label" value="{{ defaults.site_label }}" required></label>
+      <div class="scan-action">
+        <button type="button" class="pill ghost" id="scan-btn">List hetero residues</button>
+        <p class="hint">Reads the {{ spec.scan_label }} and lists non-water, non-lipid hetero residues. Click a row to fill the chain and residue.</p>
+      </div>
+      <label class="wide">Neighbouring residues
+        <textarea name="extra_residues">{{ defaults.extra_residues }}</textarea>
+        <span class="hint">One per line: <code>chain residue label</code>, for example <code>A 189 GLU189</code>. Drawn as sticks. Leave blank for none.</span>
+      </label>
+      <label class="wide">Additional copies
+        <textarea name="extra_copies" placeholder="D 416"></textarea>
+        <span class="hint">Optional extra <code>chain residue</code> lines. Coot writes one fragment per copy. The figure uses the chain and residue above.</span>
+      </label>
+      <label>Clip radius (Å)<input name="export_radius" type="number" step="any" value="{{ defaults.export_radius }}"></label>
+      <label>Carve radius (Å)<input name="carve" type="number" step="any" value="{{ defaults.carve }}"></label>
+      <label>Sigma levels<input name="sigma_levels" value="{{ defaults.sigma_levels }}"></label>
+      {% if spec.slug != 'twofofc' %}
+      <label>Positive levels only<input name="sigma_positive" placeholder="blank = sigma levels"></label>
+      <label>Negative levels only<input name="sigma_negative" placeholder="blank = sigma levels"></label>
+      {% endif %}
+      <label>Contour
+        <select name="contour_mode">
+          <option value="sigma" selected>Sigma, after PyMOL normalises the map</option>
+          <option value="absolute">Absolute map units</option>
+        </select>
+      </label>
+      <label>Surface
+        <select name="surface">
+          <option value="mesh" {% if defaults.surface == 'mesh' %}selected{% endif %}>Mesh</option>
+          <option value="solid" {% if defaults.surface == 'solid' %}selected{% endif %}>Solid</option>
+        </select>
+      </label>
+      <label>Figure width<input name="png_width" type="number" step="1" value="{{ defaults.png_width }}"></label>
+      <label>Figure height<input name="png_height" type="number" step="1" value="{{ defaults.png_height }}"></label>
+      <label class="check"><input type="checkbox" name="show_oec_bonds" checked> Draw Mn/Ca–O bonds when those atom names exist</label>
+      <label class="check"><input type="checkbox" name="draw_distances" checked> Draw the default Mn1–O5 and Glu OE2 distances when those atoms exist</label>
+      <label class="check"><input type="checkbox" name="ray_trace" checked> Ray-trace the figure</label>
+      <label class="check"><input type="checkbox" name="recompute_map" checked> Recompute the map if one is already in the output directory</label>
+      <label class="check"><input type="checkbox" name="recompute_fragment" checked> Recompute the Coot fragment</label>
+    </div>
+
+    <h2>Output directory</h2>
+    <label class="wide">Folder on this computer
+      <input name="output_dir" value="{{ defaults.output_dir }}" required>
+      <span class="hint">The extended map, the site fragment, CCP4 logs, MTZ files, the PNG, and the PyMOL script are all written here.</span>
+    </label>
+
+    <div class="actions">
+      <button type="submit" class="pill solid" id="run-btn">Calculate and draw</button>
+      <p class="hint" id="runtime-note">A photosystem II map can take many minutes. REFMAC with more than zero cycles takes longer. The log updates while the job runs.</p>
+    </div>
+    <p class="error" id="form-error" hidden></p>
+  </form>
+
+  <div id="scan-panel" class="glass scan-panel" hidden>
+    <h2>Hetero residues</h2>
+    <p class="hint" id="scan-summary"></p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Chain</th><th>Residue</th><th>Name</th><th>Atoms</th><th>Occupancy</th><th>Atom names</th></tr></thead>
+        <tbody id="scan-body"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <section id="run-panel" class="glass run-panel" hidden>
+    <div class="run-head">
+      <h2 id="run-title">Calculation</h2>
+      <p id="run-state" class="state">Queued</p>
+    </div>
+    <pre id="log" class="log"></pre>
+    <figure id="result" hidden>
+      <div class="viewer-head">
+        <h3>Interactive 3D scene</h3>
+        <div class="viewer-actions">
+          <button type="button" class="pill ghost" id="viewer-save" disabled>Save PNG</button>
+          <button type="button" class="pill ghost" id="viewer-reset">Reset view</button>
+        </div>
+      </div>
+      <p class="hint viewer-help" id="viewer-help">Drag to rotate, scroll to zoom, and right-drag to pan. Add bond and Add distance: click two atoms. Delete: click a stick, or click two atoms to remove the bond and distance between them. Add label: click an atom to show its name, and click it again to remove the label. Distance labels turns the angstrom lengths on the dashed lines on or off. Solid and Mesh switch the isosurface style. The transparency slider runs from opaque to clear. Save PNG keeps the orientation you are looking at.</p>
+      <div class="viewer-edit" id="viewer-edit">
+        <button type="button" class="pill" id="edit-bond" aria-pressed="false" disabled>Add bond</button>
+        <button type="button" class="pill" id="edit-distance" aria-pressed="false" disabled>Add distance</button>
+        <button type="button" class="pill" id="edit-delete" aria-pressed="false" disabled>Delete</button>
+        <button type="button" class="pill" id="edit-label" aria-pressed="false" disabled>Add label</button>
+        <button type="button" class="pill" id="edit-distance-labels" aria-pressed="false" disabled>Distance labels</button>
+      </div>
+      <div class="viewer-style" id="viewer-style">
+        <div class="viewer-style-group" role="group" aria-label="Isosurface style">
+          <button type="button" class="pill" id="surface-solid" aria-pressed="true" disabled>Solid</button>
+          <button type="button" class="pill" id="surface-mesh" aria-pressed="false" disabled>Mesh</button>
+        </div>
+        <label class="viewer-transparency" for="surface-transparency">
+          Transparency
+          <input id="surface-transparency" type="range" min="0" max="100" value="45" step="1" disabled>
+          <span id="surface-transparency-value">45%</span>
+        </label>
+      </div>
+      <div id="viewer" class="viewer" role="application" aria-label="Interactive molecular density viewer"></div>
+      <p id="viewer-status" class="viewer-status" aria-live="polite"></p>
+      <figcaption id="caption"></figcaption>
+      {% if spec.slug == 'twofofc' %}
+      <ul class="legend">
+        <li><i style="background:#1a6ca8"></i> lowest positive σ, marine</li>
+        <li><i style="background:#0000ff"></i> next, blue</li>
+        <li><i style="background:#00008b"></i> highest, deep blue</li>
+      </ul>
+      {% else %}
+      <ul class="legend">
+        <li><i style="background:#228b22"></i> + lowest σ</li>
+        <li><i style="background:#00e5ff"></i> + mid σ</li>
+        <li><i style="background:#0033ff"></i> + highest σ</li>
+        <li><i style="background:#ff2a2a"></i> − lowest σ</li>
+        <li><i style="background:#fa8072"></i> − mid σ</li>
+        <li><i style="background:#ff00ff"></i> − highest σ</li>
+      </ul>
+      {% endif %}
+      <details class="static-figure">
+        <summary>Show saved PNG</summary>
+        <img id="figure" alt="Static PyMOL rendering of isodensity surfaces around the chosen site">
+      </details>
+      <dl id="file-list" class="files"></dl>
+    </figure>
+  </section>
+</section>
+{% endblock %}
+{% block scripts %}
+<script>
+  window.XFEL_SCAN_KEY = {{ spec.scan_key | tojson }};
+</script>
+<script src="{{ url_for('static', filename='vendor/ngl-2.5.0.js') }}?v=2"></script>
+<script src="{{ url_for('static', filename='js/workflow.js') }}?v=13"></script>
+{% endblock %}
