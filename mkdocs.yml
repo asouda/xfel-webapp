@@ -5,6 +5,8 @@ repo_url: https://github.com/asouda/xfel-webapp
 repo_name: asouda/xfel-webapp
 copyright: Copyright &copy; 2026 Alexander Soudackov
 
+use_directory_urls: false
+
 nav:
   - Overview: index.md
   - Shared background: concepts.md
