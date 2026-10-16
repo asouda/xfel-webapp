@@ -1,4 +1,4 @@
-# Electron density maps from XFEL structures
+# Electron density maps from XFEL structure factors
 
 This site explains the three map workflows in the `xfel-webapp` web application. Each workflow collects coordinates and reflection files, runs CCP4, Coot, and PyMOL, and draws an isodensity map on the structure. The page keeps an interactive 3D view of that map and writes a PNG of the PyMOL figure around a site you choose.
 
