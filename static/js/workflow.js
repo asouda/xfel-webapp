@@ -20,6 +20,17 @@
   const surfaceMesh = document.getElementById("surface-mesh");
   const surfaceTransparency = document.getElementById("surface-transparency");
   const surfaceTransparencyValue = document.getElementById("surface-transparency-value");
+  const surfaceSigma = document.getElementById("surface-sigma");
+  const surfaceSigmaValue = document.getElementById("surface-sigma-value");
+  const surfaceSigmaMin = document.getElementById("surface-sigma-min");
+  const surfaceSigmaMax = document.getElementById("surface-sigma-max");
+  const surfaceSigmaLabel = document.getElementById("surface-sigma-label");
+  const surfaceSigmaUnit = document.getElementById("surface-sigma-unit");
+  const surfaceSigmaScale = document.getElementById("surface-sigma-scale");
+  const surfaceSigmaSwatch = document.getElementById("surface-sigma-swatch");
+  const surfaceSigmaNote = document.getElementById("viewer-sigma-note");
+  const colorSigned = document.getElementById("color-signed");
+  const colorTemperature = document.getElementById("color-temperature");
   const caption = document.getElementById("caption");
   const fileList = document.getElementById("file-list");
   const runButton = document.getElementById("run-btn");
@@ -37,6 +48,14 @@
   let carveRadius = 0;
   let surfaceStyle = "solid";
   let surfaceOpacity = 0.55;
+  let sigmaMin = -5;
+  let sigmaMax = 5;
+  let surfaceSigmaLevel = 3;
+  let colorScale = "signed";
+  let contourIsSigma = true;
+  let sigmaTimer = 0;
+  let surfaceGeneration = 0;
+  const SigmaColor = window.XFELSigma;
   let distanceComponent = null;
   let markerComponent = null;
   let distancePairs = [];
@@ -48,18 +67,6 @@
   let pendingIndex = null;
   let sceneNote = "";
 
-  const NGL_COLORS = {
-    forest: "#228b22",
-    cyan: "#00e5ff",
-    blue: "#0033ff",
-    density: "#0033ff",
-    red: "#ff2a2a",
-    salmon: "#fa8072",
-    magenta: "#ff00ff",
-    hotpink: "#ff69b4",
-    marine: "#1a6ca8",
-    deepblue: "#00008b",
-  };
   const LABEL_COLOR = "#ff7a18";
   const LABEL_EDGE = "#2a160c";
 
@@ -681,11 +688,6 @@
     return residues.join(" or ");
   }
 
-  function colorFor(colors, index) {
-    const color = colors[Math.min(index, colors.length - 1)];
-    return NGL_COLORS[color] || color || "#0033ff";
-  }
-
   function modelPoints(structureComponent, selection) {
     const points = [];
     structureComponent.structure.eachAtom((atom) => {
@@ -701,7 +703,7 @@
 
   // PyMOL `carve` keeps isosurface vertices within this radius of the model.
   // The index is groups of 3 for a solid surface and groups of 2 for a mesh.
-  function carvedIndex(position, indexArray, atoms, radius, stride) {
+  function carvedIndex(position, indexArray, atoms, radius, stride, count) {
     const radius2 = radius * radius;
     const near = new Uint8Array(position.length / 3);
     for (let vertex = 0; vertex < near.length; vertex += 1) {
@@ -719,8 +721,9 @@
         }
       }
     }
+    const limit = count == null ? indexArray.length : count;
     const kept = [];
-    for (let i = 0; i + stride <= indexArray.length; i += stride) {
+    for (let i = 0; i + stride <= limit; i += stride) {
       let inside = true;
       for (let k = 0; k < stride; k += 1) {
         if (!near[indexArray[i + k]]) {
@@ -742,16 +745,25 @@
     const position = geometry.getAttribute("position");
     const index = geometry.getIndex();
     if (!position || !index || !index.array.length) return null;
-    const kept = carvedIndex(position.array, index.array, atoms, radius, stride);
-    if (!kept.length) return { kept: 0, total: index.array.length };
-    if (kept.length === index.array.length) return { kept: kept.length, total: index.array.length };
-    const filtered = new index.array.constructor(kept);
-    index.set(filtered);
-    index.updateRange.offset = 0;
-    index.updateRange.count = filtered.length;
-    index.needsUpdate = true;
-    geometry.setDrawRange(0, filtered.length);
-    return { kept: filtered.length, total: index.array.length };
+    const drawCount = geometry.drawRange && Number.isFinite(geometry.drawRange.count)
+      ? geometry.drawRange.count
+      : index.array.length;
+    const visible = Math.min(index.array.length, Math.max(0, drawCount));
+    const kept = carvedIndex(position.array, index.array, atoms, radius, stride, visible);
+    // Replace the index outright. Copying into the old buffer leaves the previous
+    // contour in the unused tail, and the next carve draws those triangles again.
+    const install = (values) => {
+      geometry.setIndex(new index.constructor(values, 1));
+      if (typeof geometry.clearGroups === "function") geometry.clearGroups();
+      geometry.setDrawRange(0, values.length);
+    };
+    if (!kept.length) {
+      install(new index.array.constructor(0));
+      return { kept: 0, total: index.array.length };
+    }
+    if (kept.length === visible && visible === index.array.length) return { kept: kept.length, total: index.array.length };
+    install(new index.array.constructor(kept));
+    return { kept: kept.length, total: index.array.length };
   }
 
   function limitDensityToModel(volumeComponent, structureComponent, selection, radius) {
@@ -780,6 +792,228 @@
     return volumeComponent.reprList.filter((entry) => (entry.repr || entry).type === "surface");
   }
 
+  function sigmaSetup(scene) {
+    let min = Number(scene && scene.sigma_min);
+    let max = Number(scene && scene.sigma_max);
+    let sigma = Number(scene && scene.sigma);
+    const levels = []
+      .concat(scene && scene.positive_levels || [])
+      .map(Number)
+      .filter(Number.isFinite);
+    if (!(Number.isFinite(min) && Number.isFinite(max) && min < max)) {
+      const peak = levels.length ? Math.max(...levels.map((level) => Math.abs(level))) : 5;
+      const hasNegative = ((scene && scene.negative_levels) || []).length > 0 || levels.some((level) => level < 0);
+      min = hasNegative ? -peak : Math.min(...levels.filter((level) => level > 0).concat([peak]));
+      max = Math.max(peak, ...levels);
+      if (!(min < max)) {
+        min = -Math.abs(peak || 5);
+        max = Math.abs(peak || 5) || 5;
+      }
+    }
+    if (!Number.isFinite(sigma) || sigma < min || sigma > max) {
+      const inside = levels.filter((level) => level >= min && level <= max);
+      sigma = inside.length
+        ? inside.slice().sort((a, b) => Math.abs(a) - Math.abs(b) || Number(a < 0) - Number(b < 0) || a - b)[0]
+        : (min + max) / 2;
+    }
+    return { min, max, sigma: Math.min(max, Math.max(min, sigma)) };
+  }
+
+  function colorForSigma(sigma) {
+    if (!SigmaColor) return sigma < 0 ? "#ff2a2a" : "#0033ff";
+    return SigmaColor.colorForSigma(sigma, sigmaMin, sigmaMax, colorScale);
+  }
+
+  function formatSigma(value) {
+    return SigmaColor ? SigmaColor.formatSigma(value) : String(value);
+  }
+
+  function sigmaScaleGradient() {
+    const steps = 16;
+    const stops = [];
+    for (let i = 0; i <= steps; i += 1) {
+      const t = i / steps;
+      const sigma = sigmaMin + (sigmaMax - sigmaMin) * t;
+      stops.push(`${colorForSigma(sigma)} ${(t * 100).toFixed(2)}%`);
+    }
+    return `linear-gradient(to top, ${stops.join(", ")})`;
+  }
+
+  function sigmaNoteText() {
+    if (colorScale === "temperature") {
+      return "Temperature scale: cold blue at the low end of the range, hot red at the high end.";
+    }
+    return "Blue is positive density and red is negative density. Darker shades are farther from zero.";
+  }
+
+  function parseSigmaText(text) {
+    const trimmed = String(text).trim();
+    if (!/^[+-]?(?:\d+(?:\.\d+)?|\.\d+)$/.test(trimmed)) return null;
+    const value = Number(trimmed);
+    return Number.isFinite(value) ? value : null;
+  }
+
+  function sigmaInRange(value) {
+    return value >= sigmaMin - 1e-6 && value <= sigmaMax + 1e-6;
+  }
+
+  function paintSigmaReadout(source) {
+    const color = colorForSigma(surfaceSigmaLevel);
+    if (surfaceSigma && source !== "slider") surfaceSigma.value = String(surfaceSigmaLevel);
+    if (surfaceSigmaValue && source !== "number" && document.activeElement !== surfaceSigmaValue) {
+      surfaceSigmaValue.value = formatSigma(surfaceSigmaLevel);
+    }
+    if (surfaceSigmaMin) surfaceSigmaMin.textContent = formatSigma(sigmaMin);
+    if (surfaceSigmaMax) surfaceSigmaMax.textContent = formatSigma(sigmaMax);
+    if (surfaceSigma) {
+      surfaceSigma.min = String(sigmaMin);
+      surfaceSigma.max = String(sigmaMax);
+      surfaceSigma.step = "0.1";
+      surfaceSigma.style.accentColor = color;
+      const unit = contourIsSigma ? "sigma" : "map units";
+      surfaceSigma.setAttribute("aria-valuetext", `${formatSigma(surfaceSigmaLevel)} ${unit}`);
+    }
+    if (surfaceSigmaValue) {
+      surfaceSigmaValue.min = String(sigmaMin);
+      surfaceSigmaValue.max = String(sigmaMax);
+      surfaceSigmaValue.step = "0.1";
+      surfaceSigmaValue.setAttribute("aria-label", contourIsSigma ? "Exact sigma" : "Exact contour level");
+    }
+    if (surfaceSigmaLabel) surfaceSigmaLabel.textContent = contourIsSigma ? "Sigma" : "Level";
+    if (surfaceSigmaUnit) surfaceSigmaUnit.textContent = contourIsSigma ? "σ" : "";
+    if (surfaceSigmaSwatch) {
+      surfaceSigmaSwatch.style.background = color;
+      surfaceSigmaSwatch.title = contourIsSigma
+        ? `${formatSigma(surfaceSigmaLevel)} σ`
+        : formatSigma(surfaceSigmaLevel);
+    }
+    if (surfaceSigmaScale) surfaceSigmaScale.style.background = sigmaScaleGradient();
+    if (surfaceSigmaNote) surfaceSigmaNote.textContent = sigmaNoteText();
+  }
+
+  function syncSigmaControls(enabled) {
+    [surfaceSigma, surfaceSigmaValue, colorSigned, colorTemperature].forEach((control) => {
+      if (control) control.disabled = !enabled;
+    });
+    if (colorSigned) colorSigned.setAttribute("aria-pressed", colorScale === "signed" ? "true" : "false");
+    if (colorTemperature) colorTemperature.setAttribute("aria-pressed", colorScale === "temperature" ? "true" : "false");
+    paintSigmaReadout();
+  }
+
+  function mountSigmaSurface() {
+    if (!volumeComponent) return null;
+    const generation = ++surfaceGeneration;
+    const token = viewerToken;
+    // Drop the previous mesh completely. Updating a carved surface in place
+    // keeps the old contour in the index buffer, so both stay on screen.
+    surfaceRepresentations().slice().forEach((entry) => {
+      const tasks = entry.repr && entry.repr.tasks;
+      if (tasks && tasks.count) tasks.change(-tasks.count);
+      volumeComponent.removeRepresentation(entry);
+    });
+    const created = volumeComponent.addRepresentation("surface", {
+      isolevelType: contourIsSigma ? "sigma" : "value",
+      contour: surfaceStyle === "mesh",
+      opacity: surfaceOpacity,
+      useWorker: true,
+      isolevel: surfaceSigmaLevel,
+      negateIsolevel: false,
+      color: colorForSigma(surfaceSigmaLevel),
+    });
+    return { created, generation, token };
+  }
+
+  function whenSurfaceReady(mounted, callback) {
+    if (!mounted) return;
+    const tasks = mounted.created && mounted.created.repr && mounted.created.repr.tasks;
+    const run = () => {
+      if (mounted.token !== viewerToken || mounted.generation !== surfaceGeneration) return;
+      callback();
+    };
+    if (!tasks || !tasks.count) {
+      run();
+      return;
+    }
+    const onCount = (_delta, count) => {
+      if (mounted.token !== viewerToken || mounted.generation !== surfaceGeneration) {
+        tasks.signals.countChanged.remove(onCount);
+        return;
+      }
+      if (count === 0) {
+        tasks.signals.countChanged.remove(onCount);
+        run();
+      }
+    };
+    tasks.signals.countChanged.add(onCount);
+  }
+
+  function finishSigmaSurface(mounted) {
+    whenSurfaceReady(mounted, () => {
+      if (carveRadius > 0 && volumeComponent && structureComponent) {
+        limitDensityToModel(volumeComponent, structureComponent, surfaceSelection, carveRadius);
+      }
+      if (stage) stage.viewer.requestRender();
+    });
+  }
+
+  function rebuildSigmaSurface() {
+    finishSigmaSurface(mountSigmaSurface());
+  }
+
+  function quantizeSigma(value) {
+    const stepped = Math.round(value * 10) / 10;
+    return Math.min(sigmaMax, Math.max(sigmaMin, stepped));
+  }
+
+  function previewSigma(value, source) {
+    surfaceSigmaLevel = source === "slider"
+      ? quantizeSigma(value)
+      : Math.min(sigmaMax, Math.max(sigmaMin, value));
+    paintSigmaReadout(source);
+    window.clearTimeout(sigmaTimer);
+    sigmaTimer = window.setTimeout(() => rebuildSigmaSurface(), 150);
+  }
+
+  function commitSigma(value, source) {
+    surfaceSigmaLevel = source === "slider"
+      ? quantizeSigma(value)
+      : Math.min(sigmaMax, Math.max(sigmaMin, value));
+    paintSigmaReadout(source);
+    window.clearTimeout(sigmaTimer);
+    rebuildSigmaSurface();
+    if (viewerStatus.textContent && viewerStatus.textContent.includes("must be between")) {
+      viewerStatus.textContent = sceneNote;
+    }
+  }
+
+  function rejectSigmaText() {
+    if (surfaceSigmaValue) surfaceSigmaValue.value = formatSigma(surfaceSigmaLevel);
+    const name = contourIsSigma ? "Sigma" : "Level";
+    const unit = contourIsSigma ? "σ" : "map units";
+    viewerStatus.textContent = `${name} must be between ${formatSigma(sigmaMin)} and ${formatSigma(sigmaMax)} ${unit}.`;
+  }
+
+  function commitSigmaText() {
+    const parsed = surfaceSigmaValue ? parseSigmaText(surfaceSigmaValue.value) : null;
+    if (parsed == null || !sigmaInRange(parsed)) {
+      rejectSigmaText();
+      return;
+    }
+    commitSigma(parsed, "number");
+    if (surfaceSigmaValue) surfaceSigmaValue.value = formatSigma(surfaceSigmaLevel);
+  }
+
+  function setColorScale(scale) {
+    if (colorScale === scale) return;
+    colorScale = scale;
+    if (colorSigned) colorSigned.setAttribute("aria-pressed", scale === "signed" ? "true" : "false");
+    if (colorTemperature) colorTemperature.setAttribute("aria-pressed", scale === "temperature" ? "true" : "false");
+    paintSigmaReadout();
+    if (!volumeComponent) return;
+    surfaceRepresentations().forEach((entry) => entry.setColor(colorForSigma(surfaceSigmaLevel)));
+    if (stage) stage.viewer.requestRender();
+  }
+
   function syncSurfaceControls(enabled) {
     if (surfaceSolid) {
       surfaceSolid.disabled = !enabled;
@@ -800,24 +1034,7 @@
   // Switching contour rebuilds the isosurface, which drops the carve until the
   // new mesh is ready. Opacity updates the existing buffers in place.
   function applySurfaceStyle() {
-    const contour = surfaceStyle === "mesh";
-    let rebuild = false;
-    surfaceRepresentations().forEach((entry) => {
-      const current = entry.getParameters ? entry.getParameters() : {};
-      if (!!current.contour !== contour) rebuild = true;
-      entry.setParameters({ contour, opacity: surfaceOpacity });
-    });
-    const token = viewerToken;
-    if (!rebuild) {
-      if (stage) stage.viewer.requestRender();
-      return;
-    }
-    whenStageIdle(token, () => {
-      if (carveRadius > 0 && volumeComponent && structureComponent) {
-        limitDensityToModel(volumeComponent, structureComponent, surfaceSelection, carveRadius);
-      }
-      if (stage) stage.viewer.requestRender();
-    });
+    finishSigmaSurface(mountSigmaSurface());
   }
 
   function applySurfaceOpacity(opacity) {
@@ -851,11 +1068,17 @@
 
   function disposeViewer() {
     viewerToken += 1;
+    window.clearTimeout(sigmaTimer);
+    surfaceGeneration += 1;
     resetEditControls();
     if (stage) stage.dispose();
     stage = null;
+    structureComponent = null;
+    volumeComponent = null;
     viewer.replaceChildren();
     if (viewerSave) viewerSave.disabled = true;
+    syncSurfaceControls(false);
+    syncSigmaControls(false);
   }
 
   async function loadViewer(scene) {
@@ -884,6 +1107,12 @@
       carveRadius = Number(scene.carve) > 0 ? Number(scene.carve) : 0;
       surfaceStyle = scene.surface === "mesh" ? "mesh" : "solid";
       surfaceOpacity = surfaceStyle === "solid" ? 0.55 : 1;
+      const sigma = sigmaSetup(scene);
+      sigmaMin = sigma.min;
+      sigmaMax = sigma.max;
+      surfaceSigmaLevel = sigma.sigma;
+      colorScale = "signed";
+      contourIsSigma = scene.contour_mode !== "absolute";
       applyScriptBonds(structure, scene);
       structure.addRepresentation("ball+stick", {
         sele: structureSelection,
@@ -894,27 +1123,7 @@
       });
       collectScriptDistances(structure, scene);
       stage.signals.clicked.add(onStageClick);
-      const surfaceOptions = {
-        isolevelType: scene.contour_mode === "absolute" ? "value" : "sigma",
-        contour: surfaceStyle === "mesh",
-        opacity: surfaceOpacity,
-        useWorker: true,
-      };
-      (scene.positive_levels || []).forEach((level, index) => {
-        volume.addRepresentation("surface", {
-          ...surfaceOptions,
-          isolevel: level,
-          color: colorFor(scene.positive_colors || [], index),
-        });
-      });
-      (scene.negative_levels || []).forEach((level, index) => {
-        volume.addRepresentation("surface", {
-          ...surfaceOptions,
-          isolevel: level,
-          negateIsolevel: true,
-          color: colorFor(scene.negative_colors || [], index),
-        });
-      });
+      const mounted = mountSigmaSurface();
       if (token !== viewerToken) return;
       stage.autoView(0);
       stage.handleResize();
@@ -923,6 +1132,7 @@
         if (button) button.disabled = false;
       });
       syncSurfaceControls(true);
+      syncSigmaControls(true);
       const notes = [];
       if (scene.map_file) notes.push(`Density is the Coot site fragment ${scene.map_file}.`);
       if ((scene.bonds || []).length || (scene.distances || []).length) {
@@ -932,7 +1142,7 @@
       sceneNote = notes.join(" ");
       viewerStatus.textContent = sceneNote;
       if (carveRadius > 0) {
-        whenStageIdle(token, () => {
+        whenSurfaceReady(mounted, () => {
           const carved = limitDensityToModel(volume, structure, structureSelection, carveRadius);
           if (!carved || token !== viewerToken) return;
           const radiusText = Number.isInteger(carveRadius) ? String(carveRadius) : String(carveRadius);
@@ -1018,7 +1228,7 @@
       surfaceStyle = "solid";
       syncSurfaceControls(true);
       applySurfaceStyle();
-      viewerStatus.textContent = "Isosurfaces are solid.";
+      viewerStatus.textContent = "The isosurface is solid.";
     });
   }
   if (surfaceMesh) {
@@ -1027,7 +1237,7 @@
       surfaceStyle = "mesh";
       syncSurfaceControls(true);
       applySurfaceStyle();
-      viewerStatus.textContent = "Isosurfaces are mesh.";
+      viewerStatus.textContent = "The isosurface is mesh.";
     });
   }
   if (surfaceTransparency) {
@@ -1037,6 +1247,30 @@
       if (surfaceTransparencyValue) surfaceTransparencyValue.textContent = `${percent}%`;
       applySurfaceOpacity(1 - percent / 100);
     });
+  }
+  if (surfaceSigma) {
+    surfaceSigma.addEventListener("input", () => {
+      previewSigma(Number(surfaceSigma.value), "slider");
+    });
+    surfaceSigma.addEventListener("change", () => {
+      commitSigma(Number(surfaceSigma.value), "slider");
+    });
+  }
+  if (surfaceSigmaValue) {
+    surfaceSigmaValue.addEventListener("input", () => {
+      const parsed = parseSigmaText(surfaceSigmaValue.value);
+      if (parsed == null || !sigmaInRange(parsed)) return;
+      previewSigma(parsed, "number");
+    });
+    surfaceSigmaValue.addEventListener("change", () => {
+      commitSigmaText();
+    });
+  }
+  if (colorSigned) {
+    colorSigned.addEventListener("click", () => setColorScale("signed"));
+  }
+  if (colorTemperature) {
+    colorTemperature.addEventListener("click", () => setColorScale("temperature"));
   }
 
   window.addEventListener("resize", () => {

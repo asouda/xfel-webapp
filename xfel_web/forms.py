@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import math
 import re
+import subprocess
 from pathlib import Path
 
 from werkzeug.datastructures import FileStorage
@@ -64,6 +66,22 @@ def _levels(text: str, label: str) -> list[float]:
         return [float(part) for part in parts]
     except ValueError as exc:
         raise FormError(f"{label} must be a list of numbers.") from exc
+
+
+def viewer_sigma_bounds(minimum: float, maximum: float) -> tuple[float, float]:
+    """Inclusive slider limits for the one isosurface in the interactive viewer."""
+    if not math.isfinite(minimum) or not math.isfinite(maximum):
+        raise FormError("Viewer sigma limits must be finite numbers.")
+    if not minimum < maximum:
+        raise FormError("Viewer sigma minimum must be lower than the maximum.")
+    return minimum, maximum
+
+
+def parse_viewer_sigma(form) -> tuple[float, float]:
+    return viewer_sigma_bounds(
+        _float(form, "viewer_sigma_min", "Viewer sigma minimum"),
+        _float(form, "viewer_sigma_max", "Viewer sigma maximum"),
+    )
 
 
 def _optional_levels(text: str, fallback: list[float], label: str) -> list[float]:
@@ -202,16 +220,61 @@ def resolve_output_dir(text: str, project: Path) -> Path:
     return path
 
 
+def _has_gz_extension(path: Path) -> bool:
+    return path.name.lower().endswith(".gz")
+
+
+def decompress_gzip(path: Path, dest_dir: Path, label: str, dest_name: str | None = None) -> Path:
+    """Return the file unchanged, or a gunzip copy when the name ends in `.gz`."""
+    if not _has_gz_extension(path):
+        return path
+    inner = (dest_name or path.name[:-3]).strip()
+    name = secure_filename(inner) or "input"
+    if name.lower().endswith(".gz"):
+        name = name[:-3] or "input"
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    dest = dest_dir / name
+    if dest.resolve() == path.resolve():
+        dest = dest_dir / f"plain_{name}"
+    owned_copy = path.resolve().parent == dest_dir.resolve() and path.resolve() != dest.resolve()
+    try:
+        with dest.open("wb") as handle:
+            subprocess.run(
+                ["gunzip", "-c", str(path)],
+                stdout=handle,
+                stderr=subprocess.PIPE,
+                check=True,
+            )
+    except FileNotFoundError as exc:
+        dest.unlink(missing_ok=True)
+        raise FormError("gunzip is not available, so a .gz input cannot be decompressed.") from exc
+    except subprocess.CalledProcessError as exc:
+        dest.unlink(missing_ok=True)
+        detail = (exc.stderr or b"").decode("utf-8", "replace").strip()
+        message = f"{label} could not be decompressed with gunzip."
+        if detail:
+            message = f"{message} {detail}"
+        raise FormError(message) from exc
+    if not dest.is_file() or dest.stat().st_size == 0:
+        dest.unlink(missing_ok=True)
+        raise FormError(f"{label} decompressed to an empty file.")
+    if owned_copy:
+        path.unlink(missing_ok=True)
+    return dest
+
+
 def resolve_input_file(form, files, key: str, label: str, output_dir: Path, project: Path) -> Path:
+    folder = output_dir / "inputs"
     upload = files.get(f"file_{key}")
     if isinstance(upload, FileStorage) and upload.filename:
-        folder = output_dir / "inputs"
         folder.mkdir(parents=True, exist_ok=True)
         filename = secure_filename(upload.filename) or key
         dest = folder / f"{key}_{filename}"
         upload.save(dest)
         if dest.stat().st_size == 0:
             raise FormError(f"{label} was uploaded empty.")
+        if _has_gz_extension(dest):
+            return decompress_gzip(dest, folder, label)
         return dest
     raw = _text(form, f"path_{key}")
     if not raw:
@@ -222,6 +285,8 @@ def resolve_input_file(form, files, key: str, label: str, output_dir: Path, proj
     path = path.resolve()
     if '"' in str(path) or "\\" in str(path):
         raise FormError(f"The path for {label} cannot contain quotes or backslashes.")
+    if _has_gz_extension(path):
+        return decompress_gzip(path, folder, label, dest_name=f"{key}_{path.name}")
     return path
 
 
@@ -246,6 +311,7 @@ def _common(form, project: Path) -> dict:
         raise FormError("Contour mode must be sigma or absolute.")
     if surface not in {"mesh", "solid"}:
         raise FormError("Surface representation must be mesh or solid.")
+    viewer_sigma_min, viewer_sigma_max = parse_viewer_sigma(form)
     png_width = _int(form, "png_width", "Figure width")
     png_height = _int(form, "png_height", "Figure height")
     if not (200 <= png_width <= 4000 and 200 <= png_height <= 4000):
@@ -266,6 +332,8 @@ def _common(form, project: Path) -> dict:
         "carve": _float(form, "carve", "Carve radius"),
         "contour_mode": contour_mode,
         "surface": surface,
+        "viewer_sigma_min": viewer_sigma_min,
+        "viewer_sigma_max": viewer_sigma_max,
         "show_oec_bonds": _flag(form, "show_oec_bonds"),
         "draw_distances": _flag(form, "draw_distances"),
         "png_width": png_width,

@@ -257,7 +257,21 @@ figure img {
 .viewer-edit { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 10px; }
 .viewer-edit .pill { padding: 7px 12px; font-size: 13px; }
 .viewer-edit .pill[aria-pressed="true"] { background: white; color: #07080c; border-color: white; font-weight: 600; }
-.viewer-style { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 18px; margin: 0 0 12px; }
+.viewer-style,
+.viewer-stage { --viewer-side: 132px; --viewer-gap: 14px; }
+.viewer-style {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) var(--viewer-side);
+  column-gap: var(--viewer-gap);
+  margin: 0 0 12px;
+}
+.viewer-style-main {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px 18px;
+  min-width: 0;
+}
 .viewer-style-group { display: flex; gap: 8px; }
 .viewer-style .pill { padding: 7px 12px; font-size: 13px; }
 .viewer-style .pill[aria-pressed="true"] { background: white; color: #07080c; border-color: white; font-weight: 600; }
@@ -265,13 +279,97 @@ figure img {
   display: flex;
   align-items: center;
   gap: 10px;
-  flex: 1;
-  min-width: min(100%, 280px);
+  flex: 1 1 220px;
+  min-width: 0;
   color: var(--muted);
   font-size: 13px;
 }
-.viewer-transparency input[type="range"] { flex: 1; min-width: 120px; accent-color: white; }
+.viewer-transparency input[type="range"] { flex: 1; width: auto; min-width: 0; accent-color: white; }
 .viewer-transparency span { min-width: 3.2em; color: white; font-variant-numeric: tabular-nums; }
+.viewer-stage {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) var(--viewer-side);
+  gap: var(--viewer-gap);
+  height: min(62vw, 680px);
+  min-height: 420px;
+}
+.viewer-stage .viewer { width: auto; height: 100%; min-height: 0; }
+.viewer-sigma {
+  margin: 0;
+  min-height: 0;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+  overflow: hidden;
+}
+.viewer-sigma-label { color: var(--muted); font-size: 13px; text-align: center; }
+.viewer-sigma-readout { display: flex; align-items: center; justify-content: center; gap: 8px; }
+label.viewer-sigma-exact { flex-direction: row; align-items: center; gap: 4px; color: var(--muted); font-size: 13px; }
+.viewer-sigma-exact input[type="number"] {
+  width: 4.8em;
+  padding: 7px 6px;
+  border-radius: 10px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+.viewer-sigma-exact span { color: white; }
+.viewer-sigma-swatch {
+  width: 16px;
+  height: 16px;
+  border-radius: 4px;
+  border: 1px solid rgba(255, 255, 255, 0.45);
+  background: #5aa7ff;
+  flex: 0 0 auto;
+}
+.viewer-sigma-plot {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  min-height: 160px;
+}
+.viewer-sigma-bound { color: white; font-variant-numeric: tabular-nums; font-size: 12px; line-height: 1; flex: 0 0 auto; }
+.viewer-sigma-tracks {
+  flex: 1 1 auto;
+  width: 100%;
+  min-height: 80px;
+  display: flex;
+  flex-direction: row;
+  justify-content: center;
+  align-items: stretch;
+  gap: 10px;
+}
+.viewer-sigma-scale {
+  width: 12px;
+  height: auto;
+  align-self: stretch;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.28);
+}
+.viewer-sigma-tracks input[type="range"] {
+  writing-mode: vertical-lr;
+  direction: rtl;
+  appearance: slider-vertical;
+  -webkit-appearance: slider-vertical;
+  width: 28px;
+  height: 100%;
+  align-self: stretch;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  accent-color: white;
+}
+.viewer-sigma .viewer-style-group { flex-direction: column; }
+.viewer-sigma .pill { width: 100%; padding: 7px 8px; font-size: 13px; }
+.viewer-sigma .pill[aria-pressed="true"] { background: white; color: #07080c; border-color: white; font-weight: 600; }
+.viewer-sigma input:disabled { opacity: 0.55; }
+.viewer-sigma-note { margin: 0; font-size: 12px; line-height: 1.35; }
+.viewer-range { display: grid; grid-template-columns: 1fr 1fr; gap: 14px 16px; }
+.viewer-range .hint { grid-column: 1 / -1; margin: 0; }
 .viewer {
   width: 100%;
   height: min(62vw, 680px);
@@ -306,5 +404,7 @@ tbody tr:hover { background: rgba(255, 255, 255, 0.06); }
   main, .site-footer { padding-left: 18px; padding-right: 18px; }
   .actions { flex-direction: column; align-items: stretch; }
   .files div { grid-template-columns: 1fr; }
-  .viewer { height: 72vw; min-height: 300px; }
+  .viewer-style, .viewer-stage { --viewer-side: 112px; }
+  .viewer-stage { height: 520px; min-height: 520px; }
+  .viewer-range { grid-template-columns: 1fr; }
 }

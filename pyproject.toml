@@ -18,6 +18,9 @@ license = { text = "MIT" }
 Homepage = "https://github.com/asouda/xfel-webapp"
 
 [dependency-groups]
+dev = [
+    "ipykernel>=6.31.0",
+]
 docs = [
     "mkdocs>=1.6",
     "mkdocs-material>=9.6",

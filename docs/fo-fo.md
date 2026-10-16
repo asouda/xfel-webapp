@@ -1,107 +1,68 @@
 # Isomorphous Fo−Fo difference map
 
-This workflow turns a pair of isomorphous crystal structures — a dark or reference state and a light or activated state — into a signed $|F_{\mathrm{LIGHT}}|-|F_{\mathrm{DARK}}|$ difference map, clips a fragment around a site, and draws the $\pm n\sigma$ surfaces in PyMOL.
+This workflow turns a pair of isomorphous crystal structures — a dark or reference state and a light or activated state — into a signed \(|F_{\mathrm{LIGHT}}|-|F_{\mathrm{DARK}}|\) difference map, clips a fragment around a site, and draws the \(\pm n\sigma\) surfaces.
 
-The notebook is `notebooks/XFEL_fo-fo_diffmap.ipynb`. The web application runs the same steps from the Fo−Fo page.
+The calculation is \(|F|\) minus \(|F|\) with one borrowed phase. The [theoretical background](theory.md) explains where those amplitudes and phases come from. The steps below are the CCP4 programs that evaluate the sum for the worked example.
 
 ## Worked example
 
-The default pair is photosystem II from Ibrahim *et al.*, Science, 2020.
+Fig. 1a of Wang, Armstrong, and Batista, [Proc. Natl. Acad. Sci. U.S.A. 118, e2023982118 (2021)](https://doi.org/10.1073/pnas.2023982118), is the isomorphous difference \(F_o(6\mathrm{w1v}/2\mathrm{F}) - F_o(6\mathrm{w1o}/0\mathrm{F})\), drawn on the two-flash model. The structures are the photosystem II series of Ibrahim *et al.*, [Proc. Natl. Acad. Sci. U.S.A. 117, 12624 (2020)](https://doi.org/10.1073/pnas.2000529117): `6w1o` is the dark-stable \(S_1\) state (0F) and `6w1v` is the 200 ms two-flash state (2F).
 
-| Role | PDB | State | What it supplies |
-| --- | --- | --- | --- |
-| Dark | `6w1o` | 0F, dark-stable $S_1$ | Reference amplitudes and coordinates |
-| Light | `6w1v` | 2F, 200 ms | Activated amplitudes. The figure is drawn on this model. Two oxygen-evolving-complex conformations are present. |
-
-The same steps work for any other isomorphous pair: 1F against 0F, 2F against 1F, ligand-bound against apo. Change the identifiers, the files, the site, and the contour levels.
-
-On `6w1v`, chain `A` residue **416** is ligand `OEY`, the major (75 %) 2F cluster conformation, which includes O6. Residue **415** is `OEX`, the minor conformation without O6. On `6w1o` the unique cluster is `OEX` at residue **414**. Those residue numbers belong to different entries. The residue list in step 2 is how you confirm which one you centred.
-
-## Background
-
-A time-resolved measurement gives two amplitude sets. The chemical signal is the difference electron density
-
-$$
-\Delta\rho(\mathbf{r}) \;\propto\; \sum_{hkl} \big(|F_{\mathrm{LIGHT}}|-|F_{\mathrm{DARK}}|\big)\, e^{i\varphi_{\mathrm{ref}}}\, e^{-2\pi i \mathbf{h}\cdot\mathbf{r}}.
-$$
-
-The phases $\varphi_{\mathrm{ref}}$ come from a complete model, or from a $2F_o-F_c$ map, rather than from the unknown phase of the difference vector. The sum is a useful picture of a local change when the two crystals share a space group and a very similar cell. A large domain motion or a different cell breaks the approximation, because the reference phases then describe a different structure.
-
-### How to read the sign
-
-- Positive density, coloured forest, then cyan, then blue as $|\sigma|$ increases, means more electrons in the light dataset. An atom appeared there, or moved there.
-- Negative density, coloured red, then salmon, then magenta, means more electrons in the dark dataset. An atom left that position.
-- A real shift is a negative peak on the old position paired with a positive peak on the new position.
-
-### Why the amplitudes are scaled first
-
-Subtracting raw amplitudes mixes the structural signal with differences of scale, overall $B$ factor, and completeness. `scaleit` applies an isotropic scale and $B$ so that the light amplitudes sit on the dark reference inside the chosen resolution shell. The log reports an overall $R$ factor. Values around 0.10–0.15 are typical for a usable isomorphous XFEL pair. A much larger $R$ usually means non-isomorphism or a data-quality problem. It does not, by itself, mean a larger chemical change.
-
-### Which phases
-
-A textbook difference-Fourier map uses phases from the reference (dark) model. This tutorial follows the published photosystem II comparison and, by default, takes `PHWT` from the **light** validation $2F_o-F_c$ coefficients, so the map uses the same phase convention as that figure. `PHASE_SOURCE` can switch to the dark validation file, or to `PHIC` / `PHWT` from either zero-cycle REFMAC job.
-
-The validation coefficient file is a phase source. It is converted to MTZ so `cad` can copy one phase column. It is not the difference map.
-
-## Files
-
-Six files, three per structure. Paths left unset are built from the identifier inside the input directory: `{id}.pdb`, `{id}-sf.cif`, and `{id}_validation_2fo-fc_map_coef.cif`.
-
-| Role | Notebook variable | Web form |
+| Role | What the form needs | Download |
 | --- | --- | --- |
-| Dark coordinates | `DARK_PDB` | Dark coordinates |
-| Light coordinates | `LIGHT_PDB` | Light coordinates |
-| Dark structure factors | `DARK_SF` | Dark structure factors |
-| Light structure factors | `LIGHT_SF` | Light structure factors |
-| Dark validation coefficients | `DARK_VALIDATION` | Dark 2Fo−Fc coefficients |
-| Light validation coefficients | `LIGHT_VALIDATION` | Light 2Fo−Fc coefficients |
+| Dark coordinates | `6w1o` model. The oxygen-evolving complex in this entry is `OEX` A414. | [bundle 1](https://github.com/asouda/xfel-webapp/raw/main/data/6w1o/6w1o-pdb-bundle1.pdb), [bundle 2](https://github.com/asouda/xfel-webapp/raw/main/data/6w1o/6w1o-pdb-bundle2.pdb) |
+| Light coordinates | `6w1v` model. The figure is drawn on this structure. | [bundle 1](https://github.com/asouda/xfel-webapp/raw/main/data/6w1v/6w1v-pdb-bundle1.pdb), [bundle 2](https://github.com/asouda/xfel-webapp/raw/main/data/6w1v/6w1v-pdb-bundle2.pdb) |
+| Dark structure factors | `6w1o-sf.cif` | [6w1o-sf.cif.gz](https://github.com/asouda/xfel-webapp/raw/main/data/6w1o/6w1o-sf.cif.gz) |
+| Light structure factors | `6w1v-sf.cif` | [6w1v-sf.cif.gz](https://github.com/asouda/xfel-webapp/raw/main/data/6w1v/6w1v-sf.cif.gz) |
+| Dark validation coefficients | Phase source only if you switch away from the light file | [6w1o validation 2Fo−Fc](https://github.com/asouda/xfel-webapp/raw/main/data/6w1o/6w1o_validation_2fo-fc_map_coef.cif.gz) |
+| Light validation coefficients | Default phase source, column `PHWT` | [6w1v validation 2Fo−Fc](https://github.com/asouda/xfel-webapp/raw/main/data/6w1v/6w1v_validation_2fo-fc_map_coef.cif.gz) |
 
-`DARK_ID` and `LIGHT_ID` are short labels in output file names. They do not have to be PDB codes. Both `.pdb` and mmCIF coordinates are accepted.
+`6w1o` and `6w1v` are larger than one classic PDB file, so the repository stores each coordinate set as the two RCSB bundles. Bundle 1 contains the oxygen-evolving complex used for this figure. The form takes one coordinate file per structure: point it at bundle 1, or at a single merged `6w1o.pdb` / `6w1v.pdb` of the same entry if you have one. The mmCIF files are gzip-compressed. Give the form the `.gz` path; a name that ends in `.gz` is decompressed with `gunzip` before `cif2mtz` reads it.
 
-## Steps
+On `6w1v`, chain `A` residue **416** is ligand `OEY`, the major (75%) 2F cluster, which includes O6. Residue **415** is `OEX`, the minor conformation without O6. On `6w1o` the cluster is `OEX` at residue **414**. Set the site to chain `A`, residue `416`, and list D1-Glu189 (`A 189`) as a neighbouring residue. The published figure is contoured at \(+5\), \(+4\), and \(+3\sigma\) (blue, cyan, green) and at \(-4\) and \(-3\sigma\) (red, salmon). The form’s default PNG levels are \(3\), \(4\), and \(5\) for both signs.
 
-The programs run in this order: `cif2mtz`, then `refmac5` for zero cycles, `cad`, `scaleit`, `fft`, `extends`, Coot, and PyMOL.
+The same programs work for any other isomorphous pair. Change the six files, the site, and the contour levels.
 
-Each CCP4 program writes a log in the output directory. Set `RECOMPUTE_MAP` to rebuild the extended map. While that file is kept, later runs reuse it and only redraw the figure.
+### How the Fig. 1a map is calculated
 
-### 1. Check the programs and the files
+The programs run in this order: `cif2mtz`, `refmac5` for zero cycles, `mtzdump`, `cad`, `scaleit`, `fft`, `extends`, Coot, and PyMOL.
 
-CCP4 is expected at `/Applications/ccp4-9` (`CCP4_ROOT` in the notebook, the CCP4 directory on the form). The workflow sources `bin/ccp4.setup-sh`, then looks for `cif2mtz`, `refmac5`, `cad`, `scaleit`, `fft`, `extends`, and `mtzdump`. Coot comes from that CCP4 tree. PyMOL must be on `PATH`.
+**1. Check the programs and the files.** CCP4 is expected at `/Applications/ccp4-9` unless the form names another suite prefix. The job sources `bin/ccp4.setup-sh` and looks for `cif2mtz`, `refmac5`, `cad`, `scaleit`, `fft`, `extends`, and `mtzdump`. Coot comes from that CCP4 tree. PyMOL must be on `PATH`. An empty or missing file stops the job before a map is written.
 
-The six input files must already exist. An empty or missing file stops the job before any map is written.
+**2. Inspect the light model and choose the site.** The **List hetero residues** button reads the light coordinates, skips water and common lipids and pigments, and lists chain, residue number, residue name, atom count, and occupancy. For this example, confirm `OEY` A416, then keep that chain and residue. The job checks that the residue exists, lists its atom names, and prints the centroid Coot will centre on.
 
-### 2. Inspect the light model and choose the site
+**3. Convert reflections to MTZ.** `cif2mtz` reads each structure-factor mmCIF and each validation mmCIF and writes `{id}-sf.mtz` and `{id}_validation_2fo-fc_map_coef.mtz`. For `6w1o` and `6w1v` the structure-factor loop holds intensities (`intensity_meas`, `intensity_sigma`). `cif2mtz` stores them as `I` and `SIGI`. The validation loop holds `FWT`, `PHWT`, and `FOM`. Nothing is scaled or transformed yet; the MTZ is the same list of reflections in the binary layout the later programs read.
 
-The notebook lists non-water hetero residues in the light coordinates, skipping common lipids and pigments, and prints chain, residue number, residue name, atom count, and occupancy. For photosystem II, look for `OEX` or `OEY`. For another system, look for the chromophore, the ligand, or the metal site.
-
-If the table is empty, the group may be stored as `ATOM` records. Open the file in a text editor or in Coot and set `SITE_CHAIN` and `SITE_RESI` from that residue.
-
-The workflow then checks that the chosen residue exists, lists its atom names, and prints the centroid that Coot will centre on. The web form has a **List hetero residues** button that fills the chain and residue from this scan.
-
-### 3. Build the difference map
-
-**3a. Convert reflections to MTZ.** `cif2mtz` writes `{id}-sf.mtz` for both structure-factor files and `{id}_validation_2fo-fc_map_coef.mtz` for both coefficient files.
-
-**3b. Calculate model terms without moving atoms.** `refmac5` runs on each structure with
+**4. Place the amplitudes in a REFMAC MTZ, without moving atoms.** `refmac5` runs once on `6w1o` and once on `6w1v` with
 
 ```text
 NCYC 0
 ```
 
-and writes `{id}_calc.mtz` plus `{id}_checked.pdb`. Zero cycles put `FP` and `SIGFP` into a consistent REFMAC-style MTZ. The deposited coordinates are not refined.
+and writes `{id}_calc.mtz` plus `{id}_checked.pdb`. Zero cycles compute \(F_c\) from the deposited coordinates and write the observed amplitudes as `FP` and `SIGFP`. The coordinates used for the figure stay at the deposited positions. This step is bookkeeping of the amplitude columns. The difference phase comes from the next step, not from this \(F_c\), unless the phase source is switched to a REFMAC phase.
 
-**3c. Read the resolution shell.** With `RESOLUTION_SOURCE = "sf"`, `mtzdump` supplies the range of each structure-factor MTZ, and the job keeps the common shell. With `"explicit"`, `LOWRES` and `DMIN` are used as entered. The default explicit pair in the notebook is 20.0–2.10 Å, used only when the source is explicit.
+**5. Read the resolution shell.** With the resolution source set to the structure-factor files, `mtzdump` reports the range of each `{id}-sf.mtz`, and the job keeps the common shell: the poorer low-resolution limit and the poorer high-resolution limit. With an explicit shell, the two cutoffs on the form are used instead. The explicit pair stored for this workflow is 20.0–2.10 Å.
 
-**3d. Combine columns.** `cad` copies the light amplitude, the dark amplitude, and one phase into `cad_{light}_{dark}.mtz`. Amplitudes are labelled `F_LIGHT`, `SIGF_LIGHT`, `F_DARK`, and `SIGF_DARK`. The phase is labelled `PHI_REF`. The phase file and column depend on `PHASE_SOURCE`:
+**6. Combine the two amplitudes and one phase.** `cad` copies four amplitude columns and one phase into `cad_6w1v_6w1o.mtz`:
 
-| `PHASE_SOURCE` | File | Column candidates |
+| Output label | Taken from |
+| --- | --- |
+| `F_LIGHT`, `SIGF_LIGHT` | Light `FP`, `SIGFP` |
+| `F_DARK`, `SIGF_DARK` | Dark `FP`, `SIGFP` |
+| `PHI_REF` | `PHWT` in the light validation MTZ, by default |
+
+The phase file follows the phase-source field:
+
+| Phase source | File | Column candidates |
 | --- | --- | --- |
-| `light_validation` (default) | Light validation MTZ | `PHWT`, `PHIC`, `PHI` |
-| `dark_validation` | Dark validation MTZ | `PHWT`, `PHIC`, `PHI` |
-| `light_refmac` | Light zero-cycle MTZ | `PHWT`, `PHIC`, `PHI` |
-| `dark_refmac` | Dark zero-cycle MTZ | `PHWT`, `PHIC`, `PHI` |
+| Light validation (default) | `6w1v` validation MTZ | `PHWT`, `PHIC`, `PHI` |
+| Dark validation | `6w1o` validation MTZ | `PHWT`, `PHIC`, `PHI` |
+| Light REFMAC | `6w1v_calc.mtz` | `PHWT`, `PHIC`, `PHI` |
+| Dark REFMAC | `6w1o_calc.mtz` | `PHWT`, `PHIC`, `PHI` |
 
-**3e. Scale light onto dark.** `scaleit` reads the combined MTZ and writes `scaleit_{light}_{dark}.mtz`:
+`cad` does not subtract anything. It builds one reflection list so the next two programs see both datasets and the phase on the same \(hkl\).
+
+**7. Scale the light amplitudes onto the dark amplitudes.** `scaleit` refines an isotropic scale and an isotropic \(B\) factor that put \(|F_{\mathrm{light}}|\) onto the \(|F_{\mathrm{dark}}|\) reference inside the resolution shell:
 
 ```text
 RESOLUTION <low> <high>
@@ -109,80 +70,103 @@ REFINE ISOTROPIC
 LABIN FP=F_DARK SIGFP=SIGF_DARK FPH1=F_LIGHT SIGFPH1=SIGF_LIGHT
 ```
 
-Dark is the reference (`FP`). Light is treated as the derivative (`FPH1`), which is the SCALEIT convention for a second amplitude set. The log line to read is the overall $R$ factor.
+Dark is `FP`, the reference. Light is `FPH1`, the second amplitude set in the SCALEIT convention. The output is `scaleit_6w1v_6w1o.mtz`, with the light amplitudes replaced by their scaled values. The log line to read is the overall \(R\) factor. Values around 0.10–0.15 are typical for a usable isomorphous XFEL pair. A much larger \(R\) usually means the crystals differ by more than a local change, or that one dataset is poor.
 
-**3f. Transform the difference.** `fft` writes `{light}_minus_{dark}_{tag}.ccp4`:
+**8. Fourier-transform the difference.** `fft` sums
+
+\[
+\Delta\rho(\mathbf{r}) \propto \sum_{hkl} \big(|F_{\mathrm{LIGHT}}| - |F_{\mathrm{DARK}}|\big)\, e^{i\varphi_{\mathrm{ref}}}\, e^{-2\pi i\, \mathbf{h}\cdot\mathbf{r}}
+\]
+
+over the same resolution shell and writes `6w1v_minus_6w1o_{tag}.ccp4`:
 
 ```text
 RESOLUTION <low> <high>
 LABIN F1=F_LIGHT SIG1=SIGF_LIGHT F2=F_DARK SIG2=SIGF_DARK PHI=PHI_REF
 ```
 
-`F1` minus `F2`, with `PHI`, is the signed difference Fourier.
+`F1` minus `F2`, with phase `PHI`, is the signed difference Fourier. Positive density is stronger in `6w1v`. Negative density is stronger in `6w1o`. The map at this stage covers the asymmetric unit.
 
-**3g. Cover the light model.** `extends` pads that map by `MAP_BORDER_A` (default 5 Å) around the light coordinates and writes the `*_extended.ccp4` file. Later steps use the extended map.
+**9. Cover the light model.** `extends` repeats the asymmetric unit by the space-group symmetry and pads the grid by the map border (default 5 Å) around the light coordinates, writing `*_extended.ccp4`. Later steps use that extended map.
 
-The log states the sign convention explicitly: positive density is stronger in the light identifier, negative density is stronger in the dark identifier.
+**10. Export the site fragment.** Headless Coot loads the extended map as a difference map and the light coordinates, centres on the centroid of `OEY` A416 (and on any extra copies listed on the form), and writes a sphere of radius equal to the clip radius (default 10 Å). The σ value passed into the Coot script affects only the contour drawn inside that Coot session. The voxels in the `.map` file are the clipped map.
 
-### 4. Export the site fragment
-
-Coot loads the extended map as a difference map and the light coordinates, centres on the centroid of every `(chain, residue)` pair in `SITE_COPIES`, and writes a clip of radius `EXPORT_RADIUS_A` (default 10 Å). One fragment is written per copy. The figure uses the first.
-
-The σ value passed into the Coot script only affects the on-screen contour inside Coot. The voxel values in the `.map` file are the clipped map.
-
-### 5. Contour and render
-
-PyMOL loads the light coordinates and the fragment. For each positive level it builds a surface at $+n\sigma$, and for each negative level a surface at $-n\sigma$. The default levels are 3, 4, and 5.
+**11. Contour and render.** PyMOL loads the light coordinates and the fragment. For each positive PNG level it builds a surface at \(+n\sigma\), and for each negative level a surface at \(-n\sigma\).
 
 | Sign | Lowest contour | Middle | Highest contour |
 | --- | --- | --- | --- |
 | Positive, light stronger than dark | forest | cyan | blue |
 | Negative, dark stronger than light | red | salmon | magenta |
 
-A fourth level, if you add one, uses `density` and `hotpink`. `SIGMA_POSITIVE` and `SIGMA_NEGATIVE` override the shared list when you want, for example, $+5\sigma$ and $-3\sigma$.
+A fourth level uses the colours `density` and `hotpink`. Separate positive and negative lists override the shared PNG list, so the figure can be \(+5\sigma\) and \(-3\sigma\), which is close to the published Fig. 1a colouring. The carve radius (default 3 Å) keeps each surface near the displayed atoms. `OEY` A416 and D1-Glu189 are shown; the rest of the model stays hidden. Oxygen-evolving-complex bonds, including O6 when that atom exists, are drawn when the atom names are present.
 
-`CARVE_A` (default 3 Å) keeps each surface near the displayed atoms. The site residue and `EXTRA_RESIDUES` are shown; the default extra residue is D1-Glu189 (`A 189`). Oxygen-evolving-complex bonds, including O6 when that atom exists, are drawn only if the atom names are present.
+The browser viewer then loads the same fragment and draws one isosurface. The slider and the number box move that single contour between the viewer sigma minimum and maximum (default \(-5\) to \(5\)). Blue/red colouring paints positive density blue and negative density red, darker farther from zero. Temperature colouring paints the low end of the range cold and the high end hot. The saved PNG remains the PyMOL rendering at the PNG sigma levels.
 
 Outputs:
 
 | File | Contents |
 | --- | --- |
-| `{light}_minus_{dark}_{site}_{chain}{resi}_diffmap.png` | The figure |
-| `pymol_{light}_minus_{dark}_{site}.pml` | The scene |
-| `*_extended.ccp4` | The map you can reopen in Coot |
+| `6w1v_minus_6w1o_{site}_{chain}{resi}_diffmap.png` | The PyMOL figure |
+| `pymol_6w1v_minus_6w1o_{site}.pml` | The scene |
+| `*_extended.ccp4` | The map that can be reopened in Coot |
 
-In the notebook, `INSPECT_IN_PYMOL` opens the scene. Quit PyMOL when the camera is right; the notebook prints a view matrix you can paste into `PYMOL_VIEW`. The web application shows the same fragment in the browser and can save a PNG of that view.
+While an extended map of the same name is kept, a later run can reuse it and only redraw the figure. Turn recomputation on after changing the files, the phase source, or the resolution shell.
+
+## Background
+
+A time-resolved measurement gives two amplitude sets. The chemical signal is the difference electron density in step 8 above. The phases \(\varphi_{\mathrm{ref}}\) come from a refined model, through the validation coefficient file or through a zero-cycle REFMAC job, rather than from the unknown phase of the difference vector \(F_{\mathrm{light}}-F_{\mathrm{dark}}\). The sum is a useful picture of a local change when the two crystals share a space group and a very similar cell. A large domain motion or a different cell breaks the approximation, because the reference phases then describe a different structure.
+
+Subtracting raw amplitudes mixes the structural signal with differences of scale, overall \(B\) factor, and completeness. That is what `scaleit` removes before `fft`.
+
+### How to read the sign
+
+- Positive density, coloured forest, then cyan, then blue as \(|\sigma|\) increases, means more electrons in the light dataset. An atom appeared there, or moved there.
+- Negative density, coloured red, then salmon, then magenta, means more electrons in the dark dataset. An atom left that position.
+- A real shift is a negative peak on the old position paired with a positive peak on the new position.
+
+The validation coefficient file supplies `PHI_REF`. The difference map is the `fft` output, not that file.
+
+## Files
+
+Six files, three per structure. The labels on the form are short names used in the output files. They do not have to be PDB codes. Both `.pdb` and mmCIF coordinates are accepted.
+
+| Role | Form field |
+| --- | --- |
+| Dark coordinates | Dark coordinates |
+| Light coordinates | Light coordinates |
+| Dark structure factors | Dark structure factors |
+| Light structure factors | Light structure factors |
+| Dark validation coefficients | Dark 2Fo−Fc coefficients |
+| Light validation coefficients | Light 2Fo−Fc coefficients |
 
 ## Parameters that change this map
 
 | Choice | Effect |
 | --- | --- |
-| `PHASE_SOURCE` | Switches between light validation phases (the published-figure default), dark validation phases (the classical reference), and either zero-cycle REFMAC phase |
-| Resolution source, `LOWRES`, `DMIN` | Shell used by `scaleit` and `fft`. The high-resolution cutoff should be no finer than the worse dataset |
-| `SIGMA_LEVELS` | Nested contours. `[4.0]` is a cleaner figure than `[3, 4, 5]` |
-| `MAP_BORDER_A`, clip radius, carve | How much map is stored, how much is clipped, and how tightly the mesh hugs the atoms |
-| `RECOMPUTE_MAP` | `False` reuses the extended map so contour and camera edits stay cheap |
+| Phase source | Light validation phases (the Fig. 1a default), dark validation phases (the classical reference), or either zero-cycle REFMAC phase |
+| Resolution source and the two cutoffs | Shell used by `scaleit` and `fft`. The high-resolution cutoff should be no finer than the worse dataset |
+| PNG sigma levels | Nested contours in the PyMOL figure. A single level is a cleaner figure than \(3\), \(4\), and \(5\) |
+| Viewer sigma minimum and maximum | Range of the one isosurface in the browser. The PNG levels are independent |
+| Map border, clip radius, carve | How much map is stored, how much is clipped, and how tightly the mesh hugs the atoms |
+| Recompute the map | Off reuses the extended map so contour and camera edits stay cheap |
 
-The full list, including figure size and ray tracing, is on the [parameters](parameters.md) page. Shared contour and clipping behaviour is on the [background](concepts.md) page.
+The full list is on the [parameters](parameters.md) page. Shared contour and clipping behaviour is on the [background](concepts.md) page.
 
-## Reading the default photosystem II figure
+## Reading the photosystem II figure
 
-Around `OEY` A416 in `6w1v` minus `6w1o` you should see the Mn$_4$Ca cluster and the dangling Mn4, with O6 present in the major light conformation, and difference peaks on the cluster and on D1-Glu189. Glu189 is modelled with two alternate conformations in the 2F structure.
+Around `OEY` A416 in `6w1v` minus `6w1o` you should see the Mn\(_4\)Ca cluster and the dangling Mn4, with O6 present in the major light conformation, and difference peaks on the cluster and on D1-Glu189. Glu189 is modelled with two alternate conformations in the 2F structure. Wang, Armstrong, and Batista contour this map at \(+3\) to \(+5\sigma\) and \(-3\) to \(-4\sigma\) and discuss the peak nearest the proposed oxo position.
 
-A strong positive peak sitting exactly on O6 is not required by this workflow. Whether the 2F data support an inserted oxo or water at that position is debated in the literature. The notebook reproduces the map.
-
-If the mesh is empty, lower the contour (try `3` alone). If the cage swallows the model, decrease `CARVE_A` or raise the contour.
+If the mesh is empty, lower the contour (try `3` alone). If the cage swallows the model, decrease the carve radius or raise the contour.
 
 ## Adapting it
 
-1. Put the six files in the input directory, or point the six path variables at them.
-2. Set `DARK_ID`, `LIGHT_ID`, and `PHASE_SOURCE`. Leave the resolution source on `"sf"` for the common shell, or switch to `"explicit"` and set `LOWRES` and `DMIN`.
-3. Run the residue list, then set the chain, residue, and neighbouring residues.
-4. Clear any saved camera unless you intend to reuse it.
-5. Recompute the map the first time. Leave recomputation off while you tune σ and the view.
+1. Point the six file fields at the new pair, or upload the files. A `.gz` name is decompressed automatically.
+2. Set the two labels and the phase source. Leave the resolution source on the structure-factor files for the common shell, or switch to explicit cutoffs.
+3. List hetero residues, then set the chain, residue, and neighbouring residues.
+4. Recompute the map the first time. Leave recomputation off while you tune σ and the view.
 
-You can also open the extended map directly:
+The extended map can also be opened directly:
 
 ```text
-coot {extended_map} {light_pdb}
+coot {extended_map} {light_coordinates}
 ```

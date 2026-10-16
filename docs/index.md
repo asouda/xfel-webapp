@@ -1,8 +1,14 @@
 # Electron density maps from XFEL structures
 
-This site explains the three map workflows in the tutorial notebooks and in the local web application. Each workflow collects coordinates and reflection files, runs the same CCP4, Coot, and PyMOL programs, and draws an isodensity figure around a site you choose.
+This site explains the three map workflows in the `xfel-webapp` web application. Each workflow collects coordinates and reflection files, runs CCP4, Coot, and PyMOL, and draws an isodensity map on the structure. The page keeps an interactive 3D view of that map and writes a PNG of the PyMOL figure around a site you choose.
 
-The notebooks are the detailed record of the calculation. The web application is the form that runs those steps. The pages here follow the notebook text: the formula for the map, the files it needs, and the program sequence that builds it.
+The [theoretical background](theory.md) covers structure factors, amplitudes, model phases, the Fourier transform, refinement cycles, and the validation coefficient files. The pages linked below are the formula for each map, the files it needs, and the program sequence that builds it.
+
+The same three calculations are written out as Jupyter notebooks in this repository:
+
+- [Fo−Fo difference map](https://github.com/asouda/xfel-webapp/raw/main/notebooks/XFEL_fo-fo_diffmap.ipynb) (`notebooks/XFEL_fo-fo_diffmap.ipynb`)
+- [Omit-model mFo−DFc map](https://github.com/asouda/xfel-webapp/raw/main/notebooks/XFEL_fo-fc_diffmap_refinement.ipynb) (`notebooks/XFEL_fo-fc_diffmap_refinement.ipynb`)
+- [Sharpened 2mFo−DFc map](https://github.com/asouda/xfel-webapp/raw/main/notebooks/XFEL_2fo-fc_map.ipynb) (`notebooks/XFEL_2fo-fc_map.ipynb`)
 
 ## Choose a map
 
@@ -28,7 +34,7 @@ The notebooks are the detailed record of the calculation. The web application is
 
     ---
 
-    Electron density of a single structure, from the deposited validation coefficients, sharpened by a $B$-factor shift and drawn on the model.
+    Electron density of a single structure, from the deposited validation coefficients, sharpened by a \(B\)-factor shift and drawn on the model.
 
     [:octicons-arrow-right-24: Theory and steps](two-fo-fc.md)
 
@@ -44,31 +50,31 @@ The notebooks are the detailed record of the calculation. The web application is
 
 A chemically meaningful Fo−Fo feature is a negative peak on the old position next to a positive peak on the new one. An omit-map feature for an atom left out of the model is a positive peak. A 2mFo−DFc mesh that wraps an atom is accounted-for density. The three figures use different contour ranges: difference maps are usually inspected at 3–5σ, while a 2mFo−DFc map is usually inspected nearer 1–2σ of its own root-mean-square.
 
-The shared ideas — phases, weighting, σ contours, the RCSB files, and the Coot and PyMOL tail that every workflow shares — are on the [background](concepts.md) page. Names of the configuration variables and the matching web-form fields are on the [parameters](parameters.md) page.
+Phases, weighting, σ contours, the RCSB files, and the Coot, PyMOL, and browser-viewer tail shared by every workflow are on the [background](concepts.md) page. Form fields are on the [parameters](parameters.md) page.
 
 ## Worked examples
 
-The notebooks are set up on photosystem II.
+The examples are photosystem II, arranged to follow Wang, Armstrong, and Batista, [Proc. Natl. Acad. Sci. U.S.A. 118, e2023982118 (2021)](https://doi.org/10.1073/pnas.2023982118). Download links for the input files are on each workflow page. Reflection files in the repository are gzip-compressed; the application decompresses a file whose name ends in `.gz`.
 
-| Workflow | Default inputs | Site |
-| --- | --- | --- |
-| Fo−Fo | Dark `6w1o` (0F, dark-stable $S_1$) and light `6w1v` (2F, 200 ms), Ibrahim *et al.*, Science, 2020 | `OEY` A416, the major 2F oxygen-evolving complex, plus D1-Glu189 |
-| mFo−DFc | Omit model `6w1v_omitO6_single_confB` against the `6w1v` amplitudes. The notebook introduction places this comparison with Fig. 2B of Wang, Armstrong, and Batista, PNAS, 2021 | `OEY` A416 in the omit model, with O6 absent |
-| 2mFo−DFc | `9z35`, the room-temperature XFEL structure of the two-flash, $S_3$-rich state | `OEY` A601, plus D1-Glu189 |
+| Workflow | Figure | Inputs | Site |
+| --- | --- | --- | --- |
+| Fo−Fo | Fig. 1a, \(F_o(6\mathrm{w1v})-F_o(6\mathrm{w1o})\) | `6w1v` and `6w1o` coordinates, both structure-factor mmCIF files, and both validation coefficient files | `OEY` A416 on the 2F model, plus D1-Glu189 |
+| mFo−DFc | Fig. 2a and Fig. 2b | `6w1v` coordinates, `6w1v-sf.cif`, and the omit model `6w1v_omitO6_single_confA.pdb` | `OEX` A415 in the omit model, the single conformation with O6 absent |
+| 2mFo−DFc | Room-temperature two-flash map | `9z35` coordinates, structure factors, and validation \(2F_o-F_c\) coefficients | `OEY` A601, plus D1-Glu189 |
 
-Residue numbers are properties of one PDB entry. `OEY` A416 in `6w1v` is a different residue record from `OEX` A414 in `6w1o` and from `OEY` A601 in `9z35`. Every workflow lists hetero residues so the chain and residue can be checked before the map is clipped.
+The `6w1o` and `6w1v` structures are the dark-stable \(S_1\) (0F) and 200 ms two-flash (2F) photosystem II models of Ibrahim *et al.*, [Proc. Natl. Acad. Sci. U.S.A. 117, 12624 (2020)](https://doi.org/10.1073/pnas.2000529117). Residue numbers belong to one PDB entry. `OEY` A416 in `6w1v` is a different residue record from `OEX` A414 in `6w1o`, from `OEX` A415 in the omit model, and from `OEY` A601 in `9z35`. Every workflow can list hetero residues before the map is clipped.
 
 ## Where the calculation runs
 
-Both interfaces perform the same five stages.
+Each workflow page runs the same five stages.
 
-1. Check CCP4, Coot, PyMOL, and the input files.
+1. Check CCP4, Coot, PyMOL, and the input files. A path or an upload whose name ends in `.gz` is decompressed with `gunzip`. PDB and mmCIF are read as stored.
 2. Inspect the coordinates and the chosen site.
 3. Build the map with CCP4.
 4. Export a radius-limited fragment with headless Coot.
 5. Contour that fragment in PyMOL and write a PNG and a `.pml` script.
 
-The web application also opens the model and the clipped map in the browser. Camera inspection in the notebook (`INSPECT_IN_PYMOL`) is the PyMOL window; in the application it is the on-page viewer.
+The page then opens the model and the clipped map in the browser. That viewer draws one isosurface. Its slider runs from the viewer sigma minimum to the viewer sigma maximum on the form, and the number box sets an exact level inside that range. Positive sigma is blue and negative sigma is red in the blue/red colouring, darker farther from zero. Temperature colouring runs from cold at the low end of the range to hot at the high end. The PNG sigma levels are a separate list: they are the contours in the PyMOL figure, and the slider does not change that PNG.
 
 CCP4 is expected at `/Applications/ccp4-9` unless you set another suite prefix. Coot is the binary shipped with CCP4. PyMOL must be on `PATH`. Installation of those programs is described in the project `README.md` and on the application home page.
 

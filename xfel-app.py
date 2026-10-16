@@ -11,9 +11,10 @@ import uuid
 from pathlib import Path
 
 from flask import Flask, abort, jsonify, render_template, request, send_file
+from werkzeug.utils import secure_filename
 
 from xfel_web.ccp4 import LIPID_PIGMENT, probe_software, pymol_scene_links, scan_hetatm
-from xfel_web.forms import FormError, parse_job
+from xfel_web.forms import FormError, decompress_gzip, parse_job
 from xfel_web.pipelines import RUNNERS
 
 WEB_ROOT = Path(__file__).resolve().parent
@@ -147,6 +148,8 @@ WORKFLOWS = {
             "site_label": "OEC",
             "extra_residues": "A 189 GLU189",
             "sigma_levels": "2, 3.5",
+            "viewer_sigma_min": "1",
+            "viewer_sigma_max": "5",
             "surface": "solid",
             "lowres": "30",
             "dmin": "2.09",
@@ -163,6 +166,8 @@ SHARED_DEFAULTS = {
     "export_radius": "10",
     "carve": "3",
     "contour_mode": "sigma",
+    "viewer_sigma_min": "-5",
+    "viewer_sigma_max": "5",
     "extra_copies": "",
 }
 
@@ -287,10 +292,11 @@ def software():
 def scan():
     upload = request.files.get("file")
     raw_path = (request.form.get("path") or "").strip()
+    folder = WEB_ROOT / "runtime" / "scans"
     if upload and upload.filename:
-        folder = WEB_ROOT / "runtime" / "scans"
         folder.mkdir(parents=True, exist_ok=True)
-        dest = folder / f"{uuid.uuid4().hex}.pdb"
+        filename = secure_filename(upload.filename) or "coordinates.pdb"
+        dest = folder / f"{uuid.uuid4().hex}_{filename}"
         upload.save(dest)
         pdb_path = dest
     elif raw_path:
@@ -302,7 +308,12 @@ def scan():
     if not pdb_path.is_file():
         return jsonify({"error": f"Coordinate file not found: {pdb_path}"}), 400
     try:
+        if pdb_path.name.lower().endswith(".gz"):
+            folder.mkdir(parents=True, exist_ok=True)
+            pdb_path = decompress_gzip(pdb_path, folder, "Coordinate file", dest_name=pdb_path.name)
         rows = scan_hetatm(pdb_path)
+    except FormError as exc:
+        return jsonify({"error": str(exc)}), 400
     except OSError as exc:
         return jsonify({"error": str(exc)}), 400
     visible = []

@@ -1,6 +1,8 @@
 # Shared background
 
-The three workflows differ in which amplitudes they transform. They share the crystallographic objects those amplitudes come from, the files you download, and the clipping and drawing steps at the end.
+The three workflows differ in which amplitudes they transform. They share the crystallographic objects those amplitudes come from, the files you supply, and the clipping and drawing steps at the end.
+
+How a structure factor is measured, how an amplitude and a model phase are obtained, and what a validation coefficient file stores are on the [theoretical background](theory.md) page.
 
 ## A map is a Fourier sum
 
@@ -56,7 +58,7 @@ The Coot σ slider is a display setting inside Coot. The voxels written to the f
 
 ## Files from the PDB
 
-Each workflow starts from files distributed by the [RCSB PDB](https://www.rcsb.org). The notebooks do not download them.
+Each workflow starts from files you put on the form. The worked examples use files distributed by the [RCSB PDB](https://www.rcsb.org), and the application does not download them for you. Copies of the example files are in this repository; the reflection mmCIF files there are gzip-compressed. A path or an upload whose name ends in `.gz` is decompressed with `gunzip` before the CCP4 programs read it. PDB and mmCIF are used as stored.
 
 | File | Typical name | Role |
 | --- | --- | --- |
@@ -70,9 +72,9 @@ Validation coefficients are also published at
 https://files.rcsb.org/pub/pdb/validation_reports/xx/{pdbid}/{pdbid}_validation_2fo-fc_map_coef.cif.gz
 ```
 
-Deposited structure factors for these examples are intensities, `I` and `SIGI`, often with a `FREE` flag. The omit-map workflow converts intensities to amplitudes with `ctruncate` and copies `FREE` onto the amplitude MTZ. The Fo−Fo workflow lets a zero-cycle REFMAC job place the amplitudes in a REFMAC-style MTZ.
+Deposited structure factors for the `6w1o` and `6w1v` examples are intensities, `_refln.intensity_meas` and `_refln.intensity_sigma`, with the free set marked by `_refln.status` `f`. `cif2mtz` stores those as `I`, `SIGI`, and `FREE`. The omit-map workflow converts intensities to amplitudes with `ctruncate` and copies `FREE` onto the amplitude MTZ. The Fo−Fo workflow lets a zero-cycle REFMAC job place the amplitudes in a REFMAC-style MTZ. The `9z35` structure-factor file stores anomalous intensities and `_refln.pdbx_r_free_flag`; the sharpened-map workflow uses that file for the resolution range.
 
-Column names are read from each MTZ with `mtzdump` and matched against a short list of candidates (`FP`, `F`, `FOBS`, `SIGFP`, `PHWT`, `PHIC`, `DELFWT`, `FWT`, and so on). The notebooks do that so a slightly different mmCIF layout still runs.
+Column names are read from each MTZ with `mtzdump` and matched against a short list of candidates (`FP`, `F`, `FOBS`, `SIGFP`, `PHWT`, `PHIC`, `DELFWT`, `FWT`, and so on), so a slightly different mmCIF layout still runs.
 
 ## Resolution limits
 
@@ -84,7 +86,7 @@ For two datasets, the common shell is the poorer low-resolution limit and the po
 
 ## The shared tail of every workflow
 
-After the map exists, the three notebooks do the same three things.
+After the map exists, the three workflows do the same three things, and then open the fragment in the browser.
 
 ### Extend the map
 
@@ -96,20 +98,29 @@ Headless Coot (`--no-graphics --script`) loads that extended map, centres on the
 
 The generated Coot script is Python 2, because the CCP4 `coot` wrapper still ships a Python 2 interpreter.
 
-`RECOMPUTE_FRAGMENT = False` reuses an existing clip. The fragment is what PyMOL contours, so a change of radius requires a new clip.
+Leaving fragment recomputation off reuses an existing clip. The fragment is what PyMOL and the browser contour, so a change of radius requires a new clip.
 
 ### Draw the figure
 
 PyMOL loads the coordinate file and the fragment.
 
-- `surface_representation = "mesh"` draws a wireframe with `isomesh`.
-- `surface_representation = "solid"` draws a transparent surface with `isosurface`.
-- `CARVE_A` (default 3 Å) hides the surface farther than this distance from the displayed atoms, so the cage stays on the site.
-- The site residue is drawn as sticks and spheres. Each entry in `EXTRA_RESIDUES` is drawn as sticks. The rest of the model stays hidden.
-- Mn/Ca–oxygen bonds are added when those atom names exist (`SHOW_OEC_BONDS`). A few default cluster distances are drawn the same way (`DRAW_DEFAULT_OEC_DISTANCES`). A structure without those names simply skips the bonds.
-- The scene is written as a `.pml` file next to the PNG. With `INSPECT_IN_PYMOL` the notebook opens that scene, and on quit it stores the camera matrix in `PYMOL_VIEW`. The web application shows the same model and map in the browser viewer instead.
+- Surface `mesh` draws a wireframe with `isomesh`. Surface `solid` draws a transparent surface with `isosurface`.
+- The carve radius (default 3 Å) hides the surface farther than this distance from the displayed atoms, so the cage stays on the site.
+- The site residue is drawn as sticks and spheres. Each neighbouring residue is drawn as sticks. The rest of the model stays hidden.
+- Mn/Ca–oxygen bonds are added when those atom names exist. A few default cluster distances are drawn the same way. A structure without those names simply skips the bonds.
+- The scene is written as a `.pml` file next to the PNG.
 
-PyMOL is always re-run. Contour, colour, and camera changes do not require a new CCP4 map. `RECOMPUTE_MAP = False` reuses the extended CCP4 map and skips the slow steps.
+PyMOL is always re-run. Contour, colour, and camera changes do not require a new CCP4 map. Leaving map recomputation off reuses the extended CCP4 map and skips the slow steps.
+
+### The browser viewer
+
+The page then loads the same model and the same clipped map with NGL. The viewer draws one isosurface. The PNG sigma levels are the contours in the PyMOL figure; the slider does not change that PNG.
+
+The slider runs from the viewer sigma minimum to the viewer sigma maximum on the form. The number box sets any sigma inside that range. The starting level is the PNG level closest to zero that still sits inside the range. Difference maps default to \(-5\) through \(5\). The sharpened \(2mF_o-DF_c\) map defaults to \(1\) through \(5\).
+
+Two colourings are available. Blue/red paints positive sigma blue and negative sigma red, darker farther from zero, and paints zero grey. Temperature paints the low end of the slider cold (deep blue) and the high end hot (deep red), through cyan, yellow, and orange. Solid and mesh switch the isosurface style, and the transparency slider runs from opaque to clear.
+
+The edit buttons act on the model in the viewer. Add bond and Add distance each take two atom clicks. Delete removes a stick, or the bond and distance between two atoms. Add label shows an atom name, and a second click removes it. Distance labels turn the ångström lengths on the dashed lines on or off. Save PNG writes the orientation currently on screen. Reset view returns the camera to the site.
 
 ## Programs
 

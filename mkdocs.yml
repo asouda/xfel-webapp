@@ -9,6 +9,7 @@ use_directory_urls: false
 
 nav:
   - Overview: index.md
+  - Theoretical background: theory.md
   - Shared background: concepts.md
   - Workflows:
       - Isomorphous Fo−Fo: fo-fo.md

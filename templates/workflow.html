@@ -42,7 +42,7 @@
 
   <form id="job-form" class="glass form" action="{{ url_for('start_job', slug=spec.slug) }}" method="post" enctype="multipart/form-data">
     <h2>Input files</h2>
-    <p class="hint">Upload a file, or enter its full path on this computer. A path is better for the large mmCIF files. The tutorial paths below are filled in when those files are already in <code>data/</code>.</p>
+    <p class="hint">Upload a file, or enter its full path on this computer. A path is better for the large mmCIF files. PDB and mmCIF files are used as they are. A file is decompressed with gunzip only when its name ends in <code>.gz</code>. The tutorial paths below are filled in when those files are already in <code>data/</code>.</p>
     <div class="file-grid">
       {% for key, label, hint in spec.files %}
       <fieldset>
@@ -132,11 +132,23 @@
       </label>
       <label>Clip radius (Å)<input name="export_radius" type="number" step="any" value="{{ defaults.export_radius }}"></label>
       <label>Carve radius (Å)<input name="carve" type="number" step="any" value="{{ defaults.carve }}"></label>
-      <label>Sigma levels<input name="sigma_levels" value="{{ defaults.sigma_levels }}"></label>
+      <label>PNG sigma levels
+        <input name="sigma_levels" value="{{ defaults.sigma_levels }}">
+        <span class="hint">Contours drawn in the PyMOL PNG.</span>
+      </label>
       {% if spec.slug != 'twofofc' %}
-      <label>Positive levels only<input name="sigma_positive" placeholder="blank = sigma levels"></label>
-      <label>Negative levels only<input name="sigma_negative" placeholder="blank = sigma levels"></label>
+      <label>Positive levels only<input name="sigma_positive" placeholder="blank = PNG sigma levels"></label>
+      <label>Negative levels only<input name="sigma_negative" placeholder="blank = PNG sigma levels"></label>
       {% endif %}
+      <div class="wide viewer-range">
+        <label>Viewer sigma minimum
+          <input name="viewer_sigma_min" type="number" step="any" value="{{ defaults.viewer_sigma_min }}" required>
+        </label>
+        <label>Viewer sigma maximum
+          <input name="viewer_sigma_max" type="number" step="any" value="{{ defaults.viewer_sigma_max }}" required>
+        </label>
+        <p class="hint">The interactive viewer draws one isosurface. Its slider runs between these values, and the number box can set any sigma inside the range. Positive sigma is blue and negative sigma is red. The PNG sigma levels above are only for PyMOL.</p>
+      </div>
       <label>Contour
         <select name="contour_mode">
           <option value="sigma" selected>Sigma, after PyMOL normalises the map</option>
@@ -196,7 +208,7 @@
           <button type="button" class="pill ghost" id="viewer-reset">Reset view</button>
         </div>
       </div>
-      <p class="hint viewer-help" id="viewer-help">Drag to rotate, scroll to zoom, and right-drag to pan. Add bond and Add distance: click two atoms. Delete: click a stick, or click two atoms to remove the bond and distance between them. Add label: click an atom to show its name, and click it again to remove the label. Distance labels turns the angstrom lengths on the dashed lines on or off. Solid and Mesh switch the isosurface style. The transparency slider runs from opaque to clear. Save PNG keeps the orientation you are looking at.</p>
+      <p class="hint viewer-help" id="viewer-help">Drag to rotate, scroll to zoom, and right-drag to pan. Add bond and Add distance: click two atoms. Delete: click a stick, or click two atoms to remove the bond and distance between them. Add label: click an atom to show its name, and click it again to remove the label. Distance labels turns the angstrom lengths on the dashed lines on or off. The sigma slider sets the single isosurface, and the number box sets an exact sigma inside the range from the form. Blue / red colors positive density blue and negative density red, darker farther from zero. Temperature colors the low end of the range cold and the high end hot. Solid and Mesh switch the isosurface style. The transparency slider runs from opaque to clear. Save PNG keeps the orientation you are looking at.</p>
       <div class="viewer-edit" id="viewer-edit">
         <button type="button" class="pill" id="edit-bond" aria-pressed="false" disabled>Add bond</button>
         <button type="button" class="pill" id="edit-distance" aria-pressed="false" disabled>Add distance</button>
@@ -205,37 +217,65 @@
         <button type="button" class="pill" id="edit-distance-labels" aria-pressed="false" disabled>Distance labels</button>
       </div>
       <div class="viewer-style" id="viewer-style">
-        <div class="viewer-style-group" role="group" aria-label="Isosurface style">
-          <button type="button" class="pill" id="surface-solid" aria-pressed="true" disabled>Solid</button>
-          <button type="button" class="pill" id="surface-mesh" aria-pressed="false" disabled>Mesh</button>
+        <div class="viewer-style-main">
+          <div class="viewer-style-group" role="group" aria-label="Isosurface style">
+            <button type="button" class="pill" id="surface-solid" aria-pressed="true" disabled>Solid</button>
+            <button type="button" class="pill" id="surface-mesh" aria-pressed="false" disabled>Mesh</button>
+          </div>
+          <label class="viewer-transparency" for="surface-transparency">
+            Transparency
+            <input id="surface-transparency" type="range" min="0" max="100" value="45" step="1" disabled>
+            <span id="surface-transparency-value">45%</span>
+          </label>
         </div>
-        <label class="viewer-transparency" for="surface-transparency">
-          Transparency
-          <input id="surface-transparency" type="range" min="0" max="100" value="45" step="1" disabled>
-          <span id="surface-transparency-value">45%</span>
-        </label>
       </div>
-      <div id="viewer" class="viewer" role="application" aria-label="Interactive molecular density viewer"></div>
+      <div class="viewer-stage">
+        <div id="viewer" class="viewer" role="application" aria-label="Interactive molecular density viewer"></div>
+        <div class="viewer-sigma" id="viewer-sigma">
+          <div class="viewer-sigma-label" id="surface-sigma-label">Sigma</div>
+          <div class="viewer-sigma-readout">
+            <label class="viewer-sigma-exact" for="surface-sigma-value">
+              <input id="surface-sigma-value" type="number" inputmode="decimal" step="0.1" min="-5" max="5" value="3" disabled autocomplete="off" aria-label="Exact sigma">
+              <span id="surface-sigma-unit">σ</span>
+            </label>
+            <i id="surface-sigma-swatch" class="viewer-sigma-swatch" aria-hidden="true"></i>
+          </div>
+          <div class="viewer-sigma-plot">
+            <span class="viewer-sigma-bound" id="surface-sigma-max">5</span>
+            <div class="viewer-sigma-tracks">
+              <span id="surface-sigma-scale" class="viewer-sigma-scale" aria-hidden="true"></span>
+              <input id="surface-sigma" type="range" min="-5" max="5" value="3" step="0.1" disabled aria-valuetext="3 sigma">
+            </div>
+            <span class="viewer-sigma-bound" id="surface-sigma-min">−5</span>
+          </div>
+          <div class="viewer-style-group" role="group" aria-label="Isosurface coloring">
+            <button type="button" class="pill" id="color-signed" aria-pressed="true" disabled>Blue / red</button>
+            <button type="button" class="pill" id="color-temperature" aria-pressed="false" disabled>Temperature</button>
+          </div>
+          <p class="hint viewer-sigma-note" id="viewer-sigma-note">Blue is positive density and red is negative density. Darker shades are farther from zero.</p>
+        </div>
+      </div>
       <p id="viewer-status" class="viewer-status" aria-live="polite"></p>
       <figcaption id="caption"></figcaption>
-      {% if spec.slug == 'twofofc' %}
-      <ul class="legend">
-        <li><i style="background:#1a6ca8"></i> lowest positive σ, marine</li>
-        <li><i style="background:#0000ff"></i> next, blue</li>
-        <li><i style="background:#00008b"></i> highest, deep blue</li>
-      </ul>
-      {% else %}
-      <ul class="legend">
-        <li><i style="background:#228b22"></i> + lowest σ</li>
-        <li><i style="background:#00e5ff"></i> + mid σ</li>
-        <li><i style="background:#0033ff"></i> + highest σ</li>
-        <li><i style="background:#ff2a2a"></i> − lowest σ</li>
-        <li><i style="background:#fa8072"></i> − mid σ</li>
-        <li><i style="background:#ff00ff"></i> − highest σ</li>
-      </ul>
-      {% endif %}
       <details class="static-figure">
         <summary>Show saved PNG</summary>
+        <p class="hint">This figure is the PyMOL rendering at the PNG sigma levels. The slider does not change it.</p>
+        {% if spec.slug == 'twofofc' %}
+        <ul class="legend">
+          <li><i style="background:#1a6ca8"></i> lowest positive σ, marine</li>
+          <li><i style="background:#0000ff"></i> next, blue</li>
+          <li><i style="background:#00008b"></i> highest, deep blue</li>
+        </ul>
+        {% else %}
+        <ul class="legend">
+          <li><i style="background:#228b22"></i> + lowest σ</li>
+          <li><i style="background:#00e5ff"></i> + mid σ</li>
+          <li><i style="background:#0033ff"></i> + highest σ</li>
+          <li><i style="background:#ff2a2a"></i> − lowest σ</li>
+          <li><i style="background:#fa8072"></i> − mid σ</li>
+          <li><i style="background:#ff00ff"></i> − highest σ</li>
+        </ul>
+        {% endif %}
         <img id="figure" alt="Static PyMOL rendering of isodensity surfaces around the chosen site">
       </details>
       <dl id="file-list" class="files"></dl>
@@ -248,5 +288,6 @@
   window.XFEL_SCAN_KEY = {{ spec.scan_key | tojson }};
 </script>
 <script src="{{ url_for('static', filename='vendor/ngl-2.5.0.js') }}?v=2"></script>
-<script src="{{ url_for('static', filename='js/workflow.js') }}?v=13"></script>
+<script src="{{ url_for('static', filename='js/sigma-color.js') }}?v=1"></script>
+<script src="{{ url_for('static', filename='js/workflow.js') }}?v=15"></script>
 {% endblock %}

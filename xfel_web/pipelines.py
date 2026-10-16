@@ -607,25 +607,52 @@ def run_twofofc(cfg: dict, emit) -> dict:
     )
 
 
+def initial_viewer_sigma(
+    minimum: float,
+    maximum: float,
+    levels: list[float],
+    negative: list[float] | None = None,
+) -> float:
+    """Pick the starting contour: the level closest to zero that sits inside the slider range."""
+    candidates = [float(level) for level in levels]
+    if negative:
+        candidates.extend(-abs(float(level)) for level in negative)
+    inside = [level for level in candidates if minimum - 1e-9 <= level <= maximum + 1e-9]
+    if not inside:
+        return (minimum + maximum) / 2.0
+    return min(inside, key=lambda level: (abs(level), level < 0, level))
+
+
 def _q(path: Path) -> str:
     import shlex
     return shlex.quote(str(path))
 
 
 def _viewer_scene(*, model_pdb: Path, fragment: Path, cfg: dict, positive_colors: list[str], negative_colors: list[str]) -> dict:
-    """Return the data needed to recreate the local PyMOL scene in WebGL."""
+    """Return the data needed to recreate the local PyMOL scene in WebGL.
+
+    The PNG still uses every sigma level. The viewer draws one surface and
+    slides its contour between ``viewer_sigma_min`` and ``viewer_sigma_max``.
+    """
+    levels = list(cfg["positive_levels"] if "positive_levels" in cfg else cfg["sigma_levels"])
+    negative = cfg.get("negative_levels")
+    sigma_min = float(cfg["viewer_sigma_min"])
+    sigma_max = float(cfg["viewer_sigma_max"])
     return {
         "model": str(model_pdb),
         "model_ext": model_pdb.suffix.lstrip(".").lower() or "pdb",
         "map": str(fragment),
         "site": {"chain": cfg["site_chain"], "resi": cfg["site_resi"]},
         "extra_residues": cfg["extra_residues"],
-        "positive_levels": cfg["positive_levels"] if "positive_levels" in cfg else cfg["sigma_levels"],
-        "negative_levels": cfg.get("negative_levels"),
+        "positive_levels": levels,
+        "negative_levels": negative,
         "positive_colors": positive_colors,
         "negative_colors": negative_colors,
         "contour_mode": cfg["contour_mode"],
         "surface": cfg["surface"],
+        "sigma_min": sigma_min,
+        "sigma_max": sigma_max,
+        "sigma": initial_viewer_sigma(sigma_min, sigma_max, levels, negative),
     }
 
 

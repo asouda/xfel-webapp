@@ -1,58 +1,57 @@
 # Parameters
 
-The notebooks keep every choice in one configuration cell. The web form uses the same choices, with the labels below. Downstream CCP4, Coot, and PyMOL code reads those values and does not need to be edited for a new site or a new contour.
+Every choice is a field on the workflow form. CCP4, Coot, and PyMOL read those values, so a new site or a new contour does not require an edit to the programs.
 
 Shared crystallographic meaning is on the [background](concepts.md) page. Each workflow page says which of these choices change that map.
 
 ## Names
 
-| Notebook | Web form | Meaning |
-| --- | --- | --- |
-| `DARK_ID` | Dark name, or omit-model name | Label used in output file names |
-| `LIGHT_ID` | Light name, or observed-data name | Label used in output file names |
-| `PDB_ID` | Structure name | Label for the single-structure map |
-| `CCP4_ROOT` | CCP4 directory | Suite prefix. Default `/Applications/ccp4-9` |
-| `RESOLUTION_SOURCE` | Resolution | `"sf"` reads the MTZ range. `"explicit"` uses the two cutoffs |
-| `LOWRES` | Low-resolution cutoff (Å) | Larger number. Ignored when the source is `"sf"` |
-| `DMIN` | High-resolution cutoff (Å) | Smaller number. Ignored when the source is `"sf"` |
-| `MAP_BORDER_A` | Map border (Å) | `extends` padding around the model. Default 5 |
-| `PHASE_SOURCE` | Phase source | Fo−Fo only. Default `light_validation` |
-| `DELTA_B` | Sharpening ΔB (Å²) | 2mFo−DFc only. Default −40 |
-| `REFMAC_NCYC` | REFMAC cycles | Omit map only. `0` does not move atoms |
-| `SITE_DISTANCE_RESTRAINTS` | Distance restraints | Omit map. One pair per line |
-| `SITE_DISTANCE_SIGMA` | Distance sigma (Å) | Default 0.50 |
-| `SITE_ANGLE_RESTRAINTS` | Angle restraints | Omit map. One angle per line. Sigma in degrees |
-| `SITE_ANGLE_SIGMA` | Angle sigma (degrees) | Default 25 |
-| `USE_LIBCHECK` | Widen distances in a libcheck library | Omit map. Default off |
-| `LIB_MONOMERS` | Monomer names for libcheck | Empty means the site residue plus other hetero residues |
-| `SITE_CHAIN`, `SITE_RESI` | Chain, residue | Centre of the clip and of the figure |
-| `SITE_LABEL` | Label | File-name tag such as `OEC` or `heme` |
-| `SITE_COPIES` | Additional copies | Further `(chain, residue)` pairs. The form always includes the main site |
-| `EXTRA_RESIDUES` | Neighbouring residues | Sticks drawn beside the site |
-| `EXPORT_RADIUS_A` | Clip radius (Å) | Coot sphere. Default 10 |
-| `CARVE_A` | Carve radius (Å) | PyMOL skin around displayed atoms. Default 3 |
-| `SIGMA_LEVELS` | Sigma levels | Contour list |
-| `SIGMA_POSITIVE`, `SIGMA_NEGATIVE` | Positive levels only, negative levels only | Difference maps. Blank means the shared list |
-| `CONTOUR_MODE` | Contour | `"sigma"` or `"absolute"` |
-| `surface_representation` | Surface | `"mesh"` or `"solid"` |
-| `SHOW_OEC_BONDS` | Draw Mn/Ca–O bonds | Skipped when the atom names are absent |
-| `DRAW_DEFAULT_OEC_DISTANCES` | Draw the default distances | Mn1–O5 and Glu OE2 distances when those atoms exist |
-| `PNG_WIDTH`, `PNG_HEIGHT` | Figure width, figure height | Pixels, from 200 to 4000 |
-| `RAY_TRACE` | Ray-trace the figure | Falls back to an untraced render if the display cannot ray-trace |
-| `RECOMPUTE_MAP` | Recompute the map | Off reuses an extended CCP4 map with the same name |
-| `RECOMPUTE_FRAGMENT` | Recompute the Coot fragment | Off reuses the `.map` clip |
-| `PYMOL_VIEW` | — | Notebook camera matrix. The web application uses the browser viewer |
-| `INSPECT_IN_PYMOL` | — | Notebook only. Opens the PyMOL GUI after the PNG |
+| Form field | Meaning |
+| --- | --- |
+| Dark name, or omit-model name | Label used in output file names |
+| Light name, or observed-data name | Label used in output file names |
+| Structure name | Label for the single-structure map |
+| CCP4 directory | Suite prefix. Default `/Applications/ccp4-9` |
+| Resolution | Structure-factor file reads the MTZ range. Explicit uses the two cutoffs |
+| Low-resolution cutoff (Å) | Larger number. Ignored when the source is the structure-factor file |
+| High-resolution cutoff (Å) | Smaller number. Ignored when the source is the structure-factor file |
+| Map border (Å) | `extends` padding around the model. Default 5 |
+| Phase source | Fo−Fo only. Default is the light validation file |
+| Sharpening ΔB (Å²) | 2mFo−DFc only. Default −40 |
+| REFMAC cycles | Omit map only. `0` does not move atoms |
+| Distance restraints | Omit map. One pair per line |
+| Distance sigma (Å) | Default 0.50 |
+| Angle restraints | Omit map. One angle per line. Sigma in degrees |
+| Angle sigma (degrees) | Default 25 |
+| Widen distances in a libcheck library | Omit map. Default off |
+| Monomer names for libcheck | Empty means the site residue plus other hetero residues |
+| Chain, residue | Centre of the clip and of the figure |
+| Label | File-name tag such as `OEC` or `heme` |
+| Additional copies | Further chain and residue pairs. The form always includes the main site |
+| Neighbouring residues | Sticks drawn beside the site |
+| Clip radius (Å) | Coot sphere. Default 10 |
+| Carve radius (Å) | PyMOL skin around displayed atoms. Default 3 |
+| PNG sigma levels | Contours drawn in the PyMOL PNG |
+| Positive levels only, negative levels only | Difference maps. Blank means the PNG sigma levels |
+| Viewer sigma minimum, viewer sigma maximum | Inclusive range of the one isosurface in the browser. The minimum must be lower than the maximum |
+| Contour | Sigma, after the map is normalised, or absolute map units |
+| Surface | Mesh or solid, for the PyMOL PNG. The viewer has its own solid/mesh switch |
+| Draw Mn/Ca–O bonds | Skipped when the atom names are absent |
+| Draw the default distances | Mn1–O5 and Glu OE2 distances when those atoms exist |
+| Figure width, figure height | Pixels, from 200 to 4000 |
+| Ray-trace the figure | Falls back to an untraced render if the display cannot ray-trace |
+| Recompute the map | Off reuses an extended CCP4 map with the same name |
+| Recompute the Coot fragment | Off reuses the `.map` clip |
 
 ## Resolution
 
-`"sf"` is the default in every notebook.
+The structure-factor file is the default resolution source on every form.
 
 - Fo−Fo uses the common shell of the two structure-factor MTZs: the poorer low-resolution limit and the poorer high-resolution limit.
 - The omit map uses the observed structure-factor MTZ, after `cif2mtz` and before `ctruncate`.
-- The 2mFo−DFc map uses the structure-factor MTZ as the cutoff. The coefficients that are transformed are `FWT` / `PHWT`, and the log warns if `DMIN` is finer than the `FWT` file.
+- The 2mFo−DFc map uses the structure-factor MTZ as the cutoff. The coefficients that are transformed are `FWT` / `PHWT`, and the log warns if the high-resolution cutoff is finer than the `FWT` file.
 
-`"explicit"` requires `LOWRES > DMIN > 0`. The explicit numbers stored in the notebooks, used only in that mode, are 20.0–2.10 Å (Fo−Fo), 30.0–1.89 Å (omit map), and 30.0–2.09 Å (2mFo−DFc).
+Explicit resolution requires the low-resolution cutoff to be larger than the high-resolution cutoff, and both to be positive. The explicit numbers stored on the forms, used only in that mode, are 20.0–2.10 Å (Fo−Fo), 30.0–1.89 Å (omit map), and 30.0–2.09 Å (2mFo−DFc).
 
 ## Site
 
@@ -72,11 +71,13 @@ The residue scan lists non-water `HETATM` records and hides common lipids and pi
 
 ## Contours
 
-Difference-map levels are positive numbers. The negative surface is drawn at the same magnitudes unless the negative list is set. The Fo−Fo notebook uses `3, 4, 5`. The omit-map notebook uses `3.5`.
+Difference-map PNG levels are positive numbers. The negative surface is drawn at the same magnitudes unless the negative list is set. The Fo−Fo form uses `3, 4, 5`. The omit-map form uses `3.5`.
 
-The 2mFo−DFc list may contain a negative level, which is drawn red. The notebook uses `2.0, 3.5` and a solid surface. A classical unsharpened envelope is nearer `1` to `1.5`.
+The 2mFo−DFc list may contain a negative level, which is drawn red. The form uses `2.0, 3.5` and a solid surface. A classical unsharpened envelope is nearer `1` to `1.5`.
 
-`"sigma"` normalises the map so the root-mean-square is 1. `"absolute"` uses raw map units. `"mesh"` is `isomesh`. `"solid"` is a transparent `isosurface`.
+Sigma mode normalises the map so the root-mean-square is 1. Absolute mode uses raw map units. Mesh is `isomesh`. Solid is a transparent `isosurface`.
+
+The viewer sigma minimum and maximum bound a different contour: the single isosurface in the browser. Difference maps default to \(-5\) and \(5\). The sharpened map defaults to \(1\) and \(5\). The starting viewer level is the PNG level closest to zero that lies inside that range. Blue/red and temperature colouring, and the viewer’s own solid/mesh switch, are chosen on the result panel after the job finishes. They are not form fields.
 
 Colours, from the lowest magnitude to the highest:
 
@@ -105,7 +106,7 @@ O5 CA1 O1 90 25
 
 A missing distance or angle keeps the value in the starting model. A missing sigma uses the form-wide sigma. External distances replace the dictionary bond for that atom pair in `SITE_COPIES` only. A `libcheck` library changes every copy of the residue type. Angles are external in both modes.
 
-The configuration-cell defaults are the O5 distances to Mn1, Mn3, Mn4, and Ca, and these angles:
+The form defaults are the O5 distances to Mn1, Mn3, Mn4, and Ca, and these angles:
 
 ```text
 MN3 O5 MN4
