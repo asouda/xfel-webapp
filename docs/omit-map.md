@@ -42,7 +42,15 @@ ctruncate -hklin 6w1v-sf.mtz -hklout 6w1v-sf-truncate.mtz -colin '/*/*/[I,SIGI]'
 
 The program applies the French–Wilson estimate: for each reflection it returns the expected \(|F|\) given the measured intensity and its uncertainty, including the case where the measured intensity is negative. Those amplitudes are \(|F_o|\).
 
-**6. Copy the free-R flag.** `cad` takes every column from the amplitude MTZ and the `FREE` column from the intensity MTZ, and writes `6w1v-sf-truncate-free.mtz`:
+A deposition that stores Friedel intensities instead of a mean, such as `9z35`, has `I(+)`, `SIGI(+)`, `I(-)`, and `SIGI(-)` after `cif2mtz`. The same step then runs:
+
+```text
+ctruncate -hklin 9z35-sf.mtz -hklout 9z35-sf-truncate.mtz -colano '/*/*/[I(+),SIGI(+),I(-),SIGI(-)]'
+```
+
+That writes the mean amplitudes as `FMEAN` and `SIGFMEAN`, together with the Friedel amplitudes. Mean intensities are used when both layouts are present.
+
+**6. Copy the free-R flag.** For a mean-intensity file, `cad` takes every column from the amplitude MTZ and the `FREE` column from the intensity MTZ, and writes `6w1v-sf-truncate-free.mtz`:
 
 ```text
 LABIN FILE 1 ALL
@@ -50,6 +58,8 @@ LABIN FILE 2 E1=FREE
 ```
 
 `FREE` marks reflections that REFMAC must leave out of the refinement target. In `6w1v-sf.cif` that set is the status value `f` on `_refln.status`. `cif2mtz` writes it as `FREE`, and `cad` copies it onto the amplitudes so \(R_{\mathrm{free}}\) is still computed on the held-out reflections.
+
+For a Friedel-intensity file, `cad` copies `FMEAN` and `SIGFMEAN` only, renames them to `F` and `SIGF`, and adds `FREE`. REFMAC then sees the same mean-amplitude columns as in the `6w1v` run.
 
 **7. Calculate \(F_c\), or refine, with REFMAC.** The job reads the amplitude MTZ and `6w1v_omitO6_single_confA.pdb` and writes `6w1v_omitO6_single_confA_vs_6w1v.mtz` and `6w1v_omitO6_single_confA_refined.pdb`.
 

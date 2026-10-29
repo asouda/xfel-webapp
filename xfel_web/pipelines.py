@@ -68,6 +68,63 @@ def _cif2mtz(session: Ccp4Session, pdb_id: str, cif_path: Path, mtz_path: Path, 
     )
 
 
+_MEAN_INTENSITIES = ("I", "SIGI")
+_FRIEDEL_INTENSITIES = ("I(+)", "SIGI(+)", "I(-)", "SIGI(-)")
+
+
+def _labels_by_name(labels: list[str]) -> dict[str, str]:
+    return {label.upper(): label for label in labels}
+
+
+def _column_group(found: dict[str, str], names: tuple[str, ...]) -> str:
+    inner = ",".join(found[name] for name in names)
+    return f"'/*/*/[{inner}]'"
+
+
+def intensity_truncate_args(labels: list[str]) -> str:
+    """ctruncate column selection for mean intensities or a Friedel pair.
+
+    Depositions such as 6w1v store ``I`` and ``SIGI``. Depositions such as
+    9z35 store only ``I(+)``, ``SIGI(+)``, ``I(-)``, and ``SIGI(-)``.
+    """
+    found = _labels_by_name(labels)
+    if all(name in found for name in _MEAN_INTENSITIES):
+        return "-colin " + _column_group(found, _MEAN_INTENSITIES)
+    if all(name in found for name in _FRIEDEL_INTENSITIES):
+        return "-colano " + _column_group(found, _FRIEDEL_INTENSITIES)
+    raise ValueError(
+        "Observed structure factors have no mean intensities (I, SIGI) "
+        "and no complete Friedel pair (I(+), SIGI(+), I(-), SIGI(-)). "
+        f"MTZ labels were: {labels}"
+    )
+
+
+def amplitude_cad_keywords(labels: list[str]) -> tuple[str, str, str]:
+    """Mean amplitudes from ctruncate, and the cad script that adds FREE.
+
+    ``-colin`` writes ``F`` and ``SIGF``. ``-colano`` writes ``FMEAN`` and
+    ``SIGFMEAN`` alongside Friedel amplitudes. REFMAC reads ``F`` and ``SIGF``,
+    so a Friedel run renames the mean pair and leaves the anomalous columns
+    out of the file REFMAC sees.
+    """
+    found = _labels_by_name(labels)
+    if "F" in found and "SIGF" in found:
+        return found["F"], found["SIGF"], "LABIN FILE 1 ALL\nLABIN FILE 2 E1=FREE\nEND"
+    if "FMEAN" in found and "SIGFMEAN" in found:
+        amplitude, sigma = found["FMEAN"], found["SIGFMEAN"]
+        keywords = (
+            f"LABIN FILE 1 E1={amplitude} E2={sigma}\n"
+            "LABOUT FILE 1 E1=F E2=SIGF\n"
+            "LABIN FILE 2 E1=FREE\n"
+            "END"
+        )
+        return amplitude, sigma, keywords
+    raise ValueError(
+        "ctruncate did not write mean amplitudes F and SIGF, or FMEAN and SIGFMEAN. "
+        f"MTZ labels were: {labels}"
+    )
+
+
 def run_fofo(cfg: dict, emit) -> dict:
     session = Ccp4Session(cfg["output_dir"], cfg["ccp4_root"], emit)
     files = cfg["files"]
@@ -309,15 +366,19 @@ def run_refinement(cfg: dict, emit) -> dict:
         light_sf_truncate = out / f"{light_id}-sf-truncate.mtz"
         light_sf_truncate_free = out / f"{light_id}-sf-truncate-free.mtz"
         truncate_log = out / f"{light_id}_ctruncate_sf.log"
+        column_args = intensity_truncate_args(session.mtz_labels(light_sf_mtz))
         session.emit(f"→ ctruncate  ({truncate_log.name})")
+        session.emit(f"ctruncate {column_args}")
         session.run_bash(
             (
                 f"ctruncate -hklin { _q(light_sf_mtz) } "
                 f"-hklout { _q(light_sf_truncate) } "
-                "-colin '/*/*/[I,SIGI]'"
+                f"{column_args}"
             ),
             truncate_log,
         )
+        amplitude, sigma, cad_keywords = amplitude_cad_keywords(session.mtz_labels(light_sf_truncate))
+        session.emit(f"Amplitude columns for REFMAC: {amplitude}, {sigma}")
         session.run_ccp4(
             "cad",
             [
@@ -325,7 +386,7 @@ def run_refinement(cfg: dict, emit) -> dict:
                 ("hklin2", light_sf_mtz),
                 ("hklout", light_sf_truncate_free),
             ],
-            "LABIN FILE 1 ALL\nLABIN FILE 2 E1=FREE\nEND",
+            cad_keywords,
             out / f"{light_id}_cad_free.log",
         )
         omit_mtz = out / f"{dark_id}_vs_{light_id}.mtz"

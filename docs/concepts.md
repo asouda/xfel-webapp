@@ -72,7 +72,7 @@ Validation coefficients are also published at
 https://files.rcsb.org/pub/pdb/validation_reports/xx/{pdbid}/{pdbid}_validation_2fo-fc_map_coef.cif.gz
 ```
 
-Deposited structure factors for the `6w1o` and `6w1v` examples are intensities, `_refln.intensity_meas` and `_refln.intensity_sigma`, with the free set marked by `_refln.status` `f`. `cif2mtz` stores those as `I`, `SIGI`, and `FREE`. The omit-map workflow converts intensities to amplitudes with `ctruncate` and copies `FREE` onto the amplitude MTZ. The Fo−Fo workflow lets a zero-cycle REFMAC job place the amplitudes in a REFMAC-style MTZ. The `9z35` structure-factor file stores anomalous intensities and `_refln.pdbx_r_free_flag`; the sharpened-map workflow uses that file for the resolution range.
+Deposited structure factors for the `6w1o` and `6w1v` examples are intensities, `_refln.intensity_meas` and `_refln.intensity_sigma`, with the free set marked by `_refln.status` `f`. `cif2mtz` stores those as `I`, `SIGI`, and `FREE`. The omit-map workflow converts intensities to amplitudes with `ctruncate` and copies `FREE` onto the amplitude MTZ. The Fo−Fo workflow lets a zero-cycle REFMAC job place the amplitudes in a REFMAC-style MTZ. The `9z35` structure-factor file stores anomalous intensities and `_refln.pdbx_r_free_flag`. The omit-map workflow converts that Friedel pair to mean amplitudes. The sharpened-map workflow uses the same file for the resolution range.
 
 Column names are read from each MTZ with `mtzdump` and matched against a short list of candidates (`FP`, `F`, `FOBS`, `SIGFP`, `PHWT`, `PHIC`, `DELFWT`, `FWT`, and so on), so a slightly different mmCIF layout still runs.
 

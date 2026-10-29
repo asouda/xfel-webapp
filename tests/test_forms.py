@@ -17,7 +17,12 @@ from xfel_web.forms import (
     parse_viewer_sigma,
     resolve_input_file,
 )
-from xfel_web.pipelines import _viewer_scene, initial_viewer_sigma
+from xfel_web.pipelines import (
+    _viewer_scene,
+    amplitude_cad_keywords,
+    initial_viewer_sigma,
+    intensity_truncate_args,
+)
 from xfel_web.restraints import external_angle_keywords, external_distance_keywords
 
 
@@ -203,6 +208,47 @@ class ParseTests(unittest.TestCase):
             self.assertIn("MN1", conformers[""])
         finally:
             path.unlink(missing_ok=True)
+
+
+class TruncateColumnTests(unittest.TestCase):
+    def test_mean_intensities_use_colin(self):
+        args = intensity_truncate_args(["H", "K", "L", "FREE", "I", "SIGI"])
+        self.assertEqual(args, "-colin '/*/*/[I,SIGI]'")
+
+    def test_friedel_intensities_use_colano(self):
+        args = intensity_truncate_args(
+            ["H", "K", "L", "FREE", "I(+)", "SIGI(+)", "I(-)", "SIGI(-)"]
+        )
+        self.assertEqual(args, "-colano '/*/*/[I(+),SIGI(+),I(-),SIGI(-)]'")
+
+    def test_mean_intensities_win_when_both_layouts_are_present(self):
+        args = intensity_truncate_args(
+            ["I", "SIGI", "I(+)", "SIGI(+)", "I(-)", "SIGI(-)"]
+        )
+        self.assertEqual(args, "-colin '/*/*/[I,SIGI]'")
+
+    def test_incomplete_columns_are_rejected(self):
+        with self.assertRaises(ValueError) as caught:
+            intensity_truncate_args(["H", "K", "L", "F(+)", "SIGF(+)"])
+        self.assertIn("F(+)", str(caught.exception))
+
+    def test_mean_amplitudes_keep_every_truncate_column(self):
+        amplitude, sigma, keywords = amplitude_cad_keywords(["F", "SIGF", "I", "SIGI"])
+        self.assertEqual((amplitude, sigma), ("F", "SIGF"))
+        self.assertEqual(keywords, "LABIN FILE 1 ALL\nLABIN FILE 2 E1=FREE\nEND")
+
+    def test_friedel_amplitudes_are_renamed_to_mean_columns(self):
+        amplitude, sigma, keywords = amplitude_cad_keywords(
+            ["FMEAN", "SIGFMEAN", "F(+)", "SIGF(+)", "F(-)", "SIGF(-)"]
+        )
+        self.assertEqual((amplitude, sigma), ("FMEAN", "SIGFMEAN"))
+        self.assertEqual(
+            keywords,
+            "LABIN FILE 1 E1=FMEAN E2=SIGFMEAN\n"
+            "LABOUT FILE 1 E1=F E2=SIGF\n"
+            "LABIN FILE 2 E1=FREE\n"
+            "END",
+        )
 
 
 if __name__ == "__main__":

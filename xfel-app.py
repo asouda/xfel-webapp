@@ -94,7 +94,7 @@ WORKFLOWS = {
         "files": [
             ("dark_pdb", "Omit-model coordinates", "Single-conformation model the map is calculated from."),
             ("light_pdb", "Light coordinates", "Coordinates of the dataset being compared. The figure itself uses the refined omit model."),
-            ("light_sf", "Observed structure factors", "mmCIF with intensities I and SIGI, as deposited for 6w1v."),
+            ("light_sf", "Observed structure factors", "mmCIF with mean intensities I and SIGI, or Friedel intensities I(+) and I(-)."),
         ],
         "paths": {
             "dark_pdb": _existing("data/6w1v_omitO6_single_confB.pdb"),
