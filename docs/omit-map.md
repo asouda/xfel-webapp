@@ -32,7 +32,7 @@ The programs run in this order: `cif2mtz`, `mtzdump`, `ctruncate`, `cad`, `refma
 
 **3. Convert the observed mmCIF.** `cif2mtz` writes `6w1v-sf.mtz`. The columns at this stage are still the deposited intensities. For this dataset those are `_refln.intensity_meas` and `_refln.intensity_sigma`, stored in the MTZ as `I` and `SIGI`.
 
-**4. Choose the resolution shell.** With the resolution source set to the structure-factor file, `mtzdump` sets the low- and high-resolution cutoffs from `6w1v-sf.mtz`. With an explicit shell, the two numbers on the form are used. The explicit pair stored for this workflow is 30.0–1.89 Å, which matches the high-resolution limit recorded for the `6w1v` intensities. The high-resolution cutoff should be no finer than that limit.
+**4. Choose the resolution shell.** With the resolution source set to the structure-factor file, `mtzdump` sets the low- and high-resolution cutoffs from `6w1v-sf.mtz`. With an explicit shell, the two numbers on the form are used. The explicit pair stored for this workflow is 30.0–1.89 Å, which matches the high-resolution limit recorded for the `6w1v` intensities. That shell is the range of `DELFWT` coefficients. Leave the FFT grid resolution blank to sample the map on the grid for this shell.
 
 **5. Turn intensities into amplitudes.** `ctruncate` reads `I` and `SIGI` and writes `6w1v-sf-truncate.mtz` with amplitudes `F` and `SIGF`:
 
@@ -94,9 +94,11 @@ The MTZ is checked for `FP` (or `F`, `FOBS`), `FC_ALL` (or `FC`), `DELFWT`, and 
 **8. Fourier-transform the difference.** `fft` writes `6w1v_DELFWT_6w1v_omitO6_single_confA_{tag}.ccp4`:
 
 ```text
-RESOLUTION <low> <high>
+RESOLUTION <low> <grid>
 LABIN F1=DELFWT PHI=PHDELWT
 ```
+
+`<grid>` is the high-resolution cutoff when the FFT grid resolution is blank. A smaller number on that field replaces `<grid>` only. `fft` takes the maximum Miller indices from `<grid>` and the cell, then samples the asymmetric unit at about one third of that spacing. Indices inside the extended box that are not in the MTZ are omitted from the sum, so their amplitude is zero. The coefficients that were measured are unchanged. The map file name keeps the coefficient shell and adds `_grid{limit}` when the grid is finer, for example `30p00-1p89_grid1p20`.
 
 This is the sum
 
@@ -106,7 +108,7 @@ This is the sum
 
 Positive density is present in the `6w1v` observations and absent from the omit model. Negative density is placed by the model where the observations are weaker.
 
-**9. Cover the REFMAC model.** `extends` pads the map by the map border (default 5 Å) around the refined coordinate file and writes the extended CCP4 map.
+**9. Cover the REFMAC model.** `extends` pads the map by the map border (default 5 Å) around the refined coordinate file and writes the extended CCP4 map. `extends` keeps one map section in a fixed array of 200,000 points. A fine FFT grid can make the model box larger than that. The job then uses `mapmask` with the same border and copies the asymmetric-unit sigma onto the padded map.
 
 **10. Export the site fragment.** Coot loads the extended map as a difference map and the REFMAC coordinates, centres on `OEX` A415, and writes a clip of the chosen radius (default 10 Å). The Coot contour does not change the exported voxels.
 
@@ -130,7 +132,7 @@ Outputs:
 | `{omit}_refined.pdb` | Coordinates after the requested cycles |
 | `*_extended.ccp4` | The map |
 
-A map left by an older `cad` / `scaleit` pipeline has a different file name and is not reused. Turn map recomputation on to overwrite the extended map after any change of cycles, restraints, or resolution.
+A map left by an older `cad` / `scaleit` pipeline has a different file name and is not reused. Turn map recomputation on to overwrite the extended map after any change of cycles, restraints, resolution, or FFT grid resolution. A finer grid writes a different file name, so it does not replace the map sampled at the coefficient limit.
 
 ## Background
 
@@ -162,7 +164,8 @@ The omit model’s own structure-factor file is not an input. \(F_o\) comes from
 | Distance restraints and distance sigma | Which site distances are loose, and how loose |
 | Angle restraints and angle sigma | External angles, sigma in degrees |
 | Widen distances in a libcheck library | External distances on the listed copies, or a widened monomer library for every copy of that residue type |
-| Resolution source and the two cutoffs | Shell of the `DELFWT` transform |
+| Resolution source and the two cutoffs | Shell of the `DELFWT` coefficients |
+| FFT grid resolution | Blank uses that shell. A smaller number samples the finer grid, with zero amplitude beyond the coefficients |
 | PNG sigma levels | The worked example uses a single \(3.5\sigma\) mesh |
 | Viewer sigma minimum and maximum | Range of the one browser isosurface |
 
@@ -178,7 +181,7 @@ If the mesh is empty, lower the contour (try `3`). If the cage swallows the mode
 2. Set the two labels. Leave the resolution source on the structure-factor file, or set the two cutoffs yourself.
 3. List hetero residues on the omit model, then set the chain, residue, and neighbours.
 4. Set the cycle count and the restraint lists. Leave the library option off to pass distances straight to REFMAC. Turn it on to widen them in a `libcheck` library.
-5. Recompute the map the first time, and again after any change of cycles, restraints, or resolution. Leave recomputation off while you tune σ and the view.
+5. Recompute the map the first time, and again after any change of cycles, restraints, resolution, or FFT grid resolution. Leave recomputation off while you tune σ and the view.
 
 The extended map can be opened with the REFMAC coordinates:
 

@@ -88,7 +88,7 @@ WORKFLOWS = {
         "title": "Omit-model mFo−DFc map",
         "kicker": "XFEL_refinement.ipynb",
         "card": "Weighted difference map of an omit model against one set of observed amplitudes, with optional REFMAC.",
-        "how": "ctruncate converts deposited intensities to amplitudes. REFMAC writes the weighted DELFWT coefficient for the number of cycles you set, then fft, Coot, and PyMOL produce the figure.",
+        "how": "ctruncate converts deposited intensities to amplitudes. REFMAC writes the weighted DELFWT coefficient for the number of cycles you set. fft transforms it, optionally on the finer grid of a higher resolution with the extra terms set to zero, then Coot and PyMOL produce the figure.",
         "scan_key": "dark_pdb",
         "scan_label": "omit-model coordinates",
         "files": [

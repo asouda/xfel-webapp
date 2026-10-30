@@ -10,6 +10,8 @@ from pathlib import Path
 from werkzeug.datastructures import FileStorage
 from werkzeug.utils import secure_filename
 
+from xfel_web.ccp4 import fft_grid_resolution
+
 ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.+\-]{0,80}$")
 LABEL_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,20}$")
 
@@ -34,6 +36,19 @@ def _float(form, name: str, label: str) -> float:
         return float(raw)
     except ValueError as exc:
         raise FormError(f"{label} must be a number.") from exc
+
+
+def _optional_float(form, name: str, label: str) -> float | None:
+    raw = _text(form, name)
+    if not raw:
+        return None
+    try:
+        value = float(raw)
+    except ValueError as exc:
+        raise FormError(f"{label} must be a number.") from exc
+    if not math.isfinite(value):
+        raise FormError(f"{label} must be a finite number.")
+    return value
 
 
 def _int(form, name: str, label: str) -> int:
@@ -387,6 +402,12 @@ def parse_job(workflow: str, form, files, project: Path) -> dict:
         cycles = _int(form, "refmac_ncyc", "REFMAC cycles")
         if cycles < 0:
             raise FormError("REFMAC cycles cannot be negative. Use 0 to calculate the map without moving atoms.")
+        fft_dmin = _optional_float(form, "fft_dmin", "FFT grid resolution")
+        if fft_dmin is not None and cfg["resolution_source"] == "explicit":
+            try:
+                fft_grid_resolution(cfg["lowres"], cfg["dmin"], fft_dmin)
+            except ValueError as exc:
+                raise FormError(str(exc)) from exc
         try:
             distances = parse_distance_restraints(_text(form, "distance_restraints"))
             angles = parse_angle_restraints(_text(form, "angle_restraints"))
@@ -397,6 +418,7 @@ def parse_job(workflow: str, form, files, project: Path) -> dict:
                 "dark_id": _identifier(form, "dark_id", "Omit-model name"),
                 "light_id": _identifier(form, "light_id", "Observed-data name"),
                 "refmac_ncyc": cycles,
+                "fft_dmin": fft_dmin,
                 "distance_restraints": distances,
                 "distance_sigma": _float(form, "distance_sigma", "Distance sigma"),
                 "angle_restraints": angles,

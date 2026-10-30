@@ -31,7 +31,7 @@ That writes `.venv` and installs the locked dependencies. You do not need to act
 
 The map programs are separate from the Python environment:
 
-1. **CCP4.** Install the [CCP4 suite](https://www.ccp4.ac.uk/download/). The default directory in the app is `/Applications/ccp4-9`. Point the CCP4 field at the suite prefix if yours is elsewhere; the app sources `bin/ccp4.setup-sh` and then calls `cif2mtz`, `refmac5`, `cad`, `scaleit`, `fft`, `extends`, `mtzdump`, `ctruncate`, and `libcheck`.
+1. **CCP4.** Install the [CCP4 suite](https://www.ccp4.ac.uk/download/). The default directory in the app is `/Applications/ccp4-9`. Point the CCP4 field at the suite prefix if yours is elsewhere; the app sources `bin/ccp4.setup-sh` and then calls `cif2mtz`, `refmac5`, `cad`, `scaleit`, `fft`, `extends`, `mapmask`, `mtzdump`, `ctruncate`, and `libcheck`.
 2. **Coot.** Use the binary shipped with CCP4, usually `$CCP4/bin/coot`. It runs without a window and writes a map fragment around the residue you choose.
 3. **PyMOL.** The `pymol` executable must be on `PATH`. The conda-forge package is enough:
   ```bash

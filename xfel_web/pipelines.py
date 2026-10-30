@@ -14,6 +14,8 @@ from xfel_web.ccp4 import (
     Ccp4Session,
     choose_resolution,
     delta_b_tag,
+    fft_grid_resolution,
+    grid_res_tag,
     parse_scaleit_rfactor,
     require_files,
     res_tag,
@@ -135,7 +137,7 @@ def run_fofo(cfg: dict, emit) -> dict:
     session.emit(f"PyMOL     : {session.pymol}")
     for key, path in files.items():
         session.emit(f"  {key:18s} {path}  ({path.stat().st_size / 1e6:.1f} MB)")
-    session.run_bash('echo "CCP4=$CCP4"; which cif2mtz refmac5 cad scaleit fft extends mtzdump')
+    session.run_bash('echo "CCP4=$CCP4"; which cif2mtz refmac5 cad scaleit fft extends mapmask mtzdump')
 
     session.announce("2. Inspect the light coordinates and the chosen site")
     atoms, centroid, site_line = _check_site(files["light_pdb"], cfg["site_chain"], cfg["site_resi"], cfg["site_label"])
@@ -248,10 +250,11 @@ def run_fofo(cfg: dict, emit) -> dict:
             ),
             out / f"fft_{light_id}_{dark_id}.log",
         )
-        session.run_ccp4(
-            "extends",
-            [("mapin", diff_map), ("mapout", extended_map), ("xyzin", files["light_pdb"])],
-            f"BORDER {cfg['map_border']:.1f}\nEND",
+        session.extend_around_model(
+            diff_map,
+            extended_map,
+            files["light_pdb"],
+            cfg["map_border"],
             out / f"extends_{light_id}_{dark_id}.log",
         )
         session.emit(f"Created: {extended_map}")
@@ -328,7 +331,7 @@ def run_refinement(cfg: dict, emit) -> dict:
     session.emit(f"PyMOL     : {session.pymol}")
     for key, path in files.items():
         session.emit(f"  {key:18s} {path}  ({path.stat().st_size / 1e6:.1f} MB)")
-    tools = "cif2mtz ctruncate cad refmac5 fft extends mtzdump"
+    tools = "cif2mtz ctruncate cad refmac5 fft extends mapmask mtzdump"
     if cfg["use_libcheck"]:
         tools += " libcheck"
     session.run_bash(f'echo "CCP4=$CCP4"; which {tools}')
@@ -350,7 +353,14 @@ def run_refinement(cfg: dict, emit) -> dict:
     low, high = _prepare_resolution(
         session, cfg["resolution_source"], cfg["lowres"], cfg["dmin"], [(light_id, light_sf_mtz)]
     )
-    tag = res_tag(low, high)
+    grid_high = fft_grid_resolution(low, high, cfg.get("fft_dmin"))
+    tag = grid_res_tag(low, high, grid_high)
+    if grid_high < high - 1e-4:
+        session.emit(
+            f"FFT sampling grid is the {grid_high:.3f} Å grid. "
+            f"The coefficients stop at {high:.3f} Å, so reciprocal-space points "
+            f"from {high:.3f} to {grid_high:.3f} Å contribute zero amplitude."
+        )
     diff_map = out / f"{light_id}_DELFWT_{dark_id}_{tag}.ccp4"
     extended_map = out / f"{light_id}_DELFWT_{dark_id}_{tag}_extended.ccp4"
     refined_pdb = out / f"{dark_id}_refined.pdb"
@@ -445,16 +455,20 @@ def run_refinement(cfg: dict, emit) -> dict:
             "fft",
             [("hklin", omit_mtz), ("mapout", diff_map)],
             (
-                f"RESOLUTION {low:.2f} {high:.2f}\n"
+                # The high limit sets the sampling grid as well as the coefficient
+                # cutoff. A finer limit than the MTZ extends the reciprocal box;
+                # missing reflections stay out of the sum and contribute zero.
+                f"RESOLUTION {low:.2f} {grid_high:.2f}\n"
                 f"LABIN F1={delfwt_lab} PHI={phdelwt_lab}\n"
                 "END"
             ),
             out / f"fft_{light_id}_DELFWT_{dark_id}.log",
         )
-        session.run_ccp4(
-            "extends",
-            [("mapin", diff_map), ("mapout", extended_map), ("xyzin", refined_pdb)],
-            f"BORDER {cfg['map_border']:.1f}\nEND",
+        session.extend_around_model(
+            diff_map,
+            extended_map,
+            refined_pdb,
+            cfg["map_border"],
             out / f"extends_{light_id}_DELFWT_{dark_id}.log",
         )
         session.emit(f"Created: {extended_map}")
@@ -505,10 +519,17 @@ def run_refinement(cfg: dict, emit) -> dict:
         ray_trace=cfg["ray_trace"],
     )
     sigma_txt = ", ".join(f"±{level:g}" for level in cfg["positive_levels"])
+    grid_sentence = ""
+    if grid_high < high - 1e-4:
+        grid_sentence = (
+            f" Sampled on the {grid_high:.2f} Å grid, with zero amplitude "
+            f"from {high:.2f} Å to that limit."
+        )
     caption = (
         f"mFo−DFc density of {dark_id} against {light_id} around {cfg['site_label']} "
         f"{cfg['site_chain']}/{cfg['site_resi']}, {cfg['refmac_ncyc']} REFMAC cycles, "
         f"contoured at {sigma_txt} σ. Positive density is in the data and missing from the omit model."
+        f"{grid_sentence}"
     )
     return _result(
         caption,
@@ -538,7 +559,7 @@ def run_twofofc(cfg: dict, emit) -> dict:
     session.emit(f"PyMOL     : {session.pymol}")
     for key, path in files.items():
         session.emit(f"  {key:18s} {path}  ({path.stat().st_size / 1e6:.1f} MB)")
-    session.run_bash('echo "CCP4=$CCP4"; which cif2mtz fft extends mtzdump')
+    session.run_bash('echo "CCP4=$CCP4"; which cif2mtz fft extends mapmask mtzdump')
 
     session.announce("2. Inspect the coordinates and the chosen site")
     atoms, centroid, site_line = _check_site(files["pdb"], cfg["site_chain"], cfg["site_resi"], cfg["site_label"])
@@ -596,10 +617,11 @@ def run_twofofc(cfg: dict, emit) -> dict:
             ),
             out / f"fft_{pdb_id}_2fofc_{b_tag}.log",
         )
-        session.run_ccp4(
-            "extends",
-            [("mapin", density_map), ("mapout", extended_map), ("xyzin", files["pdb"])],
-            f"BORDER {cfg['map_border']:.1f}\nEND",
+        session.extend_around_model(
+            density_map,
+            extended_map,
+            files["pdb"],
+            cfg["map_border"],
             out / f"extends_{pdb_id}_2fofc_{b_tag}.log",
         )
         session.emit(f"Created: {extended_map}")

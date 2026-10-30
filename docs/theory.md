@@ -76,7 +76,7 @@ The electron density on a real-space grid is the inverse Fourier sum. With \(V\)
 \rho(\mathbf{r}) = \frac{1}{V} \sum_{hkl} F(hkl)\, e^{-2\pi i\, \mathbf{h}\cdot\mathbf{r}}.
 \]
 
-`fft` evaluates that sum over the resolution shell selected on the form and writes a CCP4 map of the asymmetric unit. The complex number \(F(hkl)\) is the coefficient the workflow has assembled:
+`fft` evaluates that sum over the resolution shell selected on the form and writes a CCP4 map of the asymmetric unit. On the omit map, a finer FFT grid resolution asks for the sampling of that higher resolution. The added reciprocal-space points are not in the MTZ, so they contribute zero amplitude. The complex number \(F(hkl)\) is the coefficient the workflow has assembled:
 
 | Map | Coefficient inside the sum |
 | --- | --- |

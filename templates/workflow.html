@@ -24,7 +24,7 @@
     <ol>
       <li>The observed mmCIF is converted to MTZ. <code>ctruncate</code> turns intensities <code>I, SIGI</code> into amplitudes, and <code>cad</code> copies the <code>FREE</code> flag onto those amplitudes.</li>
       <li><code>refmac5</code> refines the omit coordinates for the number of cycles you set. Zero cycles calculate the map without moving atoms. Loose site distances can be external restraints, or a widened <code>libcheck</code> monomer library. Site angles are always external restraints, in degrees.</li>
-      <li><code>fft</code> transforms <code>DELFWT</code> / <code>PHDELWT</code>. <code>extends</code> pads the map around the refined model.</li>
+      <li><code>fft</code> transforms <code>DELFWT</code> / <code>PHDELWT</code> between the resolution limits above. An optional finer grid resolution asks <code>fft</code> for the sampling of that higher resolution. Reciprocal-space points beyond the coefficients are absent from the MTZ and contribute zero amplitude, so the real-space grid is denser. <code>extends</code> pads the map around the refined model. When a section of that grid is larger than <code>extends</code> can store, <code>mapmask</code> applies the same border and the asymmetric-unit sigma is kept.</li>
       <li>Coot clips the site from that difference map. PyMOL draws the refined coordinates and the ±nσ surfaces, and saves the PNG and the <code>.pml</code> script beside the map.</li>
     </ol>
     {% else %}
@@ -92,6 +92,12 @@
       </label>
       <label>Low-resolution cutoff (Å)<input name="lowres" type="number" step="any" value="{{ defaults.lowres }}"></label>
       <label>High-resolution cutoff (Å)<input name="dmin" type="number" step="any" value="{{ defaults.dmin }}"></label>
+      {% if spec.slug == 'refinement' %}
+      <label class="wide">FFT grid resolution (Å)
+        <input name="fft_dmin" type="number" step="any" placeholder="blank = resolution limit above">
+        <span class="hint">Leave blank to sample the map at the high-resolution limit selected above. A smaller number extends reciprocal space to that resolution. The added points are not in the observed data, so they enter the transform with zero amplitude and the real-space grid becomes denser. A much smaller number produces a much larger map.</span>
+      </label>
+      {% endif %}
       <label>Map border (Å)<input name="map_border" type="number" step="any" value="{{ defaults.map_border }}"></label>
 
       {% if spec.slug == 'refinement' %}

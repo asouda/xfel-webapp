@@ -6,7 +6,15 @@ from pathlib import Path
 
 from werkzeug.datastructures import FileStorage
 
-from xfel_web.ccp4 import choose_resolution, delta_b_tag, pymol_scene_links, residue_conformers
+from xfel_web.ccp4 import (
+    choose_resolution,
+    copy_ccp4_header_statistics,
+    delta_b_tag,
+    fft_grid_resolution,
+    grid_res_tag,
+    pymol_scene_links,
+    residue_conformers,
+)
 from xfel_web.forms import (
     FormError,
     decompress_gzip,
@@ -14,6 +22,7 @@ from xfel_web.forms import (
     parse_copies,
     parse_distance_restraints,
     parse_extra_residues,
+    parse_job,
     parse_viewer_sigma,
     resolve_input_file,
 )
@@ -51,6 +60,33 @@ class ParseTests(unittest.TestCase):
     def test_explicit_resolution_rejects_inverted_shell(self):
         with self.assertRaises(ValueError):
             choose_resolution("explicit", 1.5, 2.0, [])
+
+    def test_fft_grid_extends_only_to_a_finer_limit(self):
+        self.assertEqual(fft_grid_resolution(30, 1.89, None), 1.89)
+        self.assertEqual(fft_grid_resolution(30, 1.89, 1.2), 1.2)
+        self.assertEqual(fft_grid_resolution(30, 1.89, 1.89), 1.89)
+        self.assertEqual(grid_res_tag(30, 1.89, 1.89), "30p00-1p89")
+        self.assertEqual(grid_res_tag(30, 1.89, 1.2), "30p00-1p89_grid1p20")
+        with self.assertRaises(ValueError):
+            fft_grid_resolution(30, 1.89, 2.5)
+        with self.assertRaises(ValueError):
+            fft_grid_resolution(30, 1.89, 40)
+
+    def test_mapmask_keeps_asymmetric_unit_sigma(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "asu.ccp4"
+            dest = root / "padded.ccp4"
+            header = bytearray(1024)
+            header[19 * 4 : 22 * 4] = b"aminamaxmean"
+            header[54 * 4 : 55 * 4] = b"rms!"
+            source.write_bytes(header)
+            dest.write_bytes(b"\x11" * 1024)
+            copy_ccp4_header_statistics(source, dest)
+            written = dest.read_bytes()
+        self.assertEqual(written[19 * 4 : 22 * 4], b"aminamaxmean")
+        self.assertEqual(written[54 * 4 : 55 * 4], b"rms!")
+        self.assertEqual(written[0:4], b"\x11" * 4)
 
     def test_delta_b_tag(self):
         self.assertEqual(delta_b_tag(-40), "dB-40")
@@ -208,6 +244,68 @@ class ParseTests(unittest.TestCase):
             self.assertIn("MN1", conformers[""])
         finally:
             path.unlink(missing_ok=True)
+
+
+class RefinementFormTests(unittest.TestCase):
+    def _form(self, root: Path, **overrides):
+        pdb = root / "model.pdb"
+        sf = root / "obs.cif"
+        pdb.write_text("END\n")
+        sf.write_text("data_test\n")
+        output = root / "job-out"
+        form = {
+            "output_dir": str(output),
+            "ccp4_root": "/Applications/ccp4-9",
+            "resolution_source": "explicit",
+            "lowres": "30",
+            "dmin": "1.89",
+            "map_border": "5",
+            "site_chain": "A",
+            "site_resi": "416",
+            "site_label": "OEC",
+            "extra_residues": "",
+            "extra_copies": "",
+            "export_radius": "10",
+            "carve": "3",
+            "sigma_levels": "3.5",
+            "contour_mode": "sigma",
+            "surface": "mesh",
+            "viewer_sigma_min": "-5",
+            "viewer_sigma_max": "5",
+            "png_width": "800",
+            "png_height": "600",
+            "dark_id": "omit",
+            "light_id": "obs",
+            "refmac_ncyc": "0",
+            "distance_sigma": "0.5",
+            "angle_sigma": "25",
+            "distance_restraints": "",
+            "angle_restraints": "",
+            "path_dark_pdb": str(pdb),
+            "path_light_pdb": str(pdb),
+            "path_light_sf": str(sf),
+        }
+        form.update(overrides)
+        return form
+
+    def test_blank_grid_resolution_leaves_the_data_cutoff(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cfg = parse_job("refinement", self._form(root), {}, root)
+        self.assertIsNone(cfg["fft_dmin"])
+
+    def test_finer_grid_resolution_is_kept(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cfg = parse_job("refinement", self._form(root, fft_dmin="1.20"), {}, root)
+        self.assertEqual(cfg["fft_dmin"], 1.2)
+
+    def test_coarser_grid_resolution_is_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with self.assertRaises(FormError) as caught:
+                parse_job("refinement", self._form(root, fft_dmin="2.50"), {}, root)
+        self.assertIn("coarser", str(caught.exception))
 
 
 class TruncateColumnTests(unittest.TestCase):

@@ -90,7 +90,7 @@ After the map exists, the three workflows do the same three things, and then ope
 
 ### Extend the map
 
-`fft` writes an asymmetric-unit map. `extends` expands it so that it covers the coordinate file plus a border, `MAP_BORDER_A` (default 5 Å). The coordinate file is the light model, the refined omit model, or the single structure, depending on the workflow.
+`fft` writes an asymmetric-unit map. `extends` expands it so that it covers the coordinate file plus a border, `MAP_BORDER_A` (default 5 Å). A section larger than the fixed array in `extends` is padded with `mapmask` instead, and the asymmetric-unit sigma is copied onto that map. The coordinate file is the light model, the refined omit model, or the single structure, depending on the workflow.
 
 ### Clip a site fragment
 

@@ -19,6 +19,7 @@ CCP4_PROGRAMS = (
     "scaleit",
     "fft",
     "extends",
+    "mapmask",
     "mtzdump",
     "ctruncate",
     "libcheck",
@@ -156,6 +157,41 @@ def choose_resolution(
 
 def res_tag(low: float, high: float) -> str:
     return f"{low:.2f}-{high:.2f}".replace(".", "p")
+
+
+def fft_grid_resolution(low: float, data_high: float, requested: float | None) -> float:
+    """High-resolution limit that sets the fft sampling grid.
+
+    CCP4 fft takes the maximum Miller indices from this limit and the cell,
+    then samples the map at about one third of that spacing. A limit finer
+    than the reflections in the MTZ extends that reciprocal-space box. Indices
+    with no observation are left out of the sum, which is a zero amplitude.
+    """
+    if requested is None:
+        return data_high
+    grid = float(requested)
+    if not (low > grid > 0):
+        raise ValueError(
+            f"FFT grid resolution must be finer than the low-resolution cutoff "
+            f"of {low:.3f} Å and greater than zero. Got {grid}."
+        )
+    if grid > data_high + 1e-6:
+        raise ValueError(
+            f"FFT grid resolution {grid:.3f} Å is coarser than the "
+            f"{data_high:.3f} Å limit of the coefficients. "
+            f"A finer grid needs a smaller number of ångströms."
+        )
+    if grid >= data_high - 1e-6:
+        return data_high
+    return grid
+
+
+def grid_res_tag(low: float, high: float, grid_high: float) -> str:
+    """Filename tag for a map, with the fft grid limit when it is finer."""
+    tag = res_tag(low, high)
+    if grid_high < high - 1e-4:
+        return tag + "_grid" + f"{grid_high:.2f}".replace(".", "p")
+    return tag
 
 
 def delta_b_tag(value: float) -> str:
@@ -417,6 +453,27 @@ def residue_conformers(
     return {alt: {**blank, **atoms} for alt, atoms in sorted(alternates.items())}
 
 
+def copy_ccp4_header_statistics(source: Path, dest: Path) -> None:
+    """Copy min, max, mean, and rms from one CCP4 map header onto another.
+
+    ``mapmask`` recomputes these on the box it writes. Sigma contours follow
+    the asymmetric-unit values already stored on the ``fft`` map, which
+    ``extends`` also keeps.
+    """
+    src = source.read_bytes()[:1024]
+    if len(src) < 1024:
+        raise ValueError(f"{source} has no CCP4 map header")
+    with dest.open("r+b") as handle:
+        header = bytearray(handle.read(1024))
+        if len(header) < 1024:
+            raise ValueError(f"{dest} has no CCP4 map header")
+        for word in (19, 20, 21, 54):
+            start = word * 4
+            header[start : start + 4] = src[start : start + 4]
+        handle.seek(0)
+        handle.write(header)
+
+
 def ccp4_map_stats(path: Path) -> dict[str, float]:
     raw = path.read_bytes()
     nx, ny, nz, mode = struct.unpack_from("<4i", raw, 0)
@@ -538,6 +595,46 @@ class Ccp4Session:
             tail = "\n".join(lines[-40:]) if lines else "(no output)"
             raise RuntimeError(f"Command failed (exit {proc.returncode}):\n{tail}")
         return lines
+
+    def extend_around_model(
+        self,
+        map_in: Path,
+        map_out: Path,
+        xyz_in: Path,
+        border: float,
+        log_path: Path,
+    ) -> None:
+        """Pad ``map_in`` so it covers ``xyz_in`` plus ``border`` angstroms.
+
+        ``extends`` stores one map section in a fixed array of 200,000 points.
+        A fine grid can make the model box larger than that. ``mapmask`` has
+        no such limit and applies the same border; the asymmetric-unit sigma
+        is then copied back onto the padded map.
+        """
+        keywords = f"BORDER {border:.1f}\nEND"
+        try:
+            self.run_ccp4(
+                "extends",
+                [("mapin", map_in), ("mapout", map_out), ("xyzin", xyz_in)],
+                keywords,
+                log_path,
+            )
+            return
+        except RuntimeError as exc:
+            if "arrays too small" not in str(exc):
+                raise
+        self.emit(
+            "extends cannot store a section of this map. "
+            "mapmask will apply the same border and keep the asymmetric-unit sigma."
+        )
+        map_out.unlink(missing_ok=True)
+        self.run_ccp4(
+            "mapmask",
+            [("mapin", map_in), ("mapout", map_out), ("xyzin", xyz_in)],
+            f"BORDER {border:.1f}\nEXTEND XTAL\nEND",
+            log_path.with_name(log_path.stem + "_mapmask.log"),
+        )
+        copy_ccp4_header_statistics(map_in, map_out)
 
     def run_ccp4(self, program: str, kv: list[tuple[str, Path | str]], keywords: str, log_path: Path) -> str:
         parts = [program]
