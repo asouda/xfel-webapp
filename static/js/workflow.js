@@ -34,6 +34,8 @@
   const viewerLight = document.getElementById("viewer-light");
   const lightSiteButton = document.getElementById("light-site");
   const lightColorButtons = Array.from(document.querySelectorAll("[data-light-color]"));
+  const lightTransparencyInput = document.getElementById("light-transparency");
+  const lightTransparencyValue = document.getElementById("light-transparency-value");
   const caption = document.getElementById("caption");
   const fileList = document.getElementById("file-list");
   const runButton = document.getElementById("run-btn");
@@ -53,6 +55,7 @@
   let lightSiteDescription = "";
   let showLightSite = false;
   let lightColor = "yellow";
+  let lightTransparency = 40;
   let surfaceSelection = "";
   let carveRadius = 0;
   let surfaceStyle = "solid";
@@ -68,16 +71,39 @@
   let distanceComponent = null;
   let markerComponent = null;
   let distancePairs = [];
+  let lightDistancePairs = [];
   let labeledAtoms = [];
+  let lightLabeledAtoms = [];
   let labelRepresentation = null;
+  let lightLabelRepresentation = null;
   let distanceLabelRepresentation = null;
+  let lightDistanceLabelRepresentation = null;
+  let lightExtraBonds = [];
   let showDistanceLabels = false;
   let editMode = null;
-  let pendingIndex = null;
+  let pendingPick = null;
   let sceneNote = "";
 
   const LABEL_COLOR = "#ff7a18";
   const LABEL_EDGE = "#2a160c";
+
+  const mapCenter = document.getElementById("map-center");
+  const mapCenterXyz = document.getElementById("map-center-xyz");
+
+  function syncMapCenter() {
+    if (!mapCenter || !mapCenterXyz) return;
+    const cartesian = mapCenter.value === "cartesian";
+    mapCenterXyz.hidden = !cartesian;
+    mapCenterXyz.querySelectorAll("input").forEach((input) => {
+      input.required = cartesian;
+      input.disabled = !cartesian;
+    });
+  }
+
+  if (mapCenter) {
+    mapCenter.addEventListener("change", syncMapCenter);
+    syncMapCenter();
+  }
 
   function showError(message) {
     errorBox.hidden = false;
@@ -273,59 +299,54 @@
     return left < right ? [left, right] : [right, left];
   }
 
-  function describeAtom(index) {
-    const atom = structureComponent.structure.getAtomProxy();
-    atom.index = index;
-    const alt = atom.altloc && atom.altloc.trim() ? ` alt ${atom.altloc.trim()}` : "";
-    const chain = (atom.chainname || "").trim();
-    return `${atom.atomname.trim()} ${chain}/${atom.resno}${alt}`;
+  function componentFor(source) {
+    return source === "light" ? lightComponent : structureComponent;
   }
 
-  function bondSlot(left, right) {
+  function structureFor(source) {
+    const component = componentFor(source);
+    return component ? component.structure : null;
+  }
+
+  function describePick(pick) {
+    const structure = structureFor(pick.source);
+    const atom = structure.getAtomProxy();
+    atom.index = pick.index;
+    const alt = atom.altloc && atom.altloc.trim() ? ` alt ${atom.altloc.trim()}` : "";
+    const chain = (atom.chainname || "").trim();
+    const where = pick.source === "light" ? " light" : "";
+    return `${atom.atomname.trim()} ${chain}/${atom.resno}${alt}${where}`;
+  }
+
+  function samePick(left, right) {
+    return !!left && !!right && left.source === right.source && left.index === right.index;
+  }
+
+  function bondSlotIn(structure, left, right) {
     const [first, second] = pairKey(left, right);
-    const store = structureComponent.structure.bondStore;
+    const store = structure.bondStore;
     for (let index = 0; index < store.count; index += 1) {
       if (store.atomIndex1[index] === first && store.atomIndex2[index] === second) return index;
     }
     return -1;
   }
 
-  function distanceSlot(left, right) {
-    const [first, second] = pairKey(left, right);
-    return distancePairs.findIndex((pair) => pair[0] === first && pair[1] === second);
+  function bondSlot(left, right) {
+    return bondSlotIn(structureComponent.structure, left, right);
   }
 
-  function refreshSticks() {
-    const structure = structureComponent.structure;
-    structure.finalizeBonds();
-    // The stick view keeps the bond list it had when it was built. A new bond
-    // is stored on the structure, but it stays invisible until that list is rebuilt.
-    const views = [];
-    if (structureComponent.structureView) views.push(structureComponent.structureView);
-    (structureComponent.reprList || []).forEach((entry) => {
-      const repr = entry.repr || entry;
-      if (repr.structureView) views.push(repr.structureView);
-    });
-    views.forEach((view) => view.refresh());
-    structureComponent.rebuildRepresentations();
-  }
-
-  function addBondBetween(left, right) {
-    if (bondSlot(left, right) >= 0) return false;
-    const structure = structureComponent.structure;
+  function addBondIn(structure, left, right) {
     const first = structure.getAtomProxy();
     const second = structure.getAtomProxy();
     first.index = left;
     second.index = right;
     structure.bondStore.addBond(first, second, 1);
-    refreshSticks();
-    return true;
   }
 
-  function removeBondBetween(left, right) {
-    const slot = bondSlot(left, right);
+  function removeBondIn(structure, left, right) {
+    const slot = bondSlotIn(structure, left, right);
     if (slot < 0) return false;
-    const store = structureComponent.structure.bondStore;
+    const store = structure.bondStore;
     const last = store.count - 1;
     if (slot !== last) {
       store.atomIndex1[slot] = store.atomIndex1[last];
@@ -333,8 +354,232 @@
       store.bondOrder[slot] = store.bondOrder[last];
     }
     store.count = last;
+    return true;
+  }
+
+  function distanceSlot(left, right) {
+    const [first, second] = pairKey(left, right);
+    return distancePairs.findIndex((pair) => pair[0] === first && pair[1] === second);
+  }
+
+  function refreshComponentSticks(component) {
+    if (!component) return;
+    const structure = component.structure;
+    structure.finalizeBonds();
+    // The stick view keeps the bond list it had when it was built. A new bond
+    // is stored on the structure, but it stays invisible until that list is rebuilt.
+    const views = [];
+    if (component.structureView) views.push(component.structureView);
+    (component.reprList || []).forEach((entry) => {
+      const repr = entry.repr || entry;
+      if (repr.structureView) views.push(repr.structureView);
+    });
+    views.forEach((view) => view.refresh());
+    component.rebuildRepresentations();
+  }
+
+  function refreshSticks() {
+    refreshComponentSticks(structureComponent);
+    syncLightBonds();
+  }
+
+  function atomIdentity(atom) {
+    return {
+      chain: (atom.chainname || "").trim(),
+      resi: atom.resno,
+      name: atom.atomname.trim(),
+      alt: (atom.altloc || "").trim(),
+    };
+  }
+
+  function selectedAtomSet(structure, selection) {
+    return new Set(structure.getAtomIndices(new NGL.Selection(selection)) || []);
+  }
+
+  function atomsMatching(structure, selected, spec) {
+    const atom = structure.getAtomProxy();
+    const found = [];
+    selected.forEach((index) => {
+      atom.index = index;
+      const identity = atomIdentity(atom);
+      if (identity.chain !== spec.chain || identity.resi !== spec.resi || identity.name !== spec.name) return;
+      if (spec.alt && identity.alt !== spec.alt) return;
+      found.push(identity.alt ? { index, alt: identity.alt } : { index, alt: "" });
+    });
+    return found;
+  }
+
+  // Same-altloc copies stay paired. An atom with no altloc bonds to each
+  // conformer of the other atom, which is how a single metal meets split ligands.
+  function pairConformers(left, right, order, into) {
+    left.forEach((first) => {
+      right.forEach((second) => {
+        if (first.alt && second.alt && first.alt !== second.alt) return;
+        if (first.index === second.index) return;
+        const low = Math.min(first.index, second.index);
+        const high = Math.max(first.index, second.index);
+        const key = `${low}:${high}`;
+        if (into.seen.has(key)) return;
+        into.seen.add(key);
+        into.pairs.push([low, high, order]);
+      });
+    });
+  }
+
+  function selectionBondSpecs(structure, selected) {
+    const store = structure.bondStore;
+    const atom = structure.getAtomProxy();
+    const specs = [];
+    for (let index = 0; index < store.count; index += 1) {
+      const left = store.atomIndex1[index];
+      const right = store.atomIndex2[index];
+      if (!selected.has(left) || !selected.has(right)) continue;
+      atom.index = left;
+      const a = atomIdentity(atom);
+      atom.index = right;
+      const b = atomIdentity(atom);
+      specs.push({ a, b, order: store.bondOrder[index] || 1 });
+    }
+    return specs;
+  }
+
+  function replaceSelectionBonds(structure, selected, pairs) {
+    const store = structure.bondStore;
+    const kept = [];
+    for (let index = 0; index < store.count; index += 1) {
+      const left = store.atomIndex1[index];
+      const right = store.atomIndex2[index];
+      if (selected.has(left) && selected.has(right)) continue;
+      kept.push([left, right, store.bondOrder[index] || 1]);
+    }
+    store.count = 0;
+    const leftAtom = structure.getAtomProxy();
+    const rightAtom = structure.getAtomProxy();
+    kept.concat(pairs).forEach(([left, right, order]) => {
+      leftAtom.index = left;
+      rightAtom.index = right;
+      store.addBond(leftAtom, rightAtom, order);
+    });
+    structure.finalizeBonds();
+  }
+
+  function copySelectionBonds(source, target, selection) {
+    if (!selection) return;
+    const sourceSelected = selectedAtomSet(source, selection);
+    const targetSelected = selectedAtomSet(target, selection);
+    const specs = selectionBondSpecs(source, sourceSelected);
+    const into = { seen: new Set(), pairs: [] };
+    specs.forEach((spec) => {
+      const left = atomsMatching(target, targetSelected, spec.a);
+      const right = atomsMatching(target, targetSelected, spec.b);
+      pairConformers(left, right, spec.order, into);
+    });
+    replaceSelectionBonds(target, targetSelected, into.pairs);
+  }
+
+  function identityKey(identity) {
+    return `${identity.chain}|${identity.resi}|${identity.name}|${identity.alt}`;
+  }
+
+  function pairIdentityKey(left, right) {
+    const a = identityKey(left);
+    const b = identityKey(right);
+    return a < b ? `${a}~${b}` : `${b}~${a}`;
+  }
+
+  function identityAt(source, index) {
+    const atom = structureFor(source).getAtomProxy();
+    atom.index = index;
+    return atomIdentity(atom);
+  }
+
+  function findAtom(source, identity) {
+    const structure = structureFor(source);
+    if (!structure || !surfaceSelection) return null;
+    const selected = selectedAtomSet(structure, surfaceSelection);
+    const atom = structure.getAtomProxy();
+    let found = null;
+    selected.forEach((index) => {
+      if (found != null) return;
+      atom.index = index;
+      const id = atomIdentity(atom);
+      if (id.chain === identity.chain && id.resi === identity.resi && id.name === identity.name && id.alt === identity.alt) {
+        found = index;
+      }
+    });
+    return found;
+  }
+
+  function omitIndexFor(pick) {
+    if (pick.source === "model") return pick.index;
+    return findAtom("model", identityAt("light", pick.index));
+  }
+
+  function applyLightExtraBonds() {
+    if (!lightComponent) return;
+    const structure = lightComponent.structure;
+    lightExtraBonds.forEach((bond) => {
+      const left = findAtom("light", bond.a);
+      const right = findAtom("light", bond.b);
+      if (left == null || right == null || left === right) return;
+      if (bondSlotIn(structure, left, right) >= 0) return;
+      addBondIn(structure, left, right);
+    });
+  }
+
+  function syncLightBonds() {
+    if (!lightComponent || !structureComponent || !surfaceSelection) return;
+    copySelectionBonds(structureComponent.structure, lightComponent.structure, surfaceSelection);
+    applyLightExtraBonds();
+    refreshComponentSticks(lightComponent);
+  }
+
+  function dropLightExtra(left, right) {
+    const key = pairIdentityKey(identityAt("light", left), identityAt("light", right));
+    const before = lightExtraBonds.length;
+    lightExtraBonds = lightExtraBonds.filter((bond) => pairIdentityKey(bond.a, bond.b) !== key);
+    return lightExtraBonds.length !== before;
+  }
+
+  function addBondBetween(left, right) {
+    if (bondSlot(left, right) >= 0) return false;
+    addBondIn(structureComponent.structure, left, right);
     refreshSticks();
     return true;
+  }
+
+  function removeBondBetween(left, right) {
+    if (!removeBondIn(structureComponent.structure, left, right)) return false;
+    refreshSticks();
+    return true;
+  }
+
+  function addBondFromPicks(left, right) {
+    const omitLeft = omitIndexFor(left);
+    const omitRight = omitIndexFor(right);
+    if (omitLeft != null && omitRight != null) return addBondBetween(omitLeft, omitRight);
+    if (left.source !== "light" || right.source !== "light") return null;
+    if (bondSlotIn(lightComponent.structure, left.index, right.index) >= 0) return false;
+    lightExtraBonds.push({ a: identityAt("light", left.index), b: identityAt("light", right.index) });
+    syncLightBonds();
+    return true;
+  }
+
+  function removeBondFromPicks(left, right) {
+    let removed = false;
+    if (left.source === "light" && right.source === "light" && dropLightExtra(left.index, right.index)) {
+      removed = true;
+    }
+    const omitLeft = omitIndexFor(left);
+    const omitRight = omitIndexFor(right);
+    if (omitLeft != null && omitRight != null && bondSlot(omitLeft, omitRight) >= 0) {
+      return removeBondBetween(omitLeft, omitRight) || removed;
+    }
+    if (left.source === "light" && right.source === "light") {
+      if (removeBondIn(lightComponent.structure, left.index, right.index)) removed = true;
+      if (removed) syncLightBonds();
+    }
+    return removed;
   }
 
   function addDashed(shape, start, end, name) {
@@ -380,23 +625,29 @@
     if (viewer.updateZoom) viewer.updateZoom();
   }
 
+  function appendDistances(shape, structure, pairs, source) {
+    if (!structure || !pairs.length) return;
+    const atom = structure.getAtomProxy();
+    pairs.forEach(([left, right]) => {
+      atom.index = left;
+      const start = [atom.x, atom.y, atom.z];
+      atom.index = right;
+      const end = [atom.x, atom.y, atom.z];
+      addDashed(shape, start, end, `dist:${source}:${left}:${right}`);
+    });
+  }
+
   function redrawDistances() {
     const saved = captureView();
     if (distanceComponent) {
       stage.removeComponent(distanceComponent);
       distanceComponent = null;
     }
-    if (distancePairs.length && structureComponent) {
-      const structure = structureComponent.structure;
-      const atom = structure.getAtomProxy();
+    const any = (distancePairs.length && structureComponent) || (lightDistancePairs.length && lightComponent);
+    if (any) {
       const shape = new NGL.Shape("script-distances");
-      distancePairs.forEach(([left, right]) => {
-        atom.index = left;
-        const start = [atom.x, atom.y, atom.z];
-        atom.index = right;
-        const end = [atom.x, atom.y, atom.z];
-        addDashed(shape, start, end, `dist:${left}:${right}`);
-      });
+      appendDistances(shape, structureFor("model"), distancePairs, "model");
+      appendDistances(shape, structureFor("light"), lightDistancePairs, "light");
       distanceComponent = stage.addComponentFromObject(shape);
       distanceComponent.addRepresentation("buffer", { disablePicking: true });
     }
@@ -404,82 +655,103 @@
     syncDistanceLabels();
   }
 
+  function mountDistanceLabels(component, pairs) {
+    if (!component || !showDistanceLabels || !pairs.length) return null;
+    const representation = component.addRepresentation("distance", {
+      atomPair: pairs.map((pair) => pair.slice()),
+      labelUnit: "",
+      labelColor: LABEL_COLOR,
+      labelBorder: true,
+      labelBorderColor: LABEL_EDGE,
+      labelBorderWidth: 0.18,
+      labelSize: 1.35,
+      labelFontWeight: "normal",
+      color: "yellow",
+      lineVisible: false,
+      disablePicking: true,
+    });
+    const distanceLabels = representation.repr || representation;
+    distanceLabels.lineVisible = false;
+    if (distanceLabels.distanceBuffer) distanceLabels.distanceBuffer.setVisibility(false);
+    return representation;
+  }
+
   function syncDistanceLabels() {
     const saved = captureView();
     if (distanceLabelRepresentation && structureComponent) {
       structureComponent.removeRepresentation(distanceLabelRepresentation);
-      distanceLabelRepresentation = null;
     }
-    if (showDistanceLabels && distancePairs.length && structureComponent) {
-      distanceLabelRepresentation = structureComponent.addRepresentation("distance", {
-        atomPair: distancePairs.map((pair) => pair.slice()),
-        labelUnit: "",
-        labelColor: LABEL_COLOR,
-        labelBorder: true,
-        labelBorderColor: LABEL_EDGE,
-        labelBorderWidth: 0.18,
-        labelSize: 1.35,
-        labelFontWeight: "normal",
-        color: "yellow",
-        lineVisible: false,
-        disablePicking: true,
-      });
-      const distanceLabels = distanceLabelRepresentation.repr || distanceLabelRepresentation;
-      distanceLabels.lineVisible = false;
-      if (distanceLabels.distanceBuffer) distanceLabels.distanceBuffer.setVisibility(false);
+    distanceLabelRepresentation = null;
+    if (lightDistanceLabelRepresentation && lightComponent) {
+      lightComponent.removeRepresentation(lightDistanceLabelRepresentation);
     }
+    lightDistanceLabelRepresentation = null;
+    distanceLabelRepresentation = mountDistanceLabels(structureComponent, distancePairs);
+    lightDistanceLabelRepresentation = mountDistanceLabels(lightComponent, lightDistancePairs);
     restoreView(saved);
   }
 
-  function atomName(index) {
-    const atom = structureComponent.structure.getAtomProxy();
+  function atomName(source, index) {
+    const atom = structureFor(source).getAtomProxy();
     atom.index = index;
     return atom.atomname.trim();
   }
 
-  function redrawAtomLabels() {
+  function labelParameters(indices, names) {
+    return {
+      sele: `@${indices.join(",")}`,
+      labelType: "text",
+      labelText: names,
+      labelGrouping: "atom",
+      color: LABEL_COLOR,
+      showBorder: true,
+      borderColor: LABEL_EDGE,
+      borderWidth: 0.18,
+      fontWeight: "normal",
+      radiusType: "size",
+      radiusSize: 1.125,
+      xOffset: 0.15,
+      yOffset: 0.3,
+      zOffset: 0.7,
+      attachment: "bottom-left",
+    };
+  }
+
+  function redrawLabels(source) {
     const saved = captureView();
-    if (labelRepresentation && structureComponent) {
-      structureComponent.removeRepresentation(labelRepresentation);
-      labelRepresentation = null;
-    }
-    if (labeledAtoms.length && structureComponent) {
+    const component = componentFor(source);
+    const indices = source === "light" ? lightLabeledAtoms : labeledAtoms;
+    const current = source === "light" ? lightLabelRepresentation : labelRepresentation;
+    if (current && component) component.removeRepresentation(current);
+    let next = null;
+    if (indices.length && component) {
       const names = {};
-      labeledAtoms.forEach((index) => {
-        names[index] = atomName(index);
+      indices.forEach((index) => {
+        names[index] = atomName(source, index);
       });
-      labelRepresentation = structureComponent.addRepresentation("label", {
-        sele: `@${labeledAtoms.join(",")}`,
-        labelType: "text",
-        labelText: names,
-        labelGrouping: "atom",
-        color: LABEL_COLOR,
-        showBorder: true,
-        borderColor: LABEL_EDGE,
-        borderWidth: 0.18,
-        fontWeight: "normal",
-        radiusType: "size",
-        radiusSize: 1.125,
-        xOffset: 0.15,
-        yOffset: 0.3,
-        zOffset: 0.7,
-        attachment: "bottom-left",
-      });
+      next = component.addRepresentation("label", labelParameters(indices, names));
     }
+    if (source === "light") lightLabelRepresentation = next;
+    else labelRepresentation = next;
     restoreView(saved);
   }
 
-  function toggleAtomLabel(index) {
-    const slot = labeledAtoms.indexOf(index);
-    const name = atomName(index);
+  function redrawAtomLabels() {
+    redrawLabels("model");
+  }
+
+  function toggleAtomLabel(pick) {
+    const list = pick.source === "light" ? lightLabeledAtoms : labeledAtoms;
+    const slot = list.indexOf(pick.index);
+    const name = describePick(pick);
     if (slot >= 0) {
-      labeledAtoms.splice(slot, 1);
-      redrawAtomLabels();
+      list.splice(slot, 1);
+      redrawLabels(pick.source);
       viewerStatus.textContent = `Removed the ${name} label. ${nextPrompt()}`;
       return;
     }
-    labeledAtoms.push(index);
-    redrawAtomLabels();
+    list.push(pick.index);
+    redrawLabels(pick.source);
     viewerStatus.textContent = `Labeled ${name}. ${nextPrompt()}`;
   }
 
@@ -503,15 +775,43 @@
     markerComponent = null;
   }
 
-  function showMarker(index) {
+  function lightDistanceSlot(left, right) {
+    const [first, second] = pairKey(left, right);
+    return lightDistancePairs.findIndex((pair) => pair[0] === first && pair[1] === second);
+  }
+
+  function addDistanceFromPicks(left, right) {
+    if (left.source !== right.source) return null;
+    if (left.source === "light") {
+      if (lightDistanceSlot(left.index, right.index) >= 0) return false;
+      lightDistancePairs.push(pairKey(left.index, right.index));
+      redrawDistances();
+      return true;
+    }
+    return addDistanceBetween(left.index, right.index);
+  }
+
+  function removeDistanceFromPicks(left, right) {
+    if (left.source !== right.source) return false;
+    if (left.source === "light") {
+      const slot = lightDistanceSlot(left.index, right.index);
+      if (slot < 0) return false;
+      lightDistancePairs.splice(slot, 1);
+      redrawDistances();
+      return true;
+    }
+    return removeDistanceBetween(left.index, right.index);
+  }
+
+  function showMarker(pick) {
     clearMarker();
-    const atom = structureComponent.structure.getAtomProxy();
-    atom.index = index;
+    const atom = structureFor(pick.source).getAtomProxy();
+    atom.index = pick.index;
     const shape = new NGL.Shape("pending-atom");
     const point = [atom.x, atom.y, atom.z];
     const arm = 1.15;
     const color = [0.2, 0.85, 1];
-    const name = `pick:${index}`;
+    const name = `pick:${pick.source}:${pick.index}`;
     shape.addCylinder([point[0] - arm, point[1], point[2]], [point[0] + arm, point[1], point[2]], color, 0.05, name);
     shape.addCylinder([point[0], point[1] - arm, point[2]], [point[0], point[1] + arm, point[2]], color, 0.05, name);
     shape.addCylinder([point[0], point[1], point[2] - arm], [point[0], point[1], point[2] + arm], color, 0.05, name);
@@ -542,7 +842,7 @@
 
   function setEditMode(mode) {
     editMode = editMode === mode ? null : mode;
-    pendingIndex = null;
+    pendingPick = null;
     clearMarker();
     if (editBond) editBond.setAttribute("aria-pressed", editMode === "bond" ? "true" : "false");
     if (editDistance) editDistance.setAttribute("aria-pressed", editMode === "distance" ? "true" : "false");
@@ -560,11 +860,16 @@
 
   function resetEditControls() {
     editMode = null;
-    pendingIndex = null;
+    pendingPick = null;
     distancePairs = [];
+    lightDistancePairs = [];
     labeledAtoms = [];
+    lightLabeledAtoms = [];
+    lightExtraBonds = [];
     labelRepresentation = null;
+    lightLabelRepresentation = null;
     distanceLabelRepresentation = null;
+    lightDistanceLabelRepresentation = null;
     showDistanceLabels = false;
     distanceComponent = null;
     markerComponent = null;
@@ -586,57 +891,85 @@
     return again || null;
   }
 
-  function atomIndexFromProxy(proxy) {
+  function pickFromProxy(proxy) {
     if (!proxy) return null;
-    if (proxy.atom) return proxy.atom.index;
     const named = proxy.cylinder || proxy.sphere;
     if (named && typeof named.name === "string" && named.name.startsWith("pick:")) {
-      return Number(named.name.slice(5));
+      const parts = named.name.split(":");
+      if (parts.length === 3 && (parts[1] === "model" || parts[1] === "light")) {
+        const index = Number(parts[2]);
+        if (!Number.isNaN(index)) return { source: parts[1], index };
+      }
     }
-    if ((editMode === "bond" || editMode === "distance" || editMode === "label") && proxy.bond) {
-      if (proxy.closestBondAtom) return proxy.closestBondAtom.index;
-      return proxy.bond.atomIndex1;
+    if (proxy.atom && proxy.component) {
+      return { source: proxy.component === lightComponent ? "light" : "model", index: proxy.atom.index };
+    }
+    if ((editMode === "bond" || editMode === "distance" || editMode === "label") && proxy.bond && proxy.component) {
+      const index = proxy.closestBondAtom ? proxy.closestBondAtom.index : proxy.bond.atomIndex1;
+      return { source: proxy.component === lightComponent ? "light" : "model", index };
     }
     return null;
   }
 
-  function labeledAtomNear(proxy) {
-    if (!proxy || !proxy.canvasPosition || !labeledAtoms.length) return null;
+  function nearestLabeled(proxy, component, indices) {
+    if (!component || !indices.length || !proxy.canvasPosition) return null;
     const controls = stage.viewerControls;
-    const atom = structureComponent.structure.getAtomProxy();
+    const atom = component.structure.getAtomProxy();
     let best = null;
     let bestDistance = 36;
-    labeledAtoms.forEach((index) => {
+    indices.forEach((index) => {
       atom.index = index;
       const point = atom.positionToVector3();
-      point.applyMatrix4(structureComponent.matrix);
+      point.applyMatrix4(component.matrix);
       const place = controls.getPositionOnCanvas(point);
       const distance = Math.hypot(place.x - proxy.canvasPosition.x, place.y - proxy.canvasPosition.y);
       if (distance < bestDistance) {
         bestDistance = distance;
-        best = index;
+        best = { index, distance };
       }
     });
     return best;
   }
 
+  function labeledAtomNear(proxy) {
+    if (!proxy || !proxy.canvasPosition) return null;
+    const model = nearestLabeled(proxy, structureComponent, labeledAtoms);
+    const light = showLightSite ? nearestLabeled(proxy, lightComponent, lightLabeledAtoms) : null;
+    if (model && light) {
+      return model.distance <= light.distance
+        ? { source: "model", index: model.index }
+        : { source: "light", index: light.index };
+    }
+    if (model) return { source: "model", index: model.index };
+    if (light) return { source: "light", index: light.index };
+    return null;
+  }
+
+  function differentModelsMessage() {
+    return "Choose both atoms from the light site, or both from the omit model.";
+  }
+
   function finishPair(left, right) {
-    pendingIndex = null;
+    pendingPick = null;
     clearMarker();
-    const first = describeAtom(left);
-    const second = describeAtom(right);
+    const first = describePick(left);
+    const second = describePick(right);
     if (editMode === "bond") {
-      if (addBondBetween(left, right)) viewerStatus.textContent = `Added a bond between ${first} and ${second}. ${nextPrompt()}`;
+      const added = addBondFromPicks(left, right);
+      if (added === null) viewerStatus.textContent = `${differentModelsMessage()} ${nextPrompt()}`;
+      else if (added) viewerStatus.textContent = `Added a bond between ${first} and ${second}. ${nextPrompt()}`;
       else viewerStatus.textContent = `${first} and ${second} already have a bond. ${nextPrompt()}`;
       return;
     }
     if (editMode === "distance") {
-      if (addDistanceBetween(left, right)) viewerStatus.textContent = `Added a distance between ${first} and ${second}. ${nextPrompt()}`;
+      const added = addDistanceFromPicks(left, right);
+      if (added === null) viewerStatus.textContent = `${differentModelsMessage()} ${nextPrompt()}`;
+      else if (added) viewerStatus.textContent = `Added a distance between ${first} and ${second}. ${nextPrompt()}`;
       else viewerStatus.textContent = `Those atoms already have a distance. ${nextPrompt()}`;
       return;
     }
-    const removedBond = removeBondBetween(left, right);
-    const removedDistance = removeDistanceBetween(left, right);
+    const removedBond = removeBondFromPicks(left, right);
+    const removedDistance = removeDistanceFromPicks(left, right);
     if (removedBond && removedDistance) viewerStatus.textContent = `Removed the bond and the distance between ${first} and ${second}. ${nextPrompt()}`;
     else if (removedBond) viewerStatus.textContent = `Removed the bond between ${first} and ${second}. ${nextPrompt()}`;
     else if (removedDistance) viewerStatus.textContent = `Removed the distance between ${first} and ${second}. ${nextPrompt()}`;
@@ -646,49 +979,50 @@
   function onStageClick(proxy) {
     if (!editMode || !structureComponent || !proxy) return;
     if (editMode === "delete" && proxy.cylinder && typeof proxy.cylinder.name === "string") {
-      const match = /^dist:(\d+):(\d+)$/.exec(proxy.cylinder.name);
+      const match = /^dist:(model|light):(\d+):(\d+)$/.exec(proxy.cylinder.name);
       if (match) {
-        const left = Number(match[1]);
-        const right = Number(match[2]);
-        pendingIndex = null;
+        const left = { source: match[1], index: Number(match[2]) };
+        const right = { source: match[1], index: Number(match[3]) };
+        pendingPick = null;
         clearMarker();
-        removeDistanceBetween(left, right);
-        viewerStatus.textContent = `Removed the distance between ${describeAtom(left)} and ${describeAtom(right)}. ${nextPrompt()}`;
+        removeDistanceFromPicks(left, right);
+        viewerStatus.textContent = `Removed the distance between ${describePick(left)} and ${describePick(right)}. ${nextPrompt()}`;
         return;
       }
     }
-    if (editMode === "delete" && proxy.bond) {
-      const left = proxy.bond.atomIndex1;
-      const right = proxy.bond.atomIndex2;
-      pendingIndex = null;
+    if (editMode === "delete" && proxy.bond && proxy.component) {
+      const source = proxy.component === lightComponent ? "light" : "model";
+      const left = { source, index: proxy.bond.atomIndex1 };
+      const right = { source, index: proxy.bond.atomIndex2 };
+      pendingPick = null;
       clearMarker();
-      removeBondBetween(left, right);
-      viewerStatus.textContent = `Removed the bond between ${describeAtom(left)} and ${describeAtom(right)}. ${nextPrompt()}`;
+      removeBondFromPicks(left, right);
+      viewerStatus.textContent = `Removed the bond between ${describePick(left)} and ${describePick(right)}. ${nextPrompt()}`;
       return;
     }
     let picked = proxy;
     if ((editMode === "bond" || editMode === "distance" || editMode === "label") && proxy.cylinder && /^dist:/.test(proxy.cylinder.name || "")) {
       picked = repickWithoutDistances(proxy) || proxy;
     }
-    const index = atomIndexFromProxy(picked);
+    const pick = pickFromProxy(picked);
     if (editMode === "label") {
-      const labeled = index == null || Number.isNaN(index) ? labeledAtomNear(proxy) : index;
-      if (labeled == null || Number.isNaN(labeled)) return;
+      const labeled = pick || labeledAtomNear(proxy);
+      if (!labeled || Number.isNaN(labeled.index)) return;
       toggleAtomLabel(labeled);
       return;
     }
-    if (index == null || Number.isNaN(index)) return;
-    if (pendingIndex == null) {
-      pendingIndex = index;
-      showMarker(index);
-      viewerStatus.textContent = `${describeAtom(index)} selected. Click the second atom.`;
+    if (!pick || Number.isNaN(pick.index)) return;
+    if (pendingPick == null) {
+      pendingPick = pick;
+      showMarker(pick);
+      viewerStatus.textContent = `${describePick(pick)} selected. Click the second atom.`;
       return;
     }
-    if (pendingIndex === index) {
-      viewerStatus.textContent = `${describeAtom(index)} is already selected. Click a different atom.`;
+    if (samePick(pendingPick, pick)) {
+      viewerStatus.textContent = `${describePick(pick)} is already selected. Click a different atom.`;
       return;
     }
-    finishPair(pendingIndex, index);
+    finishPair(pendingPick, pick);
   }
 
   function selectionFor(scene) {
@@ -698,9 +1032,14 @@
   }
 
   function lightStatusText() {
+    const color = lightColor === "element" ? "by element name" : lightColor;
     if (!lightAtomCount) return `The light coordinates have no atoms in ${lightSiteDescription}.`;
-    if (showLightSite) return `Light site is ball and stick, colored ${lightColor}.`;
-    return `Light site is hidden. Its color is ${lightColor}.`;
+    if (showLightSite) return `Light site is ball and stick, colored ${color}.`;
+    return `Light site is hidden. Its color is ${color}.`;
+  }
+
+  function lightOpacityValue() {
+    return 1 - lightTransparency / 100;
   }
 
   function syncLightControls(available) {
@@ -714,15 +1053,22 @@
       button.disabled = !available;
       button.setAttribute("aria-pressed", button.dataset.lightColor === lightColor ? "true" : "false");
     });
+    if (lightTransparencyInput) {
+      lightTransparencyInput.disabled = !available;
+      lightTransparencyInput.value = String(lightTransparency);
+    }
+    if (lightTransparencyValue) lightTransparencyValue.textContent = `${lightTransparency}%`;
   }
 
   function applyLightAppearance() {
     if (!lightRepresentation) return;
     const show = showLightSite && lightAtomCount > 0;
+    const opacity = lightOpacityValue();
     // Hide the whole component while it is off. A deposited model is much
     // larger than the site, and a visible component would pull the camera out.
     if (lightComponent) lightComponent.setVisibility(show);
     lightRepresentation.setColor(lightColor);
+    lightRepresentation.setParameters({ opacity, depthWrite: opacity >= 0.999 });
     lightRepresentation.setVisibility(show);
     if (stage) stage.viewer.requestRender();
   }
@@ -1120,6 +1466,7 @@
     lightSiteDescription = "";
     showLightSite = false;
     lightColor = "yellow";
+    lightTransparency = 40;
     viewer.replaceChildren();
     if (viewerSave) viewerSave.disabled = true;
     syncSurfaceControls(false);
@@ -1183,14 +1530,16 @@
           const neighbours = (scene.extra_residues || []).map((residue) => `${residue.chain}/${residue.resi}`);
           lightSiteDescription = `chain ${scene.site.chain} residue ${scene.site.resi}`;
           if (neighbours.length) lightSiteDescription += ` and ${neighbours.join(", ")}`;
+          copySelectionBonds(structure.structure, lightComponent.structure, structureSelection);
           lightComponent.setVisibility(false);
           lightRepresentation = lightComponent.addRepresentation("ball+stick", {
             sele: structureSelection,
             color: lightColor,
+            opacity: lightOpacityValue(),
+            depthWrite: lightOpacityValue() >= 0.999,
             multipleBond: "off",
             aspectRatio: 2,
             scale: 2,
-            disablePicking: true,
             visible: false,
           });
           syncLightControls(true);
@@ -1370,6 +1719,14 @@
       viewerStatus.textContent = lightStatusText();
     });
   });
+  if (lightTransparencyInput) {
+    lightTransparencyInput.addEventListener("input", () => {
+      if (!lightRepresentation) return;
+      lightTransparency = Number(lightTransparencyInput.value);
+      if (lightTransparencyValue) lightTransparencyValue.textContent = `${lightTransparency}%`;
+      applyLightAppearance();
+    });
+  }
 
   window.addEventListener("resize", () => {
     if (stage) stage.handleResize();

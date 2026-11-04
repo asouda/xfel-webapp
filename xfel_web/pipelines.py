@@ -16,10 +16,8 @@ from xfel_web.ccp4 import (
     choose_resolution,
     delta_b_tag,
     fft_grid_resolution,
-    grid_res_tag,
     parse_scaleit_rfactor,
     require_files,
-    res_tag,
     residue_atom_names,
     residue_centroid,
 )
@@ -29,6 +27,15 @@ from xfel_web.restraints import (
     external_angle_keywords,
     external_distance_keywords,
 )
+
+
+def _cartesian_center(cfg: dict) -> tuple[float, float, float] | None:
+    if cfg.get("map_center") != "cartesian":
+        return None
+    point = cfg.get("map_center_xyz")
+    if not point:
+        return None
+    return (float(point[0]), float(point[1]), float(point[2]))
 
 
 def _check_site(pdb_path: Path, chain: str, resi: int, label: str):
@@ -161,9 +168,8 @@ def run_fofo(cfg: dict, emit) -> dict:
         session, cfg["resolution_source"], cfg["lowres"], cfg["dmin"],
         [(dark_id, dark_sf_mtz), (light_id, light_sf_mtz)],
     )
-    tag = res_tag(low, high)
-    diff_map = out / f"{light_id}_minus_{dark_id}_{tag}.ccp4"
-    extended_map = out / f"{light_id}_minus_{dark_id}_{tag}_extended.ccp4"
+    diff_map = out / f"{light_id}_minus_{dark_id}.ccp4"
+    extended_map = out / f"{light_id}_minus_{dark_id}_extended.ccp4"
 
     if extended_map.is_file() and not cfg["recompute_map"]:
         session.emit(f"Reusing existing map: {extended_map}")
@@ -339,10 +345,30 @@ def run_refinement(cfg: dict, emit) -> dict:
     session.run_bash(f'echo "CCP4=$CCP4"; which {tools}')
 
     session.announce("2. Inspect the omit-model coordinates and the chosen site")
-    atoms, centroid, site_line = _check_site(files["dark_pdb"], cfg["site_chain"], cfg["site_resi"], cfg["site_label"])
-    session.emit(site_line)
-    session.emit("Atom names at the site: " + ", ".join(sorted(atoms)))
-    session.emit(f"Centroid: {centroid[0]:.2f} {centroid[1]:.2f} {centroid[2]:.2f} Å")
+    explicit_center = _cartesian_center(cfg)
+    atoms = residue_atom_names(files["dark_pdb"], cfg["site_chain"], cfg["site_resi"])
+    session.emit(
+        f"Configured site: chain {cfg['site_chain']}  residue {cfg['site_resi']}  label {cfg['site_label']}"
+    )
+    if atoms:
+        session.emit("Atom names at the site: " + ", ".join(sorted(atoms)))
+    elif explicit_center is None:
+        raise ValueError(
+            f"Residue {cfg['site_chain']}/{cfg['site_resi']} was not found in {files['dark_pdb'].name}. "
+            "Use “List hetero residues” and set the chain and residue, or set the map center to a Cartesian point."
+        )
+    else:
+        session.emit(
+            f"Residue {cfg['site_chain']}/{cfg['site_resi']} has no atoms in {files['dark_pdb'].name}."
+        )
+    if explicit_center is None:
+        centroid = residue_centroid(files["dark_pdb"], cfg["site_chain"], cfg["site_resi"])
+        session.emit(f"Map center is the site centroid: {centroid[0]:.2f} {centroid[1]:.2f} {centroid[2]:.2f} Å")
+    else:
+        session.emit(
+            "Map center is the Cartesian point: "
+            f"{explicit_center[0]:.2f} {explicit_center[1]:.2f} {explicit_center[2]:.2f} Å"
+        )
     session.emit(f"REFMAC cycles: {cfg['refmac_ncyc']}")
 
     session.announce("3. Build the mFo−DFc map")
@@ -356,15 +382,16 @@ def run_refinement(cfg: dict, emit) -> dict:
         session, cfg["resolution_source"], cfg["lowres"], cfg["dmin"], [(light_id, light_sf_mtz)]
     )
     grid_high = fft_grid_resolution(low, high, cfg.get("fft_dmin"))
-    tag = grid_res_tag(low, high, grid_high)
+    grid_suffix = ""
     if grid_high < high - 1e-4:
+        grid_suffix = "_grid" + f"{grid_high:.2f}".replace(".", "p")
         session.emit(
             f"FFT sampling grid is the {grid_high:.3f} Å grid. "
             f"The coefficients stop at {high:.3f} Å, so reciprocal-space points "
             f"from {high:.3f} to {grid_high:.3f} Å contribute zero amplitude."
         )
-    diff_map = out / f"{light_id}_DELFWT_{dark_id}_{tag}.ccp4"
-    extended_map = out / f"{light_id}_DELFWT_{dark_id}_{tag}_extended.ccp4"
+    diff_map = out / f"{light_id}_DELFWT_{dark_id}{grid_suffix}.ccp4"
+    extended_map = out / f"{light_id}_DELFWT_{dark_id}{grid_suffix}_extended.ccp4"
     refined_pdb = out / f"{dark_id}_refined.pdb"
 
     if extended_map.is_file() and not cfg["recompute_map"]:
@@ -408,10 +435,27 @@ def run_refinement(cfg: dict, emit) -> dict:
             ("xyzin", files["dark_pdb"]),
             ("xyzout", refined_pdb),
         ]
-        angle_text = external_angle_keywords(
-            files["dark_pdb"], cfg["site_copies"], cfg["angle_restraints"], cfg["angle_sigma"]
+        site_missing = explicit_center is not None and not atoms
+
+        def _restraints(label: str, build) -> str:
+            try:
+                return build()
+            except ValueError as exc:
+                if not site_missing:
+                    raise
+                session.emit(f"{label} were not applied. {exc}")
+                return ""
+
+        angle_text = _restraints(
+            "Angle restraints",
+            lambda: external_angle_keywords(
+                files["dark_pdb"], cfg["site_copies"], cfg["angle_restraints"], cfg["angle_sigma"]
+            ),
         )
-        if cfg["use_libcheck"]:
+        if cfg["use_libcheck"] and site_missing:
+            session.emit("The monomer library was not built because the site residue has no atoms.")
+            restraint_text = angle_text
+        elif cfg["use_libcheck"]:
             library_cif = out / f"{dark_id}_lib.cif"
             build_refinement_library(
                 session,
@@ -426,8 +470,11 @@ def run_refinement(cfg: dict, emit) -> dict:
             refmac_files.append(("libin", library_cif))
             restraint_text = angle_text
         else:
-            distance_text = external_distance_keywords(
-                files["dark_pdb"], cfg["site_copies"], cfg["distance_restraints"], cfg["distance_sigma"]
+            distance_text = _restraints(
+                "Distance restraints",
+                lambda: external_distance_keywords(
+                    files["dark_pdb"], cfg["site_copies"], cfg["distance_restraints"], cfg["distance_sigma"]
+                ),
             )
             restraint_text = "\n".join(part for part in (distance_text, angle_text) if part)
         if restraint_text:
@@ -477,11 +524,15 @@ def run_refinement(cfg: dict, emit) -> dict:
                 raise
             if diff_map.is_file():
                 diff_map.unlink()
-            center = residue_centroid(refined_pdb, cfg["site_chain"], cfg["site_resi"])
-            extra_centers = [
-                residue_centroid(refined_pdb, chain, resi)
-                for chain, resi in cfg["site_copies"][1:]
-            ]
+            center = explicit_center or residue_centroid(refined_pdb, cfg["site_chain"], cfg["site_resi"])
+            extra_centers = []
+            for chain, resi in cfg["site_copies"][1:]:
+                try:
+                    extra_centers.append(residue_centroid(refined_pdb, chain, resi))
+                except ValueError as exc:
+                    if explicit_center is None:
+                        raise
+                    session.emit(f"{exc} That copy is left out of the cube.")
             direct_log = out / f"direct_{light_id}_DELFWT_{dark_id}.log"
             text = direct_site_cube(
                 omit_mtz,
@@ -522,6 +573,7 @@ def run_refinement(cfg: dict, emit) -> dict:
         cfg["positive_levels"][0],
         difference=True,
         recompute=cfg["recompute_fragment"],
+        center=explicit_center,
     )
 
     session.announce("5. Contour isodensity surfaces in PyMOL")
@@ -559,9 +611,13 @@ def run_refinement(cfg: dict, emit) -> dict:
             f" Sampled on the {grid_high:.2f} Å grid, with zero amplitude "
             f"from {high:.2f} Å to that limit."
         )
+    if explicit_center is None:
+        place = f"{cfg['site_chain']}/{cfg['site_resi']}"
+    else:
+        place = "at {:.2f}, {:.2f}, {:.2f} Å".format(*explicit_center)
     caption = (
         f"mFo−DFc density of {dark_id} against {light_id} around {cfg['site_label']} "
-        f"{cfg['site_chain']}/{cfg['site_resi']}, {cfg['refmac_ncyc']} REFMAC cycles, "
+        f"{place}, {cfg['refmac_ncyc']} REFMAC cycles, "
         f"contoured at {sigma_txt} σ. Positive density is in the data and missing from the omit model."
         f"{grid_sentence}"
     )
@@ -613,9 +669,8 @@ def run_twofofc(cfg: dict, emit) -> dict:
     low, high = _prepare_resolution(
         session, cfg["resolution_source"], cfg["lowres"], cfg["dmin"], [(pdb_id, sf_mtz)]
     )
-    tag = res_tag(low, high)
-    density_map = out / f"{pdb_id}_2fofc_{b_tag}_{tag}.ccp4"
-    extended_map = out / f"{pdb_id}_2fofc_{b_tag}_{tag}_extended.ccp4"
+    density_map = out / f"{pdb_id}_2fofc_{b_tag}.ccp4"
+    extended_map = out / f"{pdb_id}_2fofc_{b_tag}_extended.ccp4"
 
     if extended_map.is_file() and not cfg["recompute_map"]:
         session.emit(f"Reusing existing map: {extended_map}")

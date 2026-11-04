@@ -8,6 +8,7 @@ from pathlib import Path
 from werkzeug.datastructures import FileStorage
 
 from xfel_web.ccp4 import (
+    ccp4_map_center,
     choose_resolution,
     copy_ccp4_header_statistics,
     delta_b_tag,
@@ -16,6 +17,8 @@ from xfel_web.ccp4 import (
     pad_map_around_model,
     pymol_scene_links,
     residue_conformers,
+    selection_coordinates,
+    view_frame_half_widths,
 )
 from xfel_web.forms import (
     FormError,
@@ -89,6 +92,64 @@ class ParseTests(unittest.TestCase):
         self.assertEqual(written[19 * 4 : 22 * 4], b"aminamaxmean")
         self.assertEqual(written[54 * 4 : 55 * 4], b"rms!")
         self.assertEqual(written[0:4], b"\x11" * 4)
+
+    def test_map_center_matches_the_viewer_grid_box(self):
+        def write_map(path, *, ncstart, nrstart, nsstart, mapc, mapr, maps, origin):
+            raw = bytearray(1024)
+            ints = {
+                0: 10, 1: 10, 2: 10, 3: 2,
+                4: ncstart, 5: nrstart, 6: nsstart,
+                7: 100, 8: 100, 9: 100,
+                16: mapc, 17: mapr, 18: maps,
+            }
+            for index, value in ints.items():
+                struct.pack_into("<i", raw, index * 4, value)
+            for index, value in enumerate((100.0, 200.0, 300.0, 90.0, 90.0, 90.0), start=10):
+                struct.pack_into("<f", raw, index * 4, value)
+            for index, value in enumerate(origin, start=49):
+                struct.pack_into("<f", raw, index * 4, value)
+            path.write_bytes(raw)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            straight = root / "straight.ccp4"
+            write_map(straight, ncstart=0, nrstart=20, nsstart=0, mapc=1, mapr=2, maps=3, origin=(0.0, 0.0, 0.0))
+            straight_center = ccp4_map_center(straight)
+            self.assertAlmostEqual(straight_center[0], 4.5)
+            self.assertAlmostEqual(straight_center[1], 49.0)
+            self.assertAlmostEqual(straight_center[2], 13.5)
+            swapped = root / "swapped.ccp4"
+            write_map(
+                swapped,
+                ncstart=0, nrstart=20, nsstart=0,
+                mapc=2, mapr=3, maps=1,
+                origin=(1.5, -2.0, 0.25),
+            )
+            center = ccp4_map_center(swapped)
+        self.assertAlmostEqual(center[0], 4.5 + 1.5)
+        self.assertAlmostEqual(center[1], 4.5 * 2 - 2.0)
+        self.assertAlmostEqual(center[2], 24.5 * 3 + 0.25)
+
+    def test_figure_frame_stays_centered_on_the_map(self):
+        self.assertEqual(view_frame_half_widths([], (1.0, 2.0, 3.0), 3.0), (3.0, 3.0, 3.0))
+        self.assertEqual(
+            view_frame_half_widths([(0.0, 5.0, 1.0), (4.0, 0.0, 1.0)], (1.0, 2.0, 3.0), 3.0),
+            (3.0, 3.0, 2.0),
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            pdb = Path(tmp) / "site.pdb"
+            pdb.write_text(
+                "\n".join([
+                    "HETATM    1  C   OEC A 416       0.000   0.000   0.000  1.00 20.00           C",
+                    "HETATM    2  N   OEC A 416       2.000   0.000   0.000  1.00 20.00           N",
+                    "HETATM    3  O   GLU A 189       9.000   1.000   0.000  1.00 20.00           O",
+                    "HETATM    4  C   OEC B 416       8.000   8.000   8.000  1.00 20.00           C",
+                    "END",
+                    "",
+                ])
+            )
+            coords = selection_coordinates(pdb, "A", 416, [{"chain": "A", "resi": 189, "label": "GLU"}])
+        self.assertEqual(coords, [(0.0, 0.0, 0.0), (2.0, 0.0, 0.0), (9.0, 1.0, 0.0)])
 
     def test_delta_b_tag(self):
         self.assertEqual(delta_b_tag(-40), "dB-40")
@@ -316,6 +377,26 @@ class RefinementFormTests(unittest.TestCase):
             root = Path(tmp)
             cfg = parse_job("refinement", self._form(root), {}, root)
         self.assertIsNone(cfg["fft_dmin"])
+        self.assertEqual(cfg["map_center"], "residue")
+        self.assertIsNone(cfg["map_center_xyz"])
+
+    def test_cartesian_map_center_is_kept(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cfg = parse_job(
+                "refinement",
+                self._form(root, map_center="cartesian", center_x="1.5", center_y="-2", center_z="3.25"),
+                {},
+                root,
+            )
+        self.assertEqual(cfg["map_center"], "cartesian")
+        self.assertEqual(cfg["map_center_xyz"], (1.5, -2.0, 3.25))
+
+    def test_cartesian_map_center_requires_coordinates(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with self.assertRaises(FormError):
+                parse_job("refinement", self._form(root, map_center="cartesian"), {}, root)
 
     def test_finer_grid_resolution_is_kept(self):
         with tempfile.TemporaryDirectory() as tmp:

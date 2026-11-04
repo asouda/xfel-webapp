@@ -257,6 +257,51 @@ def residue_centroid(pdb_path: Path, chain: str, resi: int) -> tuple[float, floa
     )
 
 
+def selection_coordinates(
+    pdb_path: Path,
+    chain: str,
+    resi: int,
+    extra_residues: list[dict] | None = None,
+) -> list[tuple[float, float, float]]:
+    """Orthogonal coordinates of the residues drawn in the figure."""
+    wanted = {(chain, int(resi))}
+    for extra in extra_residues or []:
+        wanted.add((str(extra["chain"]), int(extra["resi"])))
+    coords: list[tuple[float, float, float]] = []
+    with pdb_path.open() as handle:
+        for line in handle:
+            if not line.startswith(("ATOM", "HETATM")) or len(line) < 54:
+                continue
+            try:
+                key = (line[21], int(line[22:26]))
+                point = (float(line[30:38]), float(line[38:46]), float(line[46:54]))
+            except ValueError:
+                continue
+            if key in wanted:
+                coords.append(point)
+    return coords
+
+
+def view_frame_half_widths(
+    coords: list[tuple[float, float, float]],
+    center: tuple[float, float, float],
+    empty_half: float,
+) -> tuple[float, float, float]:
+    """Half-widths of a box centered on ``center`` that still contains ``coords``.
+
+    An empty selection uses ``empty_half`` on every axis, so a map with no
+    site atoms is framed on the carved density instead of a single point.
+    """
+    if not coords:
+        half = max(float(empty_half), 0.0)
+        return (half, half, half)
+    return (
+        max(abs(point[0] - center[0]) for point in coords),
+        max(abs(point[1] - center[1]) for point in coords),
+        max(abs(point[2] - center[2]) for point in coords),
+    )
+
+
 def residue_atom_names(pdb_path: Path, chain: str, resi: int) -> set[str]:
     names: set[str] = set()
     with pdb_path.open() as handle:
@@ -695,6 +740,37 @@ def _read_ccp4_map(path: Path) -> dict:
     }
 
 
+def ccp4_map_center(path: Path) -> tuple[float, float, float]:
+    """Orthogonal center of the stored grid, in ångströms.
+
+    This is the center of the box the interactive viewer fits. Samples run
+    from index 0 through n − 1, the header start shifts that box onto the
+    crystal grid, and the header origin is added in Cartesian ångströms.
+    """
+    info = _read_ccp4_map(path)
+    crs = (
+        info["ncstart"] + (info["nc"] - 1) / 2.0,
+        info["nrstart"] + (info["nr"] - 1) / 2.0,
+        info["nsstart"] + (info["ns"] - 1) / 2.0,
+    )
+    grid = [0.0, 0.0, 0.0]
+    for value, axis in zip(crs, (info["mapc"], info["mapr"], info["maps"])):
+        grid[axis - 1] = value
+    nxyz = info["nxyz"]
+    if any(n <= 0 for n in nxyz):
+        raise ValueError(f"{path.name} has a unit-cell sampling of {nxyz}")
+    fractional = [grid[axis] / float(nxyz[axis]) for axis in range(3)]
+    np = _require_numpy()
+    origin = struct.unpack(info["endian"] + "3f", bytes(info["header"][49 * 4 : 52 * 4]))
+    orthogonal = np.linalg.inv(_fractional_matrix(info["cell"]))
+    cartesian = orthogonal @ np.asarray(fractional, dtype=float)
+    return (
+        float(cartesian[0] + origin[0]),
+        float(cartesian[1] + origin[1]),
+        float(cartesian[2] + origin[2]),
+    )
+
+
 def _crystal_layout(info: dict) -> tuple[list[int], list[int]]:
     start = [0, 0, 0]
     count = [0, 0, 0]
@@ -1029,6 +1105,7 @@ class Ccp4Session:
         sigma_level: float,
         difference: bool,
         recompute: bool,
+        center: tuple[float, float, float] | None = None,
     ) -> Path:
         chain, resi = site_copies[0]
         fragment = self.output_dir / (
@@ -1039,6 +1116,10 @@ class Ccp4Session:
             return fragment
 
         copies_py = ",\n    ".join(f'("{item_chain}", {item_resi})' for item_chain, item_resi in site_copies)
+        if center is None:
+            center_py = "None"
+        else:
+            center_py = f"({center[0]:.4f}, {center[1]:.4f}, {center[2]:.4f})"
         diff_flag = 1 if difference else 0
         script = self.output_dir / "coot_site_export.py"
         script.write_text(
@@ -1053,6 +1134,7 @@ RADIUS_A = {radius:.1f}
 SITE_COPIES = [
     {copies_py},
 ]
+EXPLICIT_CENTER = {center_py}
 
 imol_map = read_ccp4_map(MAP_FILE, {diff_flag})
 if imol_map is None or imol_map < 0:
@@ -1070,16 +1152,19 @@ if imol_model is None or imol_model < 0:
     sys.exit("Failed to read coordinates: %s" % PDB_FILE)
 
 base_name = os.path.splitext(os.path.basename(MAP_FILE))[0]
-for chain_id, resno in SITE_COPIES:
+for index, (chain_id, resno) in enumerate(SITE_COPIES):
     atoms = residue_info_py(imol_model, chain_id, resno, "")
-    if not atoms:
+    if index == 0 and EXPLICIT_CENTER is not None:
+        x, y, z = EXPLICIT_CENTER
+    elif not atoms:
         print("WARNING: residue %s/%d not found - skipping" % (chain_id, resno))
         continue
-    coords = [a[2] for a in atoms]
-    n = len(coords)
-    x = sum(c[0] for c in coords) / float(n)
-    y = sum(c[1] for c in coords) / float(n)
-    z = sum(c[2] for c in coords) / float(n)
+    else:
+        coords = [a[2] for a in atoms]
+        n = len(coords)
+        x = sum(c[0] for c in coords) / float(n)
+        y = sum(c[1] for c in coords) / float(n)
+        z = sum(c[2] for c in coords) / float(n)
     set_rotation_centre(x, y, z)
     out_name = "%s_{site_label}_%s%d_%dA.map" % (base_name, chain_id, resno, int(RADIUS_A))
     out_path = os.path.join(OUT_DIR, out_name)
@@ -1216,13 +1301,36 @@ except NameError:
             "hide labels",
             "set auto_zoom, 0",
         ]
-        carve_target = "site"
+        # The viewer frames the clipped map, so the PNG looks at that grid
+        # center rather than the bounding box of the atoms. The two frame
+        # points are symmetric about the center and reach every drawn atom,
+        # which keeps the site in view after the camera moves there.
+        center = ccp4_map_center(fragment)
+        self.emit(
+            "Figure center is the map center: "
+            f"{center[0]:.2f} {center[1]:.2f} {center[2]:.2f} Å"
+        )
+        drawn = selection_coordinates(model_pdb, site_chain, site_resi, extra_residues)
+        half = view_frame_half_widths(drawn, center, carve)
+        lines += [
+            "pseudoatom view_center, pos=[{:.3f},{:.3f},{:.3f}]".format(*center),
+            "pseudoatom view_frame_lo, pos=[{:.3f},{:.3f},{:.3f}]".format(
+                center[0] - half[0], center[1] - half[1], center[2] - half[2]
+            ),
+            "pseudoatom view_frame_hi, pos=[{:.3f},{:.3f},{:.3f}]".format(
+                center[0] + half[0], center[1] + half[1], center[2] + half[2]
+            ),
+        ]
+        carve_target = "site or view_center"
         for extra in extra_residues:
             carve_target += " or " + (extra.get("label") or f"{extra['chain']}{extra['resi']}")
         lines.append(f"select carve_sel, {carve_target}")
         lines += [
-                  "orient carve_sel",
-                  "zoom carve_sel, 2",
+            "orient carve_sel",
+            "zoom (view_frame_lo or view_frame_hi), 2",
+            "hide view_center",
+            "hide view_frame_lo",
+            "hide view_frame_hi",
         ]
 
         if negative_levels is None:

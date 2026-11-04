@@ -24,10 +24,10 @@
     <ol>
       <li>The observed mmCIF is converted to MTZ. <code>ctruncate</code> turns intensities <code>I, SIGI</code> into amplitudes, and <code>cad</code> copies the <code>FREE</code> flag onto those amplitudes.</li>
       <li><code>refmac5</code> refines the omit coordinates for the number of cycles you set. Zero cycles calculate the map without moving atoms. Loose site distances can be external restraints, or a widened <code>libcheck</code> monomer library. Site angles are always external restraints, in degrees.</li>
-      <li><code>fft</code> transforms <code>DELFWT</code> / <code>PHDELWT</code> between the resolution limits above. An optional finer grid resolution asks <code>fft</code> for the sampling of that higher resolution. Reciprocal-space points beyond the coefficients are absent from the MTZ and contribute zero amplitude, so the real-space grid is denser. The map is then padded around the refined model. When the whole-cell grid is too large for <code>fft</code>, that same sum is evaluated on a cube centered on the site and wide enough for the clip radius. The sigma stays the full-cell value.</li>
-      <li>Coot clips the site from that difference map. PyMOL draws the refined coordinates and the ±nσ surfaces, and saves the PNG and the <code>.pml</code> script beside the map.</li>
+      <li><code>fft</code> transforms <code>DELFWT</code> / <code>PHDELWT</code> between the resolution limits above. An optional finer grid resolution asks <code>fft</code> for the sampling of that higher resolution. Reciprocal-space points beyond the coefficients are absent from the MTZ and contribute zero amplitude, so the real-space grid is denser. The map is then padded around the refined model. When the whole-cell grid is too large for <code>fft</code>, that same sum is evaluated on a cube centered on the map center and wide enough for the clip radius. The sigma stays the full-cell value.</li>
+      <li>Coot clips the site from that difference map. The clip is centered on the site residue, or on a Cartesian point when you set one. PyMOL draws the refined coordinates and the ±nσ surfaces, saves the PNG and the <code>.pml</code> script beside the map, and centers that image on the same point as the clipped map.</li>
     </ol>
-    <p>The light coordinates stay out of that calculation. In the interactive viewer, <strong>Light site</strong> draws the same site from that file as ball and stick. Yellow, green, blue, and silver are the color choices.</p>
+    <p>The light coordinates stay out of that calculation. In the interactive viewer, <strong>Light site</strong> draws the same site from that file as ball and stick. Yellow, green, blue, silver, and Name are the color choices. Name colors each atom by its element, the same scheme as the omit model.</p>
     {% else %}
     <p class="equation">ρ(r) ∝ Σ F<sub>WT</sub> exp(−ΔB (sinθ/λ)<sup>2</sup>) exp(iφ<sub>WT</sub>)</p>
     <p>This is not a difference map. <code>FWT</code> is already the weighted 2m|F<sub>o</sub>| − D|F<sub>c</sub>| amplitude from the wwPDB validation file, and <code>PHWT</code> is the model phase. Mesh that covers an atom is accounted-for density. A gap on an atom, or a blob with no atom, is the usual hint that the model and the data disagree. Levels of 1–2σ are the normal view; 3–5σ is for difference maps and will often leave this mesh empty.</p>
@@ -125,6 +125,20 @@
       <label>Chain<input name="site_chain" value="{{ defaults.site_chain }}" maxlength="1" required></label>
       <label>Residue<input name="site_resi" type="number" step="1" value="{{ defaults.site_resi }}" required></label>
       <label>Label<input name="site_label" value="{{ defaults.site_label }}" required></label>
+      {% if spec.slug == 'refinement' %}
+      <label class="wide">Map center
+        <select name="map_center" id="map-center">
+          <option value="residue" selected>Geometric center of the site residue</option>
+          <option value="cartesian">Cartesian point</option>
+        </select>
+        <span class="hint">Ångströms in the model frame. The clip uses this point, including a site whose atoms were removed from the omit model.</span>
+      </label>
+      <div class="wide map-center-xyz" id="map-center-xyz" hidden>
+        <label>X (Å)<input name="center_x" type="number" step="any" value="0"></label>
+        <label>Y (Å)<input name="center_y" type="number" step="any" value="0"></label>
+        <label>Z (Å)<input name="center_z" type="number" step="any" value="0"></label>
+      </div>
+      {% endif %}
       <div class="scan-action">
         <button type="button" class="pill ghost" id="scan-btn">List hetero residues</button>
         <p class="hint">Reads the {{ spec.scan_label }} and lists non-water, non-lipid hetero residues. Click a row to fill the chain and residue.</p>
@@ -230,8 +244,14 @@
           <button type="button" class="pill light-color" data-light-color="green" aria-pressed="false" disabled>Green</button>
           <button type="button" class="pill light-color" data-light-color="blue" aria-pressed="false" disabled>Blue</button>
           <button type="button" class="pill light-color" data-light-color="silver" aria-pressed="false" disabled>Silver</button>
+          <button type="button" class="pill light-color" data-light-color="element" aria-pressed="false" disabled>Name</button>
         </div>
-        <p class="hint">Ball and stick of this site, including neighbouring residues, from the light coordinates. The omit model stays in element colors. Clicks still edit that model.</p>
+        <label class="viewer-transparency" for="light-transparency">
+          Transparency
+          <input id="light-transparency" type="range" min="0" max="100" value="40" step="1" disabled>
+          <span id="light-transparency-value">40%</span>
+        </label>
+        <p class="hint">Ball and stick of this site, including neighbouring residues, from the light coordinates. Add bond, Add distance, and Add label work on these atoms. A bond is kept on the omit model when both atoms are there, and on the light site when an atom was removed. Hide this site to click an omit-model atom behind it.</p>
       </div>
       <div class="viewer-style" id="viewer-style">
         <div class="viewer-style-main">
@@ -306,5 +326,5 @@
 </script>
 <script src="{{ url_for('static', filename='vendor/ngl-2.5.0.js') }}?v=2"></script>
 <script src="{{ url_for('static', filename='js/sigma-color.js') }}?v=1"></script>
-<script src="{{ url_for('static', filename='js/workflow.js') }}?v=17"></script>
+<script src="{{ url_for('static', filename='js/workflow.js') }}?v=24"></script>
 {% endblock %}

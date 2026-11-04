@@ -66,6 +66,23 @@ def _identifier(form, name: str, label: str) -> str:
     return value
 
 
+def _map_center(form) -> tuple[str, tuple[float, float, float] | None]:
+    """How the omit-map clip is centered: the site residue, or an explicit point."""
+    mode = _text(form, "map_center") or "residue"
+    if mode not in {"residue", "cartesian"}:
+        raise FormError("Map center must be the site residue or a Cartesian point.")
+    if mode == "residue":
+        return mode, None
+    point = (
+        _float(form, "center_x", "Map center X"),
+        _float(form, "center_y", "Map center Y"),
+        _float(form, "center_z", "Map center Z"),
+    )
+    if not all(math.isfinite(value) for value in point):
+        raise FormError("Map center coordinates must be finite numbers, in ångströms.")
+    return mode, point
+
+
 def _chain(form) -> str:
     chain = _text(form, "site_chain")
     if len(chain) != 1 or not chain.isalnum():
@@ -413,12 +430,15 @@ def parse_job(workflow: str, form, files, project: Path) -> dict:
             angles = parse_angle_restraints(_text(form, "angle_restraints"))
         except ValueError as exc:
             raise FormError(str(exc)) from exc
+        center_mode, center_xyz = _map_center(form)
         cfg.update(
             {
                 "dark_id": _identifier(form, "dark_id", "Omit-model name"),
                 "light_id": _identifier(form, "light_id", "Observed-data name"),
                 "refmac_ncyc": cycles,
                 "fft_dmin": fft_dmin,
+                "map_center": center_mode,
+                "map_center_xyz": center_xyz,
                 "distance_restraints": distances,
                 "distance_sigma": _float(form, "distance_sigma", "Distance sigma"),
                 "angle_restraints": angles,

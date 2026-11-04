@@ -262,6 +262,7 @@ figure img {
 .viewer-light .pill { padding: 7px 12px; font-size: 13px; }
 .viewer-light .pill[aria-pressed="true"] { background: white; color: #07080c; border-color: white; font-weight: 600; }
 .viewer-light .hint { flex-basis: 100%; margin: 0; }
+.viewer-light .viewer-transparency { flex: 1 1 220px; }
 .viewer-style,
 .viewer-stage { --viewer-side: 132px; --viewer-gap: 14px; }
 .viewer-style {
@@ -373,6 +374,8 @@ label.viewer-sigma-exact { flex-direction: row; align-items: center; gap: 4px; c
 .viewer-sigma .pill[aria-pressed="true"] { background: white; color: #07080c; border-color: white; font-weight: 600; }
 .viewer-sigma input:disabled { opacity: 0.55; }
 .viewer-sigma-note { margin: 0; font-size: 12px; line-height: 1.35; }
+.map-center-xyz { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px 16px; }
+.map-center-xyz[hidden] { display: none; }
 .viewer-range { display: grid; grid-template-columns: 1fr 1fr; gap: 14px 16px; }
 .viewer-range .hint { grid-column: 1 / -1; margin: 0; }
 .viewer {
@@ -411,5 +414,5 @@ tbody tr:hover { background: rgba(255, 255, 255, 0.06); }
   .files div { grid-template-columns: 1fr; }
   .viewer-style, .viewer-stage { --viewer-side: 112px; }
   .viewer-stage { height: 520px; min-height: 520px; }
-  .viewer-range { grid-template-columns: 1fr; }
+  .map-center-xyz, .viewer-range { grid-template-columns: 1fr; }
 }
