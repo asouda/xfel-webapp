@@ -86,7 +86,7 @@ The electron density on a real-space grid is the inverse Fourier sum. With \(V\)
 
 The weight \(m\) is the figure of merit, the expected cosine of the phase error. The factor \(D\) comes from the \(\sigma_A\) treatment of coordinate error: as the model becomes a poorer description of the data, \(D\) falls and \(|F_c|\) is down-weighted. REFMAC stores the already weighted difference as `DELFWT` / `PHDELWT`. The validation file stores the already weighted \(2mF_o-DF_c\) coefficient as `FWT` / `PHWT`.
 
-`fft` writes one asymmetric unit. `extends` expands that map by the space-group symmetry and adds a border, 5 Å unless the form says otherwise, so the grid covers the coordinate file that will be drawn. Coot then cuts a sphere around the chosen residue. PyMOL, and the browser viewer, contour that fragment. A level of \(n\) in sigma mode is \(n\) times the root-mean-square of the map that was written.
+`fft` writes the map on the crystallographic grid. The app expands that map, repeating the unit cell by symmetry, and adds a border, 5 Å unless the form says otherwise, so the grid covers the coordinate file that will be drawn. The sigma on the padded map stays the value from `fft`. Coot then cuts a sphere around the chosen residue. PyMOL, and the browser viewer, contour that fragment. A level of \(n\) in sigma mode is \(n\) times the root-mean-square of the map that was written.
 
 ## How refinement cycles are performed
 

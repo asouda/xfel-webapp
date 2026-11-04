@@ -62,7 +62,7 @@ Each workflow starts from files you put on the form. The worked examples use fil
 
 | File | Typical name | Role |
 | --- | --- | --- |
-| Coordinates | `{pdbid}.pdb` or mmCIF | The model. REFMAC, `extends`, Coot, and PyMOL all read it. PDB and mmCIF coordinates are both accepted. |
+| Coordinates | `{pdbid}.pdb` or mmCIF | The model. REFMAC, the map padding, Coot, and PyMOL all read it. PDB and mmCIF coordinates are both accepted. |
 | Structure factors | `{pdbid}-sf.cif` | Deposited reflections. Fo−Fo and the omit map use the amplitudes (after conversion). The 2mFo−DFc workflow uses this file for the resolution range. |
 | Validation $2F_o-F_c$ coefficients | `{pdbid}_validation_2fo-fc_map_coef.cif` | `FWT` and `PHWT`. This file is the 2mFo−DFc map. In the Fo−Fo workflow it is only a phase source. |
 
@@ -90,7 +90,7 @@ After the map exists, the three workflows do the same three things, and then ope
 
 ### Extend the map
 
-`fft` writes an asymmetric-unit map. `extends` expands it so that it covers the coordinate file plus a border, `MAP_BORDER_A` (default 5 Å). A section larger than the fixed array in `extends` is padded with `mapmask` instead, and the asymmetric-unit sigma is copied onto that map. The coordinate file is the light model, the refined omit model, or the single structure, depending on the workflow.
+`fft` writes the map on the crystallographic grid. The app expands it so that it covers the coordinate file plus a border, `MAP_BORDER_A` (default 5 Å), repeating the unit cell where the model lies outside. The sigma on that map stays the value from `fft`. The coordinate file is the light model, the refined omit model, or the single structure, depending on the workflow.
 
 ### Clip a site fragment
 
@@ -134,6 +134,5 @@ The edit buttons act on the model in the viewer. Add bond and Add distance each 
 | `ctruncate` | Intensities to amplitudes (omit map only) |
 | `libcheck` | Optional monomer library when omit-map distances are widened in the dictionary |
 | `fft` | The Fourier transform, including sharpening for 2mFo−DFc |
-| `extends` | Pad the map around the model |
 | Coot | Clip the site |
 | PyMOL | Contour and render |

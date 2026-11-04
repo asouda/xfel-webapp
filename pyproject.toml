@@ -6,6 +6,8 @@ readme = "README.md"
 requires-python = ">=3.9"
 dependencies = [
     "flask>=3.0",
+    "gemmi>=0.6.5",
+    "numpy>=1.26",
 ]
 
 authors = [

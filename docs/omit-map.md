@@ -24,9 +24,9 @@ Positive density in the figure is density in the `6w1v` observations that this o
 
 ### How the Fig. 2 map is calculated
 
-The programs run in this order: `cif2mtz`, `mtzdump`, `ctruncate`, `cad`, `refmac5`, `fft`, `extends`, Coot, and PyMOL. `libcheck` is added only when distance restraints are widened in a monomer library.
+The programs run in this order: `cif2mtz`, `mtzdump`, `ctruncate`, `cad`, `refmac5`, `fft`, Coot, and PyMOL. The map is then padded around the model in the app. `libcheck` is added only when distance restraints are widened in a monomer library.
 
-**1. Check the programs and the files.** The programs are `cif2mtz`, `ctruncate`, `cad`, `refmac5`, `fft`, `extends`, and `mtzdump`, plus `libcheck` when that option is on. Coot comes from the CCP4 tree. PyMOL must be on `PATH`. The log prints the cycle count before REFMAC starts, so a zero-cycle job is visible in advance.
+**1. Check the programs and the files.** The programs are `cif2mtz`, `ctruncate`, `cad`, `refmac5`, `fft`, and `mtzdump`, plus `libcheck` when that option is on. Coot comes from the CCP4 tree. PyMOL must be on `PATH`. The log prints the cycle count before REFMAC starts, so a zero-cycle job is visible in advance.
 
 **2. Inspect the omit model and choose the site.** **List hetero residues** reads `6w1v_omitO6_single_confA.pdb`. Select `OEX` A415. The job checks that chain and residue, prints the atom names, and prints the centroid of the clip.
 
@@ -108,7 +108,9 @@ This is the sum
 
 Positive density is present in the `6w1v` observations and absent from the omit model. Negative density is placed by the model where the observations are weaker.
 
-**9. Cover the REFMAC model.** `extends` pads the map by the map border (default 5 Å) around the refined coordinate file and writes the extended CCP4 map. `extends` keeps one map section in a fixed array of 200,000 points. A fine FFT grid can make the model box larger than that. The job then uses `mapmask` with the same border and copies the asymmetric-unit sigma onto the padded map.
+When the whole-cell grid is too large for `fft` (the three sampling intervals no longer fit in its 32-bit allocator, so the program stops with `CCPALC: length <=0` or a segmentation fault), the app evaluates this sum only on a cube centered on the site. The cube is wide enough for the clip radius. Reflections beyond the measured coefficients still contribute nothing. The file is a P1 map of that cube: the cell edges are scaled with the grid so the crystallographic grid indices still fall on the model coordinates. The sigma stored on that cube is the full-cell root-mean-square of the coefficients.
+
+**9. Cover the REFMAC model.** The app pads the map by the map border (default 5 Å) around the refined coordinate file and writes the extended CCP4 map. The sigma on that file stays the value from `fft`. A grid that `fft` cannot allocate skips this pad: the site cube is already the map Coot reads.
 
 **10. Export the site fragment.** Coot loads the extended map as a difference map and the REFMAC coordinates, centres on `OEX` A415, and writes a clip of the chosen radius (default 10 Å). The Coot contour does not change the exported voxels.
 

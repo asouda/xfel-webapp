@@ -10,7 +10,7 @@ The form is set up on PDB `9z35`, the room-temperature XFEL structure of the two
 
 | Role | File | Download |
 | --- | --- | --- |
-| Coordinates | `9z35.pdb`. Drawn on the map, and used as the mask for `extends`. | [9z35.pdb](https://github.com/asouda/xfel-webapp/raw/main/data/9z35/9z35.pdb) |
+| Coordinates | `9z35.pdb`. Drawn on the map, and used to decide how far the map is padded. | [9z35.pdb](https://github.com/asouda/xfel-webapp/raw/main/data/9z35/9z35.pdb) |
 | Structure factors | `9z35-sf.cif`. Anomalous intensities. Used here for the resolution range. | [9z35-sf.cif.gz](https://github.com/asouda/xfel-webapp/raw/main/data/9z35/9z35-sf.cif.gz) |
 | Validation \(2F_o-F_c\) coefficients | `9z35_validation_2fo-fc_map_coef.cif`. `FWT` and `PHWT` are the map. | [9z35 2Fo−Fc coefficients](https://github.com/asouda/xfel-webapp/raw/main/data/9z35/9z35_validation_2fo-fc_map_coef.cif.gz) |
 | Validation \(F_o-F_c\) coefficients | Present in the same directory. This workflow does not read it. | [9z35 Fo−Fc coefficients](https://github.com/asouda/xfel-webapp/raw/main/data/9z35/9z35_validation_fo-fc_map_coef.cif.gz) |
@@ -23,9 +23,9 @@ The figure is sharpened with \(\Delta B = -40\) Å² and drawn as solid surfaces
 
 ### How the 9z35 map is calculated
 
-The programs run in this order: `cif2mtz`, `mtzdump`, `fft` with `SCALE F1` set to \(\Delta B\), `extends`, Coot, and PyMOL. There is no REFMAC job and no scaling of a second dataset.
+The programs run in this order: `cif2mtz`, `mtzdump`, `fft` with `SCALE F1` set to \(\Delta B\), Coot, and PyMOL. The map is then padded around the model in the app. There is no REFMAC job and no scaling of a second dataset.
 
-**1. Check the programs and the files.** The programs are `cif2mtz`, `fft`, `extends`, and `mtzdump`. Coot comes from the CCP4 tree. PyMOL must be on `PATH`. The three input files must already exist.
+**1. Check the programs and the files.** The programs are `cif2mtz`, `fft`, and `mtzdump`. Coot comes from the CCP4 tree. PyMOL must be on `PATH`. The three input files must already exist.
 
 **2. Inspect the coordinates and choose the site.** **List hetero residues** reads `9z35.pdb`. Confirm `OEY` A601, and keep D1-Glu189 in the neighbouring-residue list. The job checks the residue, prints its atom names, and prints the centroid used for the clip.
 
@@ -62,7 +62,7 @@ SCALE F1 1.0 <ΔB>
 
 `SCALE F1 1.0 ΔB` is scale 1 and temperature factor \(\Delta B\).
 
-**6. Cover the model.** `extends` pads the map by the map border (default 5 Å) around `9z35.pdb` and writes the extended CCP4 file.
+**6. Cover the model.** The app pads the map by the map border (default 5 Å) around `9z35.pdb` and writes the extended CCP4 file. The sigma stays the value from `fft`.
 
 **7. Export the site fragment.** Coot loads the extended map as a regular map. The difference-map flag is 0. It centres on `OEY` A601 and writes a clip of the chosen radius (default 10 Å). The Coot contour does not change the exported voxels.
 

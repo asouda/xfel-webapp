@@ -11,6 +11,7 @@ from xfel_web.ccp4 import (
     OEC_PAIRS,
     OEC_PAIRS_WITH_O6,
     POS_COLORS,
+    CommandFailed,
     Ccp4Session,
     choose_resolution,
     delta_b_tag,
@@ -22,6 +23,7 @@ from xfel_web.ccp4 import (
     residue_atom_names,
     residue_centroid,
 )
+from xfel_web.direct_map import direct_site_cube, parse_fft_sampling, whole_cell_exceeds_fft
 from xfel_web.restraints import (
     build_refinement_library,
     external_angle_keywords,
@@ -137,7 +139,7 @@ def run_fofo(cfg: dict, emit) -> dict:
     session.emit(f"PyMOL     : {session.pymol}")
     for key, path in files.items():
         session.emit(f"  {key:18s} {path}  ({path.stat().st_size / 1e6:.1f} MB)")
-    session.run_bash('echo "CCP4=$CCP4"; which cif2mtz refmac5 cad scaleit fft extends mapmask mtzdump')
+    session.run_bash('echo "CCP4=$CCP4"; which cif2mtz refmac5 cad scaleit fft mtzdump')
 
     session.announce("2. Inspect the light coordinates and the chosen site")
     atoms, centroid, site_line = _check_site(files["light_pdb"], cfg["site_chain"], cfg["site_resi"], cfg["site_label"])
@@ -255,7 +257,7 @@ def run_fofo(cfg: dict, emit) -> dict:
             extended_map,
             files["light_pdb"],
             cfg["map_border"],
-            out / f"extends_{light_id}_{dark_id}.log",
+            out / f"pad_{light_id}_{dark_id}.log",
         )
         session.emit(f"Created: {extended_map}")
     session.emit(f"Interpretation: positive density is stronger in {light_id}; negative is stronger in {dark_id}.")
@@ -331,7 +333,7 @@ def run_refinement(cfg: dict, emit) -> dict:
     session.emit(f"PyMOL     : {session.pymol}")
     for key, path in files.items():
         session.emit(f"  {key:18s} {path}  ({path.stat().st_size / 1e6:.1f} MB)")
-    tools = "cif2mtz ctruncate cad refmac5 fft extends mapmask mtzdump"
+    tools = "cif2mtz ctruncate cad refmac5 fft mtzdump"
     if cfg["use_libcheck"]:
         tools += " libcheck"
     session.run_bash(f'echo "CCP4=$CCP4"; which {tools}')
@@ -451,26 +453,58 @@ def run_refinement(cfg: dict, emit) -> dict:
         delfwt_lab = session.pick_label(omit_labels, ["DELFWT"], "DELFWT")
         phdelwt_lab = session.pick_label(omit_labels, ["PHDELWT"], "PHDELWT")
         session.emit(f"REFMAC {omit_mtz.name}: Fo={fo_lab}, Fc={fc_lab}, map={delfwt_lab}/{phdelwt_lab}")
-        session.run_ccp4(
-            "fft",
-            [("hklin", omit_mtz), ("mapout", diff_map)],
-            (
-                # The high limit sets the sampling grid as well as the coefficient
-                # cutoff. A finer limit than the MTZ extends the reciprocal box;
-                # missing reflections stay out of the sum and contribute zero.
-                f"RESOLUTION {low:.2f} {grid_high:.2f}\n"
-                f"LABIN F1={delfwt_lab} PHI={phdelwt_lab}\n"
-                "END"
-            ),
-            out / f"fft_{light_id}_DELFWT_{dark_id}.log",
-        )
-        session.extend_around_model(
-            diff_map,
-            extended_map,
-            refined_pdb,
-            cfg["map_border"],
-            out / f"extends_{light_id}_DELFWT_{dark_id}.log",
-        )
+        fft_log = out / f"fft_{light_id}_DELFWT_{dark_id}.log"
+        try:
+            session.run_ccp4(
+                "fft",
+                [("hklin", omit_mtz), ("mapout", diff_map)],
+                (
+                    # The high limit sets the sampling grid as well as the coefficient
+                    # cutoff. A finer limit than the MTZ extends the reciprocal box;
+                    # missing reflections stay out of the sum and contribute zero.
+                    f"RESOLUTION {low:.2f} {grid_high:.2f}\n"
+                    f"LABIN F1={delfwt_lab} PHI={phdelwt_lab}\n"
+                    "END"
+                ),
+                fft_log,
+            )
+        except CommandFailed as exc:
+            text = "\n".join(exc.lines)
+            sampling = parse_fft_sampling(text)
+            # A product past 2^31-1 either stops in CCPALC or, once the wrapped
+            # length is positive, segfaults. Both mean the whole cell was never written.
+            if sampling is None or not whole_cell_exceeds_fft(sampling):
+                raise
+            if diff_map.is_file():
+                diff_map.unlink()
+            center = residue_centroid(refined_pdb, cfg["site_chain"], cfg["site_resi"])
+            extra_centers = [
+                residue_centroid(refined_pdb, chain, resi)
+                for chain, resi in cfg["site_copies"][1:]
+            ]
+            direct_log = out / f"direct_{light_id}_DELFWT_{dark_id}.log"
+            text = direct_site_cube(
+                omit_mtz,
+                extended_map,
+                delfwt_lab,
+                phdelwt_lab,
+                low,
+                grid_high,
+                sampling,
+                center,
+                cfg["export_radius"],
+                extra_centers,
+                emit=session.emit,
+            )
+            direct_log.write_text(text)
+        else:
+            session.extend_around_model(
+                diff_map,
+                extended_map,
+                refined_pdb,
+                cfg["map_border"],
+                out / f"pad_{light_id}_DELFWT_{dark_id}.log",
+            )
         session.emit(f"Created: {extended_map}")
         session.emit(f"Refined model ({int(cfg['refmac_ncyc'])} cycles): {refined_pdb}")
     session.emit(
@@ -545,6 +579,7 @@ def run_refinement(cfg: dict, emit) -> dict:
             cfg=cfg,
             positive_colors=POS_COLORS,
             negative_colors=NEG_COLORS,
+            light_pdb=files["light_pdb"],
         ),
     )
 
@@ -559,7 +594,7 @@ def run_twofofc(cfg: dict, emit) -> dict:
     session.emit(f"PyMOL     : {session.pymol}")
     for key, path in files.items():
         session.emit(f"  {key:18s} {path}  ({path.stat().st_size / 1e6:.1f} MB)")
-    session.run_bash('echo "CCP4=$CCP4"; which cif2mtz fft extends mapmask mtzdump')
+    session.run_bash('echo "CCP4=$CCP4"; which cif2mtz fft mtzdump')
 
     session.announce("2. Inspect the coordinates and the chosen site")
     atoms, centroid, site_line = _check_site(files["pdb"], cfg["site_chain"], cfg["site_resi"], cfg["site_label"])
@@ -622,7 +657,7 @@ def run_twofofc(cfg: dict, emit) -> dict:
             extended_map,
             files["pdb"],
             cfg["map_border"],
-            out / f"extends_{pdb_id}_2fofc_{b_tag}.log",
+            out / f"pad_{pdb_id}_2fofc_{b_tag}.log",
         )
         session.emit(f"Created: {extended_map}")
     session.emit(
@@ -711,17 +746,27 @@ def _q(path: Path) -> str:
     return shlex.quote(str(path))
 
 
-def _viewer_scene(*, model_pdb: Path, fragment: Path, cfg: dict, positive_colors: list[str], negative_colors: list[str]) -> dict:
+def _viewer_scene(
+    *,
+    model_pdb: Path,
+    fragment: Path,
+    cfg: dict,
+    positive_colors: list[str],
+    negative_colors: list[str],
+    light_pdb: Path | None = None,
+) -> dict:
     """Return the data needed to recreate the local PyMOL scene in WebGL.
 
     The PNG still uses every sigma level. The viewer draws one surface and
     slides its contour between ``viewer_sigma_min`` and ``viewer_sigma_max``.
+    ``light_pdb`` is the omit workflow's observed-dataset coordinates. The
+    viewer can draw that site in ball and stick; the map is unchanged.
     """
     levels = list(cfg["positive_levels"] if "positive_levels" in cfg else cfg["sigma_levels"])
     negative = cfg.get("negative_levels")
     sigma_min = float(cfg["viewer_sigma_min"])
     sigma_max = float(cfg["viewer_sigma_max"])
-    return {
+    scene = {
         "model": str(model_pdb),
         "model_ext": model_pdb.suffix.lstrip(".").lower() or "pdb",
         "map": str(fragment),
@@ -737,6 +782,10 @@ def _viewer_scene(*, model_pdb: Path, fragment: Path, cfg: dict, positive_colors
         "sigma_max": sigma_max,
         "sigma": initial_viewer_sigma(sigma_min, sigma_max, levels, negative),
     }
+    if light_pdb is not None:
+        scene["light_model"] = str(light_pdb)
+        scene["light_model_ext"] = light_pdb.suffix.lstrip(".").lower() or "pdb"
+    return scene
 
 
 def _result(caption, png_path, extended_map, fragment, pml_path, output_dir, extra=None, viewer=None) -> dict:

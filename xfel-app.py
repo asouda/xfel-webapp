@@ -93,7 +93,7 @@ WORKFLOWS = {
         "scan_label": "omit-model coordinates",
         "files": [
             ("dark_pdb", "Omit-model coordinates", "Single-conformation model the map is calculated from."),
-            ("light_pdb", "Light coordinates", "Coordinates of the dataset being compared. The figure itself uses the refined omit model."),
+            ("light_pdb", "Light coordinates", "Coordinates of the observed dataset. The map uses the omit model. The 3D viewer can draw this site in ball and stick."),
             ("light_sf", "Observed structure factors", "mmCIF with mean intensities I and SIGI, or Friedel intensities I(+) and I(-)."),
         ],
         "paths": {
@@ -439,6 +439,8 @@ def job_status(job_id: str):
             # the model. The viewer uses the same radius on the Coot fragment.
             if job.get("workflow") == "twofofc" and links.get("carve"):
                 viewer["carve"] = links["carve"]
+            if viewer.get("light_model"):
+                viewer["light_model_url"] = f"/api/jobs/{job_id}/viewer/light"
         public_result = {
             "caption": result["caption"],
             "output_dir": result["output_dir"],
@@ -508,15 +510,20 @@ def job_viewer_asset(job_id: str, asset: str):
     """Serve only the model and clipped map that belong to this finished job."""
     job = _get_job(job_id)
     scene = (job.get("result") or {}).get("viewer")
-    if not scene or asset not in {"model", "map"}:
+    if not scene or asset not in {"model", "map", "light"}:
         abort(404)
     if asset == "map":
         path = _viewer_map_file(job.get("result") or {}, _script_links(job.get("result") or {}))
+    elif asset == "light":
+        raw = scene.get("light_model")
+        if not raw:
+            abort(404)
+        path = Path(raw)
     else:
         path = Path(scene[asset])
     if not path.is_file():
         abort(404)
-    mimetype = "chemical/x-pdb" if asset == "model" else "application/octet-stream"
+    mimetype = "chemical/x-pdb" if asset in {"model", "light"} else "application/octet-stream"
     return send_file(path, mimetype=mimetype, conditional=True)
 
 

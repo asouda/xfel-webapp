@@ -14,7 +14,7 @@
       <li>Both structure-factor mmCIF files, and both validation coefficient files, are converted to MTZ with <code>cif2mtz</code>.</li>
       <li><code>refmac5</code> runs for zero cycles so the amplitudes sit in a consistent MTZ. The deposited atoms are not moved.</li>
       <li><code>cad</code> puts light amplitudes, dark amplitudes, and one phase column in a single file. The default phases are <code>PHWT</code> from the light validation 2Fo−Fc coefficients. You can switch to the dark validation file, or to phases from either zero-cycle REFMAC job.</li>
-      <li><code>scaleit</code> scales the light amplitudes onto the dark reference. <code>fft</code> transforms |F<sub>LIGHT</sub>| − |F<sub>DARK</sub>| with those phases, and <code>extends</code> pads the map around the light model.</li>
+      <li><code>scaleit</code> scales the light amplitudes onto the dark reference. <code>fft</code> transforms |F<sub>LIGHT</sub>| − |F<sub>DARK</sub>| with those phases. The map is then padded around the light model, repeating the unit cell. The sigma on that map stays the value from <code>fft</code>.</li>
       <li>Headless Coot clips a sphere around the site. PyMOL draws nested ±nσ isosurfaces, green through blue for positive density and red through magenta for negative density, and writes a PNG plus a <code>.pml</code> script.</li>
     </ol>
     {% elif spec.slug == 'refinement' %}
@@ -24,9 +24,10 @@
     <ol>
       <li>The observed mmCIF is converted to MTZ. <code>ctruncate</code> turns intensities <code>I, SIGI</code> into amplitudes, and <code>cad</code> copies the <code>FREE</code> flag onto those amplitudes.</li>
       <li><code>refmac5</code> refines the omit coordinates for the number of cycles you set. Zero cycles calculate the map without moving atoms. Loose site distances can be external restraints, or a widened <code>libcheck</code> monomer library. Site angles are always external restraints, in degrees.</li>
-      <li><code>fft</code> transforms <code>DELFWT</code> / <code>PHDELWT</code> between the resolution limits above. An optional finer grid resolution asks <code>fft</code> for the sampling of that higher resolution. Reciprocal-space points beyond the coefficients are absent from the MTZ and contribute zero amplitude, so the real-space grid is denser. <code>extends</code> pads the map around the refined model. When a section of that grid is larger than <code>extends</code> can store, <code>mapmask</code> applies the same border and the asymmetric-unit sigma is kept.</li>
+      <li><code>fft</code> transforms <code>DELFWT</code> / <code>PHDELWT</code> between the resolution limits above. An optional finer grid resolution asks <code>fft</code> for the sampling of that higher resolution. Reciprocal-space points beyond the coefficients are absent from the MTZ and contribute zero amplitude, so the real-space grid is denser. The map is then padded around the refined model. When the whole-cell grid is too large for <code>fft</code>, that same sum is evaluated on a cube centered on the site and wide enough for the clip radius. The sigma stays the full-cell value.</li>
       <li>Coot clips the site from that difference map. PyMOL draws the refined coordinates and the ±nσ surfaces, and saves the PNG and the <code>.pml</code> script beside the map.</li>
     </ol>
+    <p>The light coordinates stay out of that calculation. In the interactive viewer, <strong>Light site</strong> draws the same site from that file as ball and stick. Yellow, green, blue, and silver are the color choices.</p>
     {% else %}
     <p class="equation">ρ(r) ∝ Σ F<sub>WT</sub> exp(−ΔB (sinθ/λ)<sup>2</sup>) exp(iφ<sub>WT</sub>)</p>
     <p>This is not a difference map. <code>FWT</code> is already the weighted 2m|F<sub>o</sub>| − D|F<sub>c</sub>| amplitude from the wwPDB validation file, and <code>PHWT</code> is the model phase. Mesh that covers an atom is accounted-for density. A gap on an atom, or a blob with no atom, is the usual hint that the model and the data disagree. Levels of 1–2σ are the normal view; 3–5σ is for difference maps and will often leave this mesh empty.</p>
@@ -34,7 +35,7 @@
     <ol>
       <li>The structure-factor mmCIF and the validation coefficient mmCIF are converted to MTZ.</li>
       <li><code>fft</code> sharpens <code>FWT</code> with <code>SCALE F1 1 ΔB</code> and transforms it with <code>PHWT</code>. Negative ΔB boosts the high-resolution terms. The default −40 Å<sup>2</sup> is a sharpening of 40 Å<sup>2</sup>. ΔB = 0 leaves <code>FWT</code> unchanged.</li>
-      <li><code>extends</code> pads the map around the model. Coot exports a normal map fragment, not a difference map.</li>
+      <li>The map is padded around the model by repeating the unit cell. The sigma stays the value from <code>fft</code>. Coot exports a normal map fragment, not a difference map.</li>
       <li>PyMOL superimposes the site and neighbouring residues and draws one isosurface at each requested σ. The scene script is saved next to the extended map and the PNG.</li>
     </ol>
     {% endif %}
@@ -222,6 +223,16 @@
         <button type="button" class="pill" id="edit-label" aria-pressed="false" disabled>Add label</button>
         <button type="button" class="pill" id="edit-distance-labels" aria-pressed="false" disabled>Distance labels</button>
       </div>
+      <div class="viewer-light" id="viewer-light" hidden>
+        <button type="button" class="pill" id="light-site" aria-pressed="false" disabled>Light site</button>
+        <div class="viewer-style-group" role="group" aria-label="Light site color">
+          <button type="button" class="pill light-color" data-light-color="yellow" aria-pressed="true" disabled>Yellow</button>
+          <button type="button" class="pill light-color" data-light-color="green" aria-pressed="false" disabled>Green</button>
+          <button type="button" class="pill light-color" data-light-color="blue" aria-pressed="false" disabled>Blue</button>
+          <button type="button" class="pill light-color" data-light-color="silver" aria-pressed="false" disabled>Silver</button>
+        </div>
+        <p class="hint">Ball and stick of this site, including neighbouring residues, from the light coordinates. The omit model stays in element colors. Clicks still edit that model.</p>
+      </div>
       <div class="viewer-style" id="viewer-style">
         <div class="viewer-style-main">
           <div class="viewer-style-group" role="group" aria-label="Isosurface style">
@@ -295,5 +306,5 @@
 </script>
 <script src="{{ url_for('static', filename='vendor/ngl-2.5.0.js') }}?v=2"></script>
 <script src="{{ url_for('static', filename='js/sigma-color.js') }}?v=1"></script>
-<script src="{{ url_for('static', filename='js/workflow.js') }}?v=15"></script>
+<script src="{{ url_for('static', filename='js/workflow.js') }}?v=17"></script>
 {% endblock %}

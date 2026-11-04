@@ -31,6 +31,9 @@
   const surfaceSigmaNote = document.getElementById("viewer-sigma-note");
   const colorSigned = document.getElementById("color-signed");
   const colorTemperature = document.getElementById("color-temperature");
+  const viewerLight = document.getElementById("viewer-light");
+  const lightSiteButton = document.getElementById("light-site");
+  const lightColorButtons = Array.from(document.querySelectorAll("[data-light-color]"));
   const caption = document.getElementById("caption");
   const fileList = document.getElementById("file-list");
   const runButton = document.getElementById("run-btn");
@@ -44,6 +47,12 @@
   let resultShown = false;
   let structureComponent = null;
   let volumeComponent = null;
+  let lightComponent = null;
+  let lightRepresentation = null;
+  let lightAtomCount = 0;
+  let lightSiteDescription = "";
+  let showLightSite = false;
+  let lightColor = "yellow";
   let surfaceSelection = "";
   let carveRadius = 0;
   let surfaceStyle = "solid";
@@ -688,6 +697,36 @@
     return residues.join(" or ");
   }
 
+  function lightStatusText() {
+    if (!lightAtomCount) return `The light coordinates have no atoms in ${lightSiteDescription}.`;
+    if (showLightSite) return `Light site is ball and stick, colored ${lightColor}.`;
+    return `Light site is hidden. Its color is ${lightColor}.`;
+  }
+
+  function syncLightControls(available) {
+    if (!viewerLight) return;
+    viewerLight.hidden = !available;
+    if (lightSiteButton) {
+      lightSiteButton.disabled = !available;
+      lightSiteButton.setAttribute("aria-pressed", showLightSite ? "true" : "false");
+    }
+    lightColorButtons.forEach((button) => {
+      button.disabled = !available;
+      button.setAttribute("aria-pressed", button.dataset.lightColor === lightColor ? "true" : "false");
+    });
+  }
+
+  function applyLightAppearance() {
+    if (!lightRepresentation) return;
+    const show = showLightSite && lightAtomCount > 0;
+    // Hide the whole component while it is off. A deposited model is much
+    // larger than the site, and a visible component would pull the camera out.
+    if (lightComponent) lightComponent.setVisibility(show);
+    lightRepresentation.setColor(lightColor);
+    lightRepresentation.setVisibility(show);
+    if (stage) stage.viewer.requestRender();
+  }
+
   function modelPoints(structureComponent, selection) {
     const points = [];
     structureComponent.structure.eachAtom((atom) => {
@@ -1075,10 +1114,17 @@
     stage = null;
     structureComponent = null;
     volumeComponent = null;
+    lightComponent = null;
+    lightRepresentation = null;
+    lightAtomCount = 0;
+    lightSiteDescription = "";
+    showLightSite = false;
+    lightColor = "yellow";
     viewer.replaceChildren();
     if (viewerSave) viewerSave.disabled = true;
     syncSurfaceControls(false);
     syncSigmaControls(false);
+    syncLightControls(false);
   }
 
   async function loadViewer(scene) {
@@ -1121,6 +1167,35 @@
         aspectRatio: 2,
         scale: 2,
       });
+      if (scene.light_model_url) {
+        try {
+          lightComponent = await stage.loadFile(scene.light_model_url, {
+            ext: scene.light_model_ext || "pdb",
+            defaultRepresentation: false,
+          });
+        } catch (err) {
+          lightComponent = null;
+        }
+        if (token !== viewerToken) return;
+        if (lightComponent) {
+          const lightAtoms = lightComponent.structure.getAtomIndices(new NGL.Selection(structureSelection));
+          lightAtomCount = lightAtoms ? lightAtoms.length : 0;
+          const neighbours = (scene.extra_residues || []).map((residue) => `${residue.chain}/${residue.resi}`);
+          lightSiteDescription = `chain ${scene.site.chain} residue ${scene.site.resi}`;
+          if (neighbours.length) lightSiteDescription += ` and ${neighbours.join(", ")}`;
+          lightComponent.setVisibility(false);
+          lightRepresentation = lightComponent.addRepresentation("ball+stick", {
+            sele: structureSelection,
+            color: lightColor,
+            multipleBond: "off",
+            aspectRatio: 2,
+            scale: 2,
+            disablePicking: true,
+            visible: false,
+          });
+          syncLightControls(true);
+        }
+      }
       collectScriptDistances(structure, scene);
       stage.signals.clicked.add(onStageClick);
       const mounted = mountSigmaSurface();
@@ -1137,6 +1212,11 @@
       if (scene.map_file) notes.push(`Density is the Coot site fragment ${scene.map_file}.`);
       if ((scene.bonds || []).length || (scene.distances || []).length) {
         notes.push("Sticks and dashed distances follow the PyMOL script.");
+      }
+      if (scene.light_model_url && !lightComponent) {
+        notes.push("The light coordinates could not be loaded.");
+      } else if (lightComponent) {
+        notes.push("Light site draws that file in ball and stick.");
       }
       notes.push("Drag to rotate, scroll to zoom, and right-drag to pan. Save PNG keeps this orientation.");
       sceneNote = notes.join(" ");
@@ -1272,6 +1352,24 @@
   if (colorTemperature) {
     colorTemperature.addEventListener("click", () => setColorScale("temperature"));
   }
+  if (lightSiteButton) {
+    lightSiteButton.addEventListener("click", () => {
+      if (!lightRepresentation) return;
+      showLightSite = !showLightSite;
+      syncLightControls(true);
+      applyLightAppearance();
+      viewerStatus.textContent = lightStatusText();
+    });
+  }
+  lightColorButtons.forEach((button) => {
+    button.addEventListener("click", () => {
+      if (!lightRepresentation) return;
+      lightColor = button.dataset.lightColor;
+      syncLightControls(true);
+      applyLightAppearance();
+      viewerStatus.textContent = lightStatusText();
+    });
+  });
 
   window.addEventListener("resize", () => {
     if (stage) stage.handleResize();

@@ -1,4 +1,5 @@
 import gzip
+import struct
 import tempfile
 import unittest
 from io import BytesIO
@@ -12,6 +13,7 @@ from xfel_web.ccp4 import (
     delta_b_tag,
     fft_grid_resolution,
     grid_res_tag,
+    pad_map_around_model,
     pymol_scene_links,
     residue_conformers,
 )
@@ -161,6 +163,27 @@ class ParseTests(unittest.TestCase):
         self.assertEqual(scene["sigma_max"], 5)
         self.assertEqual(scene["sigma"], 3)
         self.assertEqual(scene["positive_levels"], [3, 4, 5])
+        self.assertNotIn("light_model", scene)
+        light = _viewer_scene(
+            model_pdb=Path("model.pdb"),
+            fragment=Path("fragment.map"),
+            cfg={
+                "site_chain": "A",
+                "site_resi": 416,
+                "extra_residues": [],
+                "positive_levels": [3.5],
+                "negative_levels": [3.5],
+                "contour_mode": "sigma",
+                "surface": "mesh",
+                "viewer_sigma_min": -5,
+                "viewer_sigma_max": 5,
+            },
+            positive_colors=["blue"],
+            negative_colors=["red"],
+            light_pdb=Path("/data/6w1v.cif"),
+        )
+        self.assertEqual(light["light_model"], "/data/6w1v.cif")
+        self.assertEqual(light["light_model_ext"], "cif")
 
     def test_gzip_inputs_are_decompressed_with_gunzip(self):
         plain = b"data_test\n_entry.id 9z35\n"
@@ -347,6 +370,93 @@ class TruncateColumnTests(unittest.TestCase):
             "LABIN FILE 2 E1=FREE\n"
             "END",
         )
+
+
+def _write_map(path, values, *, nxyz, starts, axes, cell, symops, arms):
+    """values is indexed [section, row, column] and matches axes (mapc, mapr, maps)."""
+    import numpy as np
+
+    ns, nr, nc = values.shape
+    header = bytearray(1024)
+    struct.pack_into("<10i", header, 0, nc, nr, ns, 2, starts[0], starts[1], starts[2], *nxyz)
+    struct.pack_into("<6f", header, 10 * 4, *cell)
+    struct.pack_into("<3i", header, 16 * 4, *axes)
+    sym = b"".join(op.encode("ascii").ljust(80) for op in symops)
+    struct.pack_into("<i", header, 23 * 4, len(sym))
+    header[52 * 4 : 52 * 4 + 4] = b"MAP "
+    header[53 * 4 : 53 * 4 + 4] = b"DA\x00\x00"
+    struct.pack_into("<f", header, 54 * 4, arms)
+    path.write_bytes(bytes(header) + sym + np.asarray(values, dtype="<f4").tobytes())
+
+
+class PadMapTests(unittest.TestCase):
+    def test_full_cell_wraps_and_keeps_fft_sigma(self):
+        import numpy as np
+
+        # Fast Y, medium X, slow Z, the axis order fft uses for these maps.
+        values = np.zeros((4, 4, 4), dtype=np.float32)
+        for z in range(4):
+            for x in range(4):
+                for y in range(4):
+                    values[z, x, y] = x + 10 * y + 100 * z
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "cell.ccp4"
+            dest = root / "padded.ccp4"
+            pdb = root / "model.pdb"
+            _write_map(
+                source,
+                values,
+                nxyz=(4, 4, 4),
+                starts=(0, 0, 0),
+                axes=(2, 1, 3),
+                cell=(10, 10, 10, 90, 90, 90),
+                symops=("X, Y, Z",),
+                arms=0.07091,
+            )
+            pdb.write_text(_pdb_line(1, "CA", -2.5, 2.5, 22.5, "C"))
+            pad_map_around_model(source, dest, pdb, 0.0)
+            raw = dest.read_bytes()
+            nc, nr, ns = struct.unpack_from("<3i", raw, 0)
+            ncstart, nrstart, nsstart = struct.unpack_from("<3i", raw, 4 * 4)
+            arms = struct.unpack_from("<f", raw, 54 * 4)[0]
+            self.assertEqual((nc, nr, ns), (1, 1, 1))
+            self.assertEqual((ncstart, nrstart, nsstart), (1, -1, 9))
+            self.assertAlmostEqual(arms, 0.07091, places=5)
+            nsymbt = struct.unpack_from("<i", raw, 23 * 4)[0]
+            value = struct.unpack_from("<f", raw, 1024 + nsymbt)[0]
+            self.assertEqual(value, 113.0)
+
+    def test_partial_cell_uses_symmetry(self):
+        import numpy as np
+
+        values = np.zeros((4, 4, 2), dtype=np.float32)
+        for z in range(4):
+            for y in range(4):
+                for x in range(2):
+                    values[z, y, x] = x + 10 * y + 100 * z
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "asu.ccp4"
+            dest = root / "padded.ccp4"
+            pdb = root / "model.pdb"
+            _write_map(
+                source,
+                values,
+                nxyz=(4, 4, 4),
+                starts=(0, 0, 0),
+                axes=(1, 2, 3),
+                cell=(8, 8, 8, 90, 90, 90),
+                symops=("X, Y, Z", "-X, Y, Z"),
+                arms=1.25,
+            )
+            pdb.write_text(_pdb_line(1, "CA", 6.0, 2.0, 2.0, "C"))
+            pad_map_around_model(source, dest, pdb, 0.0)
+            raw = dest.read_bytes()
+            nsymbt = struct.unpack_from("<i", raw, 23 * 4)[0]
+            value = struct.unpack_from("<f", raw, 1024 + nsymbt)[0]
+            self.assertEqual(value, 111.0)
+            self.assertAlmostEqual(struct.unpack_from("<f", raw, 54 * 4)[0], 1.25, places=5)
 
 
 if __name__ == "__main__":

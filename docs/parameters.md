@@ -16,7 +16,7 @@ Shared crystallographic meaning is on the [background](concepts.md) page. Each w
 | Low-resolution cutoff (Å) | Larger number. Ignored when the source is the structure-factor file |
 | High-resolution cutoff (Å) | Smaller number. Ignored when the source is the structure-factor file |
 | FFT grid resolution (Å) | Omit map only. Blank samples at the high-resolution limit. A smaller number extends the `fft` grid with zero amplitude |
-| Map border (Å) | `extends` padding around the model. Default 5 |
+| Map border (Å) | Padding around the model, in ångströms. Default 5 |
 | Phase source | Fo−Fo only. Default is the light validation file |
 | Sharpening ΔB (Å²) | 2mFo−DFc only. Default −40 |
 | REFMAC cycles | Omit map only. `0` does not move atoms |

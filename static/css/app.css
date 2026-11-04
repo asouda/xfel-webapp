@@ -257,6 +257,11 @@ figure img {
 .viewer-edit { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 10px; }
 .viewer-edit .pill { padding: 7px 12px; font-size: 13px; }
 .viewer-edit .pill[aria-pressed="true"] { background: white; color: #07080c; border-color: white; font-weight: 600; }
+.viewer-light { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0 0 10px; }
+.viewer-light[hidden] { display: none; }
+.viewer-light .pill { padding: 7px 12px; font-size: 13px; }
+.viewer-light .pill[aria-pressed="true"] { background: white; color: #07080c; border-color: white; font-weight: 600; }
+.viewer-light .hint { flex-basis: 100%; margin: 0; }
 .viewer-style,
 .viewer-stage { --viewer-side: 132px; --viewer-gap: 14px; }
 .viewer-style {

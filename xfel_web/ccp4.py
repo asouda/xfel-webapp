@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import os
 import re
 import shlex
@@ -18,8 +19,6 @@ CCP4_PROGRAMS = (
     "cad",
     "scaleit",
     "fft",
-    "extends",
-    "mapmask",
     "mtzdump",
     "ctruncate",
     "libcheck",
@@ -456,9 +455,8 @@ def residue_conformers(
 def copy_ccp4_header_statistics(source: Path, dest: Path) -> None:
     """Copy min, max, mean, and rms from one CCP4 map header onto another.
 
-    ``mapmask`` recomputes these on the box it writes. Sigma contours follow
-    the asymmetric-unit values already stored on the ``fft`` map, which
-    ``extends`` also keeps.
+    Sigma contours follow the asymmetric-unit values already stored on the
+    ``fft`` map, so a padded box keeps those header words.
     """
     src = source.read_bytes()[:1024]
     if len(src) < 1024:
@@ -523,6 +521,352 @@ def parse_scaleit_rfactor(log_path: Path) -> str | None:
     return None
 
 
+def _require_numpy():
+    try:
+        import numpy as np
+    except ImportError as exc:
+        raise RuntimeError(
+            "Padding a map around the model needs numpy. Install project dependencies with `uv sync`."
+        ) from exc
+    return np
+
+
+def _ccp4_endian(header: bytes) -> str:
+    stamp = header[53 * 4 : 53 * 4 + 4]
+    if stamp[:2] == b"\x11\x11":
+        return ">"
+    return "<"
+
+
+def _symop_component(expr: str) -> tuple[list[float], float]:
+    text = expr.replace(" ", "").upper().replace("-", "+-")
+    if text.startswith("+"):
+        text = text[1:]
+    coeff = [0.0, 0.0, 0.0]
+    trans = 0.0
+    for term in text.split("+"):
+        if not term:
+            continue
+        axis = None
+        for name, index in (("X", 0), ("Y", 1), ("Z", 2)):
+            if name in term:
+                axis = index
+                term = term.replace(name, "")
+                break
+        if term in ("", "+"):
+            magnitude = 1.0
+        elif term == "-":
+            magnitude = -1.0
+        elif "/" in term:
+            num, den = term.split("/", 1)
+            magnitude = float(num) / float(den)
+        else:
+            magnitude = float(term)
+        if axis is None:
+            trans += magnitude
+        else:
+            coeff[axis] += magnitude
+    return coeff, trans
+
+
+def _parse_symop(text: str):
+    np = _require_numpy()
+    parts = [part.strip() for part in text.split(",")]
+    if len(parts) != 3:
+        raise ValueError(f"Unrecognised symmetry operator {text!r}")
+    matrix = np.zeros((3, 3), dtype=np.float64)
+    trans = np.zeros(3, dtype=np.float64)
+    for row, part in enumerate(parts):
+        coeff, shift = _symop_component(part)
+        matrix[row] = coeff
+        trans[row] = shift
+    return matrix, trans
+
+
+def _symmetry_operators(blob: bytes):
+    np = _require_numpy()
+    ops = []
+    for start in range(0, len(blob) - 79, 80):
+        text = blob[start : start + 80].decode("ascii", "replace").strip("\x00 ").strip()
+        if "," not in text:
+            continue
+        ops.append(_parse_symop(text))
+    if not ops:
+        ops.append((np.eye(3), np.zeros(3)))
+    return ops
+
+
+def _atom_orthogonal(path: Path):
+    np = _require_numpy()
+    coords = []
+    for line in path.read_text(errors="replace").splitlines():
+        if not line.startswith(("ATOM", "HETATM")) or len(line) < 54:
+            continue
+        try:
+            coords.append((float(line[30:38]), float(line[38:46]), float(line[46:54])))
+        except ValueError:
+            continue
+    if not coords:
+        raise ValueError(f"No ATOM/HETATM records in {path.name}")
+    return np.asarray(coords, dtype=np.float64)
+
+
+def _fractional_matrix(cell: tuple[float, float, float, float, float, float]):
+    """Cartesian column vectors to fractional coordinates, CCP4 convention."""
+    np = _require_numpy()
+    a, b, c, alpha, beta, gamma = cell
+    al, be, ga = np.deg2rad([alpha, beta, gamma])
+    ca, cb, cg = np.cos(al), np.cos(be), np.cos(ga)
+    sg = np.sin(ga)
+    if abs(float(sg)) < 1e-8:
+        raise ValueError(f"Cell angle gamma is {gamma}, which cannot be orthogonalised")
+    volume = math.sqrt(max(0.0, 1.0 - ca * ca - cb * cb - cg * cg + 2.0 * ca * cb * cg))
+    orthogonal = np.array(
+        [
+            [a, b * cg, c * cb],
+            [0.0, b * sg, c * (ca - cb * cg) / sg],
+            [0.0, 0.0, c * volume / sg],
+        ],
+        dtype=np.float64,
+    )
+    return np.linalg.inv(orthogonal)
+
+
+def _grid_limits(coords, cell, nxyz: tuple[int, int, int], border: float) -> tuple[list[int], list[int]]:
+    np = _require_numpy()
+    low = coords.min(axis=0) - border
+    high = coords.max(axis=0) + border
+    corners = np.array(
+        [[x, y, z] for x in (low[0], high[0]) for y in (low[1], high[1]) for z in (low[2], high[2])],
+        dtype=np.float64,
+    )
+    fractional = corners @ _fractional_matrix(cell).T
+    fmin = fractional.min(axis=0)
+    fmax = fractional.max(axis=0)
+    starts: list[int] = []
+    stops: list[int] = []
+    for axis, n in enumerate(nxyz):
+        i0 = math.floor(float(fmin[axis]) * n + 1e-4)
+        i1 = math.ceil(float(fmax[axis]) * n - 1e-4)
+        if i1 < i0:
+            i1 = i0
+        starts.append(i0)
+        stops.append(i1)
+    return starts, stops
+
+
+def _read_ccp4_map(path: Path) -> dict:
+    header = path.read_bytes()[:1024]
+    if len(header) < 1024:
+        raise ValueError(f"{path} has no CCP4 map header")
+    endian = _ccp4_endian(header)
+    ints = struct.unpack(endian + "256i", header)
+    floats = struct.unpack(endian + "256f", header)
+    mode = ints[3]
+    if mode != 2:
+        raise ValueError(f"{path.name} is CCP4 mode {mode}; only 32-bit float maps can be padded")
+    nsymbt = ints[23]
+    if nsymbt < 0:
+        raise ValueError(f"{path.name} has a negative symmetry-record length")
+    sym = path.read_bytes()[1024 : 1024 + nsymbt]
+    if len(sym) != nsymbt:
+        raise ValueError(f"{path.name} is missing its symmetry records")
+    mapc, mapr, maps = ints[16:19]
+    if sorted((mapc, mapr, maps)) != [1, 2, 3]:
+        raise ValueError(f"{path.name} has axis order {mapc}, {mapr}, {maps}")
+    return {
+        "path": path,
+        "endian": endian,
+        "header": bytearray(header),
+        "nc": ints[0],
+        "nr": ints[1],
+        "ns": ints[2],
+        "ncstart": ints[4],
+        "nrstart": ints[5],
+        "nsstart": ints[6],
+        "nxyz": (ints[7], ints[8], ints[9]),
+        "cell": tuple(floats[10:16]),
+        "mapc": mapc,
+        "mapr": mapr,
+        "maps": maps,
+        "nsymbt": nsymbt,
+        "sym": sym,
+        "offset": 1024 + nsymbt,
+    }
+
+
+def _crystal_layout(info: dict) -> tuple[list[int], list[int]]:
+    start = [0, 0, 0]
+    count = [0, 0, 0]
+    start[info["mapc"] - 1] = info["ncstart"]
+    start[info["mapr"] - 1] = info["nrstart"]
+    start[info["maps"] - 1] = info["nsstart"]
+    count[info["mapc"] - 1] = info["nc"]
+    count[info["mapr"] - 1] = info["nr"]
+    count[info["maps"] - 1] = info["ns"]
+    return start, count
+
+
+def pad_map_around_model(
+    map_in: Path,
+    map_out: Path,
+    xyz_in: Path,
+    border: float,
+    emit=None,
+) -> str:
+    """Write a CCP4 map that covers ``xyz_in`` plus ``border`` angstroms.
+
+    ``fft`` stores a whole unit cell for these workflows. Grid points outside
+    that cell are periodic copies. A map that stores only part of the cell is
+    expanded with the symmetry operators in its header. The min, max, mean,
+    and rms on the new header are the input map's values.
+    """
+    np = _require_numpy()
+    info = _read_ccp4_map(map_in)
+    coords = _atom_orthogonal(xyz_in)
+    starts, stops = _grid_limits(coords, info["cell"], info["nxyz"], border)
+    out_start = starts
+    out_count = [stop - start + 1 for start, stop in zip(starts, stops)]
+    stored_start, stored_count = _crystal_layout(info)
+    nxyz = info["nxyz"]
+    full_cell = all(stored_count[axis] == nxyz[axis] for axis in range(3))
+    lines = [
+        f"Padding {map_in.name} around {xyz_in.name} by {border:.1f} A.",
+        "Unit-cell sampling (X Y Z): "
+        + " ".join(str(n) for n in nxyz)
+        + f"  cell {info['cell'][0]:.3f} {info['cell'][1]:.3f} {info['cell'][2]:.3f}",
+        "Output grid (X Y Z): "
+        + " ".join(f"{out_start[axis]}:{out_start[axis] + out_count[axis] - 1}" for axis in range(3)),
+        (
+            "The stored map is one unit cell, so points outside it are periodic copies."
+            if full_cell
+            else "The stored map is part of the cell, so symmetry operators fill the rest."
+        ),
+        "Sigma on the padded map is the rms already stored on the input map.",
+    ]
+
+    def say(message: str) -> None:
+        lines.append(message)
+        if emit is not None:
+            emit(message)
+
+    for line in lines:
+        if emit is not None:
+            emit(line)
+
+    header = bytearray(info["header"])
+    endian = info["endian"]
+    axis_words = (
+        (info["mapc"] - 1, 0, 4),
+        (info["mapr"] - 1, 1, 5),
+        (info["maps"] - 1, 2, 6),
+    )
+    for crystal, count_word, start_word in axis_words:
+        struct.pack_into(endian + "i", header, count_word * 4, out_count[crystal])
+        struct.pack_into(endian + "i", header, start_word * 4, out_start[crystal])
+    data_count = out_count[0] * out_count[1] * out_count[2]
+    with map_out.open("wb") as handle:
+        handle.write(header)
+        handle.write(info["sym"])
+        handle.truncate(info["offset"] + data_count * 4)
+
+    shape = (
+        out_count[info["maps"] - 1],
+        out_count[info["mapr"] - 1],
+        out_count[info["mapc"] - 1],
+    )
+    data = np.memmap(
+        info["path"],
+        dtype=endian + "f4",
+        mode="r",
+        offset=info["offset"],
+        shape=(info["ns"], info["nr"], info["nc"]),
+    )
+    out = np.memmap(map_out, dtype=endian + "f4", mode="r+", offset=info["offset"], shape=shape)
+    slow = info["maps"] - 1
+    medium = info["mapr"] - 1
+    fast = info["mapc"] - 1
+    sections = shape[0]
+    try:
+        if full_cell:
+            row_file = np.mod(
+                np.arange(out_start[medium], out_start[medium] + out_count[medium], dtype=np.int64)
+                - stored_start[medium],
+                nxyz[medium],
+            )
+            col_file = np.mod(
+                np.arange(out_start[fast], out_start[fast] + out_count[fast], dtype=np.int64)
+                - stored_start[fast],
+                nxyz[fast],
+            )
+            for section in range(sections):
+                crystal = out_start[slow] + section
+                src = (crystal - stored_start[slow]) % nxyz[slow]
+                plane = np.asarray(data[src])
+                out[section] = plane[np.ix_(row_file, col_file)]
+                if section % 100 == 0:
+                    say(f"… padded section {section + 1} of {sections}")
+        else:
+            ops = []
+            for matrix, trans in _symmetry_operators(info["sym"]):
+                ops.append((np.linalg.inv(matrix), trans * np.asarray(nxyz, dtype=np.float64)))
+            row_crystal = np.arange(out_start[medium], out_start[medium] + out_count[medium], dtype=np.float64)
+            col_crystal = np.arange(out_start[fast], out_start[fast] + out_count[fast], dtype=np.float64)
+            row_grid, col_grid = np.meshgrid(row_crystal, col_crystal, indexing="ij")
+            for section in range(sections):
+                idx = np.empty(row_grid.shape + (3,), dtype=np.float64)
+                idx[..., medium] = row_grid
+                idx[..., fast] = col_grid
+                idx[..., slow] = out_start[slow] + section
+                values = np.empty(row_grid.shape, dtype=np.float32)
+                remaining = np.ones(row_grid.shape, dtype=bool)
+                for inverse, shift in ops:
+                    src = (idx - shift) @ inverse.T
+                    nearest = np.rint(src)
+                    on_grid = np.max(np.abs(src - nearest), axis=-1) < 1e-3
+                    folded = np.mod(nearest.astype(np.int64), np.asarray(nxyz, dtype=np.int64))
+                    inside = on_grid
+                    file_index = np.empty_like(folded)
+                    for axis in range(3):
+                        file_index[..., axis] = folded[..., axis] - stored_start[axis]
+                        inside = inside & (file_index[..., axis] >= 0) & (file_index[..., axis] < stored_count[axis])
+                    use = inside & remaining
+                    if not np.any(use):
+                        continue
+                    values[use] = data[
+                        file_index[..., slow][use],
+                        file_index[..., medium][use],
+                        file_index[..., fast][use],
+                    ]
+                    remaining[use] = False
+                    if not np.any(remaining):
+                        break
+                if np.any(remaining):
+                    raise RuntimeError(
+                        "Some grid points around the model are not in the stored map "
+                        "and no symmetry operator places them there."
+                    )
+                out[section] = values
+                if section % 100 == 0:
+                    say(f"… padded section {section + 1} of {sections}")
+        out.flush()
+    finally:
+        del out
+        del data
+    say(f"Wrote {map_out.name} ({map_out.stat().st_size / 1e6:.1f} MB).")
+    return "\n".join(lines) + "\n"
+
+
+class CommandFailed(RuntimeError):
+    """A CCP4 or shell command exited non-zero. ``lines`` is its full output."""
+
+    def __init__(self, returncode: int, lines: list[str]):
+        tail = "\n".join(lines[-40:]) if lines else "(no output)"
+        super().__init__(f"Command failed (exit {returncode}):\n{tail}")
+        self.returncode = returncode
+        self.lines = lines
+
+
 class Ccp4Session:
     """One calculation. Shell snippets run after ``ccp4.setup-sh``."""
 
@@ -548,7 +892,13 @@ class Ccp4Session:
             f"cd {shlex.quote(str(self.output_dir))}\n"
             f"{script}\n"
         )
-        lines = self._stream(["/bin/bash", "-c", wrapped], cwd=self.output_dir, env=None)
+        try:
+            lines = self._stream(["/bin/bash", "-c", wrapped], cwd=self.output_dir, env=None)
+        except CommandFailed as exc:
+            text = "\n".join(exc.lines)
+            if log_path is not None:
+                log_path.write_text(text + ("\n" if text else ""))
+            raise
         text = "\n".join(lines)
         if log_path is not None:
             log_path.write_text(text + ("\n" if text else ""))
@@ -592,8 +942,7 @@ class Ccp4Session:
                 next_heartbeat = now + 20
         thread.join()
         if proc.returncode != 0:
-            tail = "\n".join(lines[-40:]) if lines else "(no output)"
-            raise RuntimeError(f"Command failed (exit {proc.returncode}):\n{tail}")
+            raise CommandFailed(proc.returncode, lines)
         return lines
 
     def extend_around_model(
@@ -606,35 +955,22 @@ class Ccp4Session:
     ) -> None:
         """Pad ``map_in`` so it covers ``xyz_in`` plus ``border`` angstroms.
 
-        ``extends`` stores one map section in a fixed array of 200,000 points.
-        A fine grid can make the model box larger than that. ``mapmask`` has
-        no such limit and applies the same border; the asymmetric-unit sigma
-        is then copied back onto the padded map.
+        The padded values are periodic copies of the unit cell, or symmetry
+        copies when the file stores only part of the cell. ``mapmask`` cannot
+        do this once a section exceeds its compiled limit. The sigma written
+        on the padded map is the rms already stored on ``map_in``.
         """
-        keywords = f"BORDER {border:.1f}\nEND"
+        partial = map_out.with_name(map_out.name + ".partial")
+        if partial.is_file():
+            partial.unlink()
+        self.emit(f"→ pad map around the model  ({log_path.name})")
         try:
-            self.run_ccp4(
-                "extends",
-                [("mapin", map_in), ("mapout", map_out), ("xyzin", xyz_in)],
-                keywords,
-                log_path,
-            )
-            return
-        except RuntimeError as exc:
-            if "arrays too small" not in str(exc):
-                raise
-        self.emit(
-            "extends cannot store a section of this map. "
-            "mapmask will apply the same border and keep the asymmetric-unit sigma."
-        )
-        map_out.unlink(missing_ok=True)
-        self.run_ccp4(
-            "mapmask",
-            [("mapin", map_in), ("mapout", map_out), ("xyzin", xyz_in)],
-            f"BORDER {border:.1f}\nEXTEND XTAL\nEND",
-            log_path.with_name(log_path.stem + "_mapmask.log"),
-        )
-        copy_ccp4_header_statistics(map_in, map_out)
+            text = pad_map_around_model(map_in, partial, xyz_in, border, emit=self.emit)
+        except Exception:
+            partial.unlink(missing_ok=True)
+            raise
+        partial.replace(map_out)
+        log_path.write_text(text)
 
     def run_ccp4(self, program: str, kv: list[tuple[str, Path | str]], keywords: str, log_path: Path) -> str:
         parts = [program]

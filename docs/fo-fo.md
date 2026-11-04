@@ -25,9 +25,9 @@ The same programs work for any other isomorphous pair. Change the six files, the
 
 ### How the Fig. 1a map is calculated
 
-The programs run in this order: `cif2mtz`, `refmac5` for zero cycles, `mtzdump`, `cad`, `scaleit`, `fft`, `extends`, Coot, and PyMOL.
+The programs run in this order: `cif2mtz`, `refmac5` for zero cycles, `mtzdump`, `cad`, `scaleit`, `fft`, Coot, and PyMOL. The map is then padded around the model in the app.
 
-**1. Check the programs and the files.** CCP4 is expected at `/Applications/ccp4-9` unless the form names another suite prefix. The job sources `bin/ccp4.setup-sh` and looks for `cif2mtz`, `refmac5`, `cad`, `scaleit`, `fft`, `extends`, and `mtzdump`. Coot comes from that CCP4 tree. PyMOL must be on `PATH`. An empty or missing file stops the job before a map is written.
+**1. Check the programs and the files.** CCP4 is expected at `/Applications/ccp4-9` unless the form names another suite prefix. The job sources `bin/ccp4.setup-sh` and looks for `cif2mtz`, `refmac5`, `cad`, `scaleit`, `fft`, and `mtzdump`. Coot comes from that CCP4 tree. PyMOL must be on `PATH`. An empty or missing file stops the job before a map is written.
 
 **2. Inspect the light model and choose the site.** The **List hetero residues** button reads the light coordinates, skips water and common lipids and pigments, and lists chain, residue number, residue name, atom count, and occupancy. For this example, confirm `OEY` A416, then keep that chain and residue. The job checks that the residue exists, lists its atom names, and prints the centroid Coot will centre on.
 
@@ -87,7 +87,7 @@ LABIN F1=F_LIGHT SIG1=SIGF_LIGHT F2=F_DARK SIG2=SIGF_DARK PHI=PHI_REF
 
 `F1` minus `F2`, with phase `PHI`, is the signed difference Fourier. Positive density is stronger in `6w1v`. Negative density is stronger in `6w1o`. The map at this stage covers the asymmetric unit.
 
-**9. Cover the light model.** `extends` repeats the asymmetric unit by the space-group symmetry and pads the grid by the map border (default 5 Å) around the light coordinates, writing `*_extended.ccp4`. Later steps use that extended map.
+**9. Cover the light model.** The app repeats the unit cell and pads the grid by the map border (default 5 Å) around the light coordinates, writing `*_extended.ccp4`. The sigma stays the value from `fft`. Later steps use that extended map.
 
 **10. Export the site fragment.** Headless Coot loads the extended map as a difference map and the light coordinates, centres on the centroid of `OEY` A416 (and on any extra copies listed on the form), and writes a sphere of radius equal to the clip radius (default 10 Å). The σ value passed into the Coot script affects only the contour drawn inside that Coot session. The voxels in the `.map` file are the clipped map.
 
