@@ -23,7 +23,7 @@
     <h2>How it is calculated</h2>
     <ol>
       <li>The observed mmCIF is converted to MTZ. <code>ctruncate</code> turns intensities <code>I, SIGI</code> into amplitudes, and <code>cad</code> copies the <code>FREE</code> flag onto those amplitudes.</li>
-      <li><code>refmac5</code> refines the omit coordinates for the number of cycles you set. Zero cycles calculate the map without moving atoms. Loose site distances can be external restraints, or a widened <code>libcheck</code> monomer library. Site angles are always external restraints, in degrees.</li>
+      <li><code>refmac5</code> refines the omit coordinates for the number of cycles you set. Zero cycles calculate the map without moving atoms. Loose site distances can be external restraints, or a widened <code>libcheck</code> monomer library. A custom dictionary is read only when the cycle count is greater than zero. Site angles are always external restraints, in degrees.</li>
       <li><code>fft</code> transforms <code>DELFWT</code> / <code>PHDELWT</code> between the resolution limits above. An optional finer grid resolution asks <code>fft</code> for the sampling of that higher resolution. Reciprocal-space points beyond the coefficients are absent from the MTZ and contribute zero amplitude, so the real-space grid is denser. The map is then padded around the refined model. When the whole-cell grid is too large for <code>fft</code>, that same sum is evaluated on a cube centered on the map center and wide enough for the clip radius. The sigma stays the full-cell value.</li>
       <li>Coot clips the site from that difference map. The clip is centered on the site residue, or on a Cartesian point when you set one. PyMOL draws the refined coordinates and the ±nσ surfaces, saves the PNG and the <code>.pml</code> script beside the map, and centers that image on the same point as the clipped map.</li>
     </ol>
@@ -57,6 +57,18 @@
         <input id="path_{{ key }}" name="path_{{ key }}" value="{{ paths.get(key, '') }}" placeholder="/path/to/file" autocomplete="off">
       </fieldset>
       {% endfor %}
+      {% if spec.slug == 'refinement' %}
+      <fieldset class="wide">
+        <legend>Custom dictionary</legend>
+        <p class="hint">Optional monomer library from <code>libcheck</code> or AceDRG. REFMAC reads it only when the cycle count is greater than zero. With zero cycles this file is ignored. If distance widening is also on, the widened library is read after this file, so its site distances replace the matching residue in this dictionary.</p>
+        <label class="file-btn">
+          <input type="file" name="file_custom_dictionary" accept=".cif,.lib,.gz">
+          <span>Choose file</span>
+        </label>
+        <label class="path-label" for="path_custom_dictionary">or path</label>
+        <input id="path_custom_dictionary" name="path_custom_dictionary" value="" placeholder="/path/to/dictionary.cif" autocomplete="off">
+      </fieldset>
+      {% endif %}
     </div>
 
     <h2>Parameters</h2>

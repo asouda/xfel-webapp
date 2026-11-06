@@ -26,6 +26,7 @@ Shared crystallographic meaning is on the [background](concepts.md) page. Each w
 | Angle sigma (degrees) | Default 25 |
 | Widen distances in a libcheck library | Omit map. Default off |
 | Monomer names for libcheck | Empty means the site residue plus other hetero residues |
+| Custom dictionary | Omit map. Optional `libcheck` or AceDRG CIF. Read only when REFMAC cycles is greater than zero |
 | Chain, residue | Centre of the clip and of the figure |
 | Label | File-name tag such as `OEC` or `heme` |
 | Additional copies | Further chain and residue pairs. The form always includes the main site |
@@ -106,6 +107,8 @@ O5 CA1 O1 90 25
 ```
 
 A missing distance or angle keeps the value in the starting model. A missing sigma uses the form-wide sigma. External distances replace the dictionary bond for that atom pair in `SITE_COPIES` only. A `libcheck` library changes every copy of the residue type. Angles are external in both modes.
+
+A custom dictionary is an extra `libin` file. It is passed only when the cycle count is greater than zero. Zero cycles keeps the CCP4 monomer library. When distance widening is also on, the widened library is the later `libin`, so it replaces the same residue type from the custom file.
 
 The form defaults are the O5 distances to Mn1, Mn3, Mn4, and Ca, and these angles:
 

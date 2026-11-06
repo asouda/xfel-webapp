@@ -87,7 +87,7 @@ MAKE HOUT Y
 
 `MAKE HYDR` / `MAKE HOUT` generate riding hydrogens and write them to the coordinate file. Zero cycles still produce a coordinate file.
 
-External restraints, when the lists on the form are non-empty, are written to a text file and placed in front of those keywords. The default distance pairs are Mn1–O5, Mn3–O5, Mn4–O5, and Ca1–O5, with a sigma of 0.50 Å. The default angles are the angles at O5 among Mn3, Mn4, and Ca, the O5–Ca–O1 angle, and the angles at Mn3 and Mn4 that include O5, with a sigma of 25°. With the library option off, the distances are external restraints and replace the dictionary bond for those atom pairs in the listed copies only. With the library option on, `libcheck` widens those distances in a monomer library that applies to every copy of that residue type, and the angles stay external. An empty distance or angle list adds no restraint of that kind.
+External restraints, when the lists on the form are non-empty, are written to a text file and placed in front of those keywords. The default distance pairs are Mn1–O5, Mn3–O5, Mn4–O5, and Ca1–O5, with a sigma of 0.50 Å. The default angles are the angles at O5 among Mn3, Mn4, and Ca, the O5–Ca–O1 angle, and the angles at Mn3 and Mn4 that include O5, with a sigma of 25°. With the library option off, the distances are external restraints and replace the dictionary bond for those atom pairs in the listed copies only. With the library option on, `libcheck` widens those distances in a monomer library that applies to every copy of that residue type, and the angles stay external. An empty distance or angle list adds no restraint of that kind. A custom dictionary, from `libcheck` or AceDRG, is a further `libin` and is read only when the cycle count is greater than zero. The widened library, when requested, is read after it.
 
 The MTZ is checked for `FP` (or `F`, `FOBS`), `FC_ALL` (or `FC`), `DELFWT`, and `PHDELWT`. The transform uses the weighted coefficient.
 
@@ -166,6 +166,7 @@ The omit model’s own structure-factor file is not an input. \(F_o\) comes from
 | Distance restraints and distance sigma | Which site distances are loose, and how loose |
 | Angle restraints and angle sigma | External angles, sigma in degrees |
 | Widen distances in a libcheck library | External distances on the listed copies, or a widened monomer library for every copy of that residue type |
+| Custom dictionary | Extra monomer library, used only when the cycle count is greater than zero |
 | Resolution source and the two cutoffs | Shell of the `DELFWT` coefficients |
 | FFT grid resolution | Blank uses that shell. A smaller number samples the finer grid, with zero amplitude beyond the coefficients |
 | PNG sigma levels | The worked example uses a single \(3.5\sigma\) mesh |

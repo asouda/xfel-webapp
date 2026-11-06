@@ -435,6 +435,15 @@ def run_refinement(cfg: dict, emit) -> dict:
             ("xyzin", files["dark_pdb"]),
             ("xyzout", refined_pdb),
         ]
+        custom_dictionary = cfg.get("custom_dictionary")
+        if custom_dictionary and int(cfg["refmac_ncyc"]) > 0:
+            refmac_files.append(("libin", custom_dictionary))
+            session.emit(f"Custom dictionary: {custom_dictionary}")
+        elif custom_dictionary:
+            session.emit(
+                "Custom dictionary was not used. REFMAC cycles is 0, "
+                "so the CCP4 monomer library is used."
+            )
         site_missing = explicit_center is not None and not atoms
 
         def _restraints(label: str, build) -> str:

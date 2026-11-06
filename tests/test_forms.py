@@ -404,6 +404,38 @@ class RefinementFormTests(unittest.TestCase):
             cfg = parse_job("refinement", self._form(root, fft_dmin="1.20"), {}, root)
         self.assertEqual(cfg["fft_dmin"], 1.2)
 
+    def test_custom_dictionary_is_optional(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cfg = parse_job("refinement", self._form(root), {}, root)
+        self.assertIsNone(cfg["custom_dictionary"])
+
+    def test_custom_dictionary_path_is_kept_for_any_cycle_count(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            library = root / "ligand.cif"
+            library.write_text("data_comp_list\n")
+            cfg = parse_job(
+                "refinement",
+                self._form(root, refmac_ncyc="0", path_custom_dictionary=str(library)),
+                {},
+                root,
+            )
+        self.assertEqual(cfg["custom_dictionary"], library.resolve())
+        self.assertEqual(cfg["refmac_ncyc"], 0)
+
+    def test_missing_custom_dictionary_is_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with self.assertRaises(FormError) as caught:
+                parse_job(
+                    "refinement",
+                    self._form(root, path_custom_dictionary=str(root / "missing.cif")),
+                    {},
+                    root,
+                )
+        self.assertIn("custom dictionary", str(caught.exception))
+
     def test_coarser_grid_resolution_is_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

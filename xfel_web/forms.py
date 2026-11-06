@@ -295,6 +295,18 @@ def decompress_gzip(path: Path, dest_dir: Path, label: str, dest_name: str | Non
     return dest
 
 
+def resolve_optional_input_file(form, files, key: str, label: str, output_dir: Path, project: Path) -> Path | None:
+    """A file the form may leave blank. A filled path or upload must exist."""
+    upload = files.get(f"file_{key}")
+    has_upload = isinstance(upload, FileStorage) and bool(upload.filename)
+    if not has_upload and not _text(form, f"path_{key}"):
+        return None
+    path = resolve_input_file(form, files, key, label, output_dir, project)
+    if not path.is_file() or path.stat().st_size == 0:
+        raise FormError(f"{label} was not found or is empty.")
+    return path
+
+
 def resolve_input_file(form, files, key: str, label: str, output_dir: Path, project: Path) -> Path:
     folder = output_dir / "inputs"
     upload = files.get(f"file_{key}")
@@ -431,6 +443,9 @@ def parse_job(workflow: str, form, files, project: Path) -> dict:
         except ValueError as exc:
             raise FormError(str(exc)) from exc
         center_mode, center_xyz = _map_center(form)
+        custom_dictionary = resolve_optional_input_file(
+            form, files, "custom_dictionary", "custom dictionary", output_dir, project
+        )
         cfg.update(
             {
                 "dark_id": _identifier(form, "dark_id", "Omit-model name"),
@@ -445,6 +460,7 @@ def parse_job(workflow: str, form, files, project: Path) -> dict:
                 "angle_sigma": _float(form, "angle_sigma", "Angle sigma"),
                 "use_libcheck": _flag(form, "use_libcheck"),
                 "lib_monomers": parse_monomers(_text(form, "lib_monomers")),
+                "custom_dictionary": custom_dictionary,
                 "positive_levels": positive,
                 "negative_levels": negative,
                 "files": {
