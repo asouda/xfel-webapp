@@ -50,7 +50,7 @@ Shared crystallographic meaning is on the [background](concepts.md) page. Each w
 The structure-factor file is the default resolution source on every form.
 
 - Fo−Fo uses the common shell of the two structure-factor MTZs: the poorer low-resolution limit and the poorer high-resolution limit.
-- The omit map uses the observed structure-factor MTZ, after `cif2mtz` and before `ctruncate`. Its FFT grid resolution, when set to a smaller number of ångströms, samples that shell on the grid of the finer limit. Reciprocal-space points beyond the coefficients contribute zero amplitude. A number coarser than the coefficient limit is rejected. The extended-map name gains `_grid` and that limit, so the finer map is not reused in place of the ordinary one.
+- The omit map uses the observed reflection MTZ. An mmCIF is converted with `cif2mtz` first; an MTZ supplied on the form is that file. Resolution is read before `ctruncate`. Its FFT grid resolution, when set to a smaller number of ångströms, samples that shell on the grid of the finer limit. Reciprocal-space points beyond the coefficients contribute zero amplitude. A number coarser than the coefficient limit is rejected. The extended-map name gains `_grid` and that limit, so the finer map is not reused in place of the ordinary one.
 - The 2mFo−DFc map uses the structure-factor MTZ as the cutoff. The coefficients that are transformed are `FWT` / `PHWT`, and the log warns if the high-resolution cutoff is finer than the `FWT` file.
 
 Explicit resolution requires the low-resolution cutoff to be larger than the high-resolution cutoff, and both to be positive. The explicit numbers stored on the forms, used only in that mode, are 20.0–2.10 Å (Fo−Fo), 30.0–1.89 Å (omit map), and 30.0–2.09 Å (2mFo−DFc).

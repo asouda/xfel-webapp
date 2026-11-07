@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import shutil
 from pathlib import Path
 
 from xfel_web.ccp4 import (
@@ -79,8 +80,28 @@ def _cif2mtz(session: Ccp4Session, pdb_id: str, cif_path: Path, mtz_path: Path, 
     )
 
 
+def is_reflection_mtz(path: Path) -> bool:
+    """True when the observed-reflection input is already an MTZ."""
+    return path.name.lower().endswith(".mtz")
+
+
+def install_reflection_mtz(source: Path, dest: Path) -> None:
+    """Copy a supplied reflection MTZ into the job directory."""
+    if source.resolve() == dest.resolve():
+        return
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(source, dest)
+
+
 _MEAN_INTENSITIES = ("I", "SIGI")
 _FRIEDEL_INTENSITIES = ("I(+)", "SIGI(+)", "I(-)", "SIGI(-)")
+_AMPLITUDE_PAIRS = (
+    ("F", "SIGF"),
+    ("FP", "SIGFP"),
+    ("FOBS", "SIGFOBS"),
+    ("FMEAN", "SIGFMEAN"),
+)
+_FREE_LABELS = ("FREE", "FREER", "FREERFLAG", "FREER_FLAG")
 
 
 def _labels_by_name(labels: list[str]) -> dict[str, str]:
@@ -110,23 +131,64 @@ def intensity_truncate_args(labels: list[str]) -> str:
     )
 
 
-def amplitude_cad_keywords(labels: list[str]) -> tuple[str, str, str]:
-    """Mean amplitudes from ctruncate, and the cad script that adds FREE.
+def free_column(labels: list[str]) -> str | None:
+    """FREE, or a FreeR_flag-style column, in the CCP4 convention REFMAC reads."""
+    found = _labels_by_name(labels)
+    for name in _FREE_LABELS:
+        if name in found:
+            return found[name]
+    return None
+
+
+def has_observed_intensities(labels: list[str]) -> bool:
+    """Mean intensities, or a complete Friedel pair, as deposited structure factors store them."""
+    found = _labels_by_name(labels)
+    if all(name in found for name in _MEAN_INTENSITIES):
+        return True
+    return all(name in found for name in _FRIEDEL_INTENSITIES)
+
+
+def amplitude_pair(labels: list[str]) -> tuple[str, str] | None:
+    """First recognized mean-amplitude pair. ``F`` is preferred to ``FP`` when both exist."""
+    found = _labels_by_name(labels)
+    for amplitude, sigma in _AMPLITUDE_PAIRS:
+        if amplitude in found and sigma in found:
+            return found[amplitude], found[sigma]
+    return None
+
+
+def refmac_amplitude_cad_keywords(amplitude: str, sigma: str, free: str | None) -> str | None:
+    """Rename amplitudes to ``F`` and ``SIGF``, keeping a free-set column from the same file.
+
+    ``None`` means the columns are already ``F`` and ``SIGF``, so REFMAC can read the file unchanged.
+    """
+    if amplitude.upper() == "F" and sigma.upper() == "SIGF":
+        return None
+    labin = f"LABIN FILE 1 E1={amplitude} E2={sigma}"
+    labout = "LABOUT FILE 1 E1=F E2=SIGF"
+    if free:
+        labin += f" E3={free}"
+        labout += " E3=FREE"
+    return f"{labin}\n{labout}\nEND"
+
+
+def amplitude_cad_keywords(labels: list[str], free: str = "FREE") -> tuple[str, str, str]:
+    """Mean amplitudes from ctruncate, and the cad script that adds the free-set column.
 
     ``-colin`` writes ``F`` and ``SIGF``. ``-colano`` writes ``FMEAN`` and
     ``SIGFMEAN`` alongside Friedel amplitudes. REFMAC reads ``F`` and ``SIGF``,
     so a Friedel run renames the mean pair and leaves the anomalous columns
-    out of the file REFMAC sees.
+    out of the file REFMAC sees. ``free`` is the column name in the intensity MTZ.
     """
     found = _labels_by_name(labels)
     if "F" in found and "SIGF" in found:
-        return found["F"], found["SIGF"], "LABIN FILE 1 ALL\nLABIN FILE 2 E1=FREE\nEND"
+        return found["F"], found["SIGF"], f"LABIN FILE 1 ALL\nLABIN FILE 2 E1={free}\nEND"
     if "FMEAN" in found and "SIGFMEAN" in found:
         amplitude, sigma = found["FMEAN"], found["SIGFMEAN"]
         keywords = (
             f"LABIN FILE 1 E1={amplitude} E2={sigma}\n"
             "LABOUT FILE 1 E1=F E2=SIGF\n"
-            "LABIN FILE 2 E1=FREE\n"
+            f"LABIN FILE 2 E1={free}\n"
             "END"
         )
         return amplitude, sigma, keywords
@@ -134,6 +196,32 @@ def amplitude_cad_keywords(labels: list[str]) -> tuple[str, str, str]:
         "ctruncate did not write mean amplitudes F and SIGF, or FMEAN and SIGFMEAN. "
         f"MTZ labels were: {labels}"
     )
+
+
+def _adopt_refmac_amplitudes(
+    session: Ccp4Session,
+    source: Path,
+    amplitude: str,
+    sigma: str,
+    free: str | None,
+    dest: Path,
+    log_name: str,
+) -> Path:
+    """Return an MTZ whose mean amplitudes are ``F`` and ``SIGF``.
+
+    A file that already uses those names is returned unchanged, including its ``FREE``
+    column when that column is present. Any other recognized pair is renamed with ``cad``.
+    """
+    keywords = refmac_amplitude_cad_keywords(amplitude, sigma, free)
+    if keywords is None:
+        return source
+    session.run_ccp4(
+        "cad",
+        [("hklin1", source), ("hklout", dest)],
+        keywords,
+        session.output_dir / log_name,
+    )
+    return dest
 
 
 def run_fofo(cfg: dict, emit) -> dict:
@@ -339,7 +427,9 @@ def run_refinement(cfg: dict, emit) -> dict:
     session.emit(f"PyMOL     : {session.pymol}")
     for key, path in files.items():
         session.emit(f"  {key:18s} {path}  ({path.stat().st_size / 1e6:.1f} MB)")
-    tools = "cif2mtz ctruncate cad refmac5 fft mtzdump"
+    tools = "ctruncate cad refmac5 fft mtzdump"
+    if not is_reflection_mtz(files["light_sf"]):
+        tools = "cif2mtz " + tools
     if cfg["use_libcheck"]:
         tools += " libcheck"
     session.run_bash(f'echo "CCP4=$CCP4"; which {tools}')
@@ -377,7 +467,11 @@ def run_refinement(cfg: dict, emit) -> dict:
     out = session.output_dir
     light_sf_mtz = out / f"{light_id}-sf.mtz"
     if (not light_sf_mtz.is_file()) or cfg["recompute_map"]:
-        _cif2mtz(session, light_id, files["light_sf"], light_sf_mtz, "sf")
+        if is_reflection_mtz(files["light_sf"]):
+            session.emit(f"Using the supplied reflection MTZ: {files['light_sf']}")
+            install_reflection_mtz(files["light_sf"], light_sf_mtz)
+        else:
+            _cif2mtz(session, light_id, files["light_sf"], light_sf_mtz, "sf")
     low, high = _prepare_resolution(
         session, cfg["resolution_source"], cfg["lowres"], cfg["dmin"], [(light_id, light_sf_mtz)]
     )
@@ -404,33 +498,65 @@ def run_refinement(cfg: dict, emit) -> dict:
     else:
         light_sf_truncate = out / f"{light_id}-sf-truncate.mtz"
         light_sf_truncate_free = out / f"{light_id}-sf-truncate-free.mtz"
-        truncate_log = out / f"{light_id}_ctruncate_sf.log"
-        column_args = intensity_truncate_args(session.mtz_labels(light_sf_mtz))
-        session.emit(f"→ ctruncate  ({truncate_log.name})")
-        session.emit(f"ctruncate {column_args}")
-        session.run_bash(
-            (
-                f"ctruncate -hklin { _q(light_sf_mtz) } "
-                f"-hklout { _q(light_sf_truncate) } "
-                f"{column_args}"
-            ),
-            truncate_log,
-        )
-        amplitude, sigma, cad_keywords = amplitude_cad_keywords(session.mtz_labels(light_sf_truncate))
-        session.emit(f"Amplitude columns for REFMAC: {amplitude}, {sigma}")
-        session.run_ccp4(
-            "cad",
-            [
-                ("hklin1", light_sf_truncate),
-                ("hklin2", light_sf_mtz),
-                ("hklout", light_sf_truncate_free),
-            ],
-            cad_keywords,
-            out / f"{light_id}_cad_free.log",
-        )
+        observed_labels = session.mtz_labels(light_sf_mtz)
+        free = free_column(observed_labels)
+        if has_observed_intensities(observed_labels):
+            truncate_log = out / f"{light_id}_ctruncate_sf.log"
+            column_args = intensity_truncate_args(observed_labels)
+            session.emit(f"→ ctruncate  ({truncate_log.name})")
+            session.emit(f"ctruncate {column_args}")
+            session.run_bash(
+                (
+                    f"ctruncate -hklin { _q(light_sf_mtz) } "
+                    f"-hklout { _q(light_sf_truncate) } "
+                    f"{column_args}"
+                ),
+                truncate_log,
+            )
+            amplitude, sigma, cad_keywords = amplitude_cad_keywords(
+                session.mtz_labels(light_sf_truncate), free or "FREE"
+            )
+            session.emit(f"Amplitude columns for REFMAC: {amplitude}, {sigma}")
+            if free:
+                session.run_ccp4(
+                    "cad",
+                    [
+                        ("hklin1", light_sf_truncate),
+                        ("hklin2", light_sf_mtz),
+                        ("hklout", light_sf_truncate_free),
+                    ],
+                    cad_keywords,
+                    out / f"{light_id}_cad_free.log",
+                )
+                refmac_hklin = light_sf_truncate_free
+            else:
+                session.emit("No FREE column was found, so every reflection is used.")
+                refmac_hklin = _adopt_refmac_amplitudes(
+                    session, light_sf_truncate, amplitude, sigma, None, light_sf_truncate_free, f"{light_id}_cad_free.log"
+                )
+        else:
+            pair = amplitude_pair(observed_labels)
+            if pair is None:
+                raise ValueError(
+                    "Observed reflections have neither intensities (I, SIGI or a complete Friedel pair) "
+                    "nor amplitudes (F/SIGF, FP/SIGFP, FOBS/SIGFOBS, or FMEAN/SIGFMEAN). "
+                    f"MTZ labels were: {observed_labels}"
+                )
+            amplitude, sigma = pair
+            session.emit(
+                "The reflection MTZ already contains amplitudes, so ctruncate is not run."
+            )
+            session.emit(f"Amplitude columns for REFMAC: {amplitude}, {sigma}")
+            if free:
+                session.emit(f"Free-set column: {free}")
+            else:
+                session.emit("No FREE column was found, so every reflection is used.")
+            refmac_hklin = _adopt_refmac_amplitudes(
+                session, light_sf_mtz, amplitude, sigma, free, light_sf_truncate_free, f"{light_id}_cad_free.log"
+            )
         omit_mtz = out / f"{dark_id}_vs_{light_id}.mtz"
         refmac_files = [
-            ("hklin", light_sf_truncate_free),
+            ("hklin", refmac_hklin),
             ("hklout", omit_mtz),
             ("xyzin", files["dark_pdb"]),
             ("xyzout", refined_pdb),

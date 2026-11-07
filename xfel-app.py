@@ -88,13 +88,13 @@ WORKFLOWS = {
         "title": "Omit-model mFo−DFc map",
         "kicker": "XFEL_refinement.ipynb",
         "card": "Weighted difference map of an omit model against one set of observed amplitudes, with optional REFMAC.",
-        "how": "ctruncate converts deposited intensities to amplitudes. REFMAC writes the weighted DELFWT coefficient for the number of cycles you set. fft transforms it, optionally on the finer grid of a higher resolution with the extra terms set to zero, then Coot and PyMOL produce the figure.",
+        "how": "An mmCIF of intensities is converted with cif2mtz. An MTZ of reflections can be supplied instead. ctruncate converts intensities to amplitudes when the file does not already contain them. REFMAC writes the weighted DELFWT coefficient for the number of cycles you set. fft transforms it, optionally on the finer grid of a higher resolution with the extra terms set to zero, then Coot and PyMOL produce the figure.",
         "scan_key": "dark_pdb",
         "scan_label": "omit-model coordinates",
         "files": [
             ("dark_pdb", "Omit-model coordinates", "Single-conformation model the map is calculated from."),
             ("light_pdb", "Light coordinates", "Coordinates of the observed dataset. The map uses the omit model. The 3D viewer can draw this site in ball and stick."),
-            ("light_sf", "Observed structure factors", "mmCIF with mean intensities I and SIGI, or Friedel intensities I(+) and I(-)."),
+            ("light_sf", "Observed structure factors", "mmCIF or MTZ. An mmCIF of intensities is converted with cif2mtz. An MTZ is used as the reflection file. Intensities still go through ctruncate. Amplitudes named F/SIGF, FP/SIGFP, FOBS/SIGFOBS, or FMEAN/SIGFMEAN are passed to REFMAC. A FREE column, when present, is the free set."),
         ],
         "paths": {
             "dark_pdb": _existing("data/6w1v_omitO6_single_confB.pdb"),

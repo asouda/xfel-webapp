@@ -22,7 +22,7 @@
     <p>REFMAC stores that coefficient as <code>DELFWT</code> / <code>PHDELWT</code>. Positive density is present in the observations and missing from the omit model. Negative density is where the model places electrons the data do not support. No second dataset is scaled in.</p>
     <h2>How it is calculated</h2>
     <ol>
-      <li>The observed mmCIF is converted to MTZ. <code>ctruncate</code> turns intensities <code>I, SIGI</code> into amplitudes, and <code>cad</code> copies the <code>FREE</code> flag onto those amplitudes.</li>
+      <li>An observed mmCIF is converted to MTZ with <code>cif2mtz</code>. An MTZ entered for the reflections is used as that file. <code>ctruncate</code> turns intensities <code>I, SIGI</code> into amplitudes, and <code>cad</code> copies the <code>FREE</code> flag onto those amplitudes. An MTZ that already contains amplitudes skips <code>ctruncate</code>.</li>
       <li><code>refmac5</code> refines the omit coordinates for the number of cycles you set. Zero cycles calculate the map without moving atoms. Loose site distances can be external restraints, or a widened <code>libcheck</code> monomer library. A custom dictionary is read only when the cycle count is greater than zero. Site angles are always external restraints, in degrees.</li>
       <li><code>fft</code> transforms <code>DELFWT</code> / <code>PHDELWT</code> between the resolution limits above. An optional finer grid resolution asks <code>fft</code> for the sampling of that higher resolution. Reciprocal-space points beyond the coefficients are absent from the MTZ and contribute zero amplitude, so the real-space grid is denser. The map is then padded around the refined model. When the whole-cell grid is too large for <code>fft</code>, that same sum is evaluated on a cube centered on the map center and wide enough for the clip radius. The sigma stays the full-cell value.</li>
       <li>Coot clips the site from that difference map. The clip is centered on the site residue, or on a Cartesian point when you set one. PyMOL draws the refined coordinates and the ±nσ surfaces, saves the PNG and the <code>.pml</code> script beside the map, and centers that image on the same point as the clipped map.</li>
@@ -50,7 +50,7 @@
         <legend>{{ label }}</legend>
         <p class="hint">{{ hint }}</p>
         <label class="file-btn">
-          <input type="file" name="file_{{ key }}" accept=".pdb,.cif,.ent,.gz">
+          <input type="file" name="file_{{ key }}" accept="{% if spec.slug == 'refinement' and key == 'light_sf' %}.cif,.mtz,.gz{% else %}.pdb,.cif,.ent,.gz{% endif %}">
           <span>Choose file</span>
         </label>
         <label class="path-label" for="path_{{ key }}">or path</label>

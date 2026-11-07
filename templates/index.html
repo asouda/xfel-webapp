@@ -57,7 +57,7 @@ python app.py</code></pre>
         <h3>Input files</h3>
         <p>Coordinates, structure-factor mmCIF, and validation <span class="nowrap">2Fo−Fc</span> coefficients come from the <a href="https://www.rcsb.org" target="_blank" rel="noreferrer">RCSB PDB</a>. Validation coefficients are also at</p>
         <pre><code>https://files.rcsb.org/pub/pdb/validation_reports/xx/{pdbid}/{pdbid}_validation_2fo-fc_map_coef.cif.gz</code></pre>
-        <p>The omit-model workflow expects deposited intensities (<code>I</code>, <code>SIGI</code>) and a <code>FREE</code> flag, which is how 6w1v is distributed. <code>ctruncate</code> converts those intensities to amplitudes.</p>
+        <p>The omit-model workflow expects deposited intensities (<code>I</code>, <code>SIGI</code>) and a <code>FREE</code> flag, which is how 6w1v is distributed. <code>ctruncate</code> converts those intensities to amplitudes. The same field also accepts an MTZ of reflections. Amplitudes already in that file are used without <code>ctruncate</code>.</p>
       </li>
     </ol>
 

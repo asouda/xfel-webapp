@@ -34,8 +34,14 @@ from xfel_web.forms import (
 from xfel_web.pipelines import (
     _viewer_scene,
     amplitude_cad_keywords,
+    amplitude_pair,
+    free_column,
+    has_observed_intensities,
     initial_viewer_sigma,
+    install_reflection_mtz,
     intensity_truncate_args,
+    is_reflection_mtz,
+    refmac_amplitude_cad_keywords,
 )
 from xfel_web.restraints import external_angle_keywords, external_distance_keywords
 
@@ -424,6 +430,27 @@ class RefinementFormTests(unittest.TestCase):
         self.assertEqual(cfg["custom_dictionary"], library.resolve())
         self.assertEqual(cfg["refmac_ncyc"], 0)
 
+    def test_reflection_mtz_path_is_kept(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            mtz = root / "obs.mtz"
+            mtz.write_bytes(b"MTZ ")
+            cfg = parse_job("refinement", self._form(root, path_light_sf=str(mtz)), {}, root)
+        self.assertTrue(is_reflection_mtz(cfg["files"]["light_sf"]))
+        self.assertEqual(cfg["files"]["light_sf"], mtz.resolve())
+
+    def test_gzipped_reflection_mtz_is_decompressed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "obs.mtz.gz"
+            with gzip.open(source, "wb") as handle:
+                handle.write(b"MTZ ")
+            cfg = parse_job("refinement", self._form(root, path_light_sf=str(source)), {}, root)
+            stored = cfg["files"]["light_sf"]
+            self.assertTrue(is_reflection_mtz(stored))
+            self.assertEqual(stored.read_bytes(), b"MTZ ")
+            self.assertEqual(stored.parent.name, "inputs")
+
     def test_missing_custom_dictionary_is_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -470,6 +497,43 @@ class TruncateColumnTests(unittest.TestCase):
         amplitude, sigma, keywords = amplitude_cad_keywords(["F", "SIGF", "I", "SIGI"])
         self.assertEqual((amplitude, sigma), ("F", "SIGF"))
         self.assertEqual(keywords, "LABIN FILE 1 ALL\nLABIN FILE 2 E1=FREE\nEND")
+
+    def test_free_column_accepts_the_ccp4_names(self):
+        self.assertEqual(free_column(["H", "K", "L", "FREE", "I"]), "FREE")
+        self.assertEqual(free_column(["FreeR_flag", "F", "SIGF"]), "FreeR_flag")
+        self.assertIsNone(free_column(["H", "K", "L", "I", "SIGI"]))
+
+    def test_intensities_are_preferred_when_both_layouts_exist(self):
+        labels = ["I", "SIGI", "F", "SIGF", "FREE"]
+        self.assertTrue(has_observed_intensities(labels))
+        self.assertEqual(amplitude_pair(labels), ("F", "SIGF"))
+
+    def test_amplitude_pair_prefers_f_over_fp(self):
+        self.assertEqual(amplitude_pair(["FP", "SIGFP", "F", "SIGF"]), ("F", "SIGF"))
+        self.assertEqual(amplitude_pair(["FOBS", "SIGFOBS"]), ("FOBS", "SIGFOBS"))
+        self.assertIsNone(amplitude_pair(["I", "SIGI"]))
+
+    def test_refmac_cad_leaves_f_sigf_unchanged(self):
+        self.assertIsNone(refmac_amplitude_cad_keywords("F", "SIGF", "FREE"))
+
+    def test_refmac_cad_renames_fp_and_keeps_the_free_column(self):
+        self.assertEqual(
+            refmac_amplitude_cad_keywords("FP", "SIGFP", "FREER_FLAG"),
+            "LABIN FILE 1 E1=FP E2=SIGFP E3=FREER_FLAG\n"
+            "LABOUT FILE 1 E1=F E2=SIGF E3=FREE\n"
+            "END",
+        )
+
+    def test_supplied_mtz_is_copied_into_the_job_directory(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "reflections.mtz"
+            source.write_bytes(b"MTZ ")
+            dest = root / "job" / "obs-sf.mtz"
+            install_reflection_mtz(source, dest)
+            self.assertEqual(dest.read_bytes(), b"MTZ ")
+            install_reflection_mtz(dest, dest)
+            self.assertEqual(dest.read_bytes(), b"MTZ ")
 
     def test_friedel_amplitudes_are_renamed_to_mean_columns(self):
         amplitude, sigma, keywords = amplitude_cad_keywords(

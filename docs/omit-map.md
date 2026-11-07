@@ -13,7 +13,7 @@ Fig. 2a and Fig. 2b of Wang, Armstrong, and Batista, [Proc. Natl. Acad. Sci. U.S
 | Role | What the form needs | Download |
 | --- | --- | --- |
 | Omit coordinates | `6w1v_omitO6_single_confA.pdb`. O6 is absent. This is the model REFMAC reads, and the figure is drawn on the coordinates REFMAC writes. | [6w1v_omitO6_single_confA.pdb](https://github.com/asouda/xfel-webapp/raw/main/data/6w1v/6w1v_omitO6_single_confA.pdb) |
-| Observed structure factors | `6w1v-sf.cif`. Intensities of the 2F, 200 ms dataset. \(F_o\) comes from this file. | [6w1v-sf.cif.gz](https://github.com/asouda/xfel-webapp/raw/main/data/6w1v/6w1v-sf.cif.gz) |
+| Observed structure factors | `6w1v-sf.cif`, or an MTZ of the same reflections. Intensities of the 2F, 200 ms dataset. \(F_o\) comes from this file. | [6w1v-sf.cif.gz](https://github.com/asouda/xfel-webapp/raw/main/data/6w1v/6w1v-sf.cif.gz) |
 | Light coordinates | The deposited `6w1v` model, used as the dataset’s coordinate file on the form. | [bundle 1](https://github.com/asouda/xfel-webapp/raw/main/data/6w1v/6w1v-pdb-bundle1.pdb), [bundle 2](https://github.com/asouda/xfel-webapp/raw/main/data/6w1v/6w1v-pdb-bundle2.pdb) |
 
 The structure-factor file in the repository is gzip-compressed. Point the form at the `.gz` file; a name ending in `.gz` is decompressed with `gunzip`. The deposited `6w1v` coordinates are stored as two PDB bundles because the entry exceeds one classic PDB file. Bundle 1 contains the cluster.
@@ -30,7 +30,7 @@ The programs run in this order: `cif2mtz`, `mtzdump`, `ctruncate`, `cad`, `refma
 
 **2. Inspect the omit model and choose the site.** **List hetero residues** reads `6w1v_omitO6_single_confA.pdb`. Select `OEX` A415. The job checks that chain and residue, prints the atom names, and prints the centroid of the clip.
 
-**3. Convert the observed mmCIF.** `cif2mtz` writes `6w1v-sf.mtz`. The columns at this stage are still the deposited intensities. For this dataset those are `_refln.intensity_meas` and `_refln.intensity_sigma`, stored in the MTZ as `I` and `SIGI`.
+**3. Convert the observed mmCIF, or use an MTZ.** `cif2mtz` writes `6w1v-sf.mtz`. The columns at this stage are still the deposited intensities. For this dataset those are `_refln.intensity_meas` and `_refln.intensity_sigma`, stored in the MTZ as `I` and `SIGI`. An MTZ supplied on the form is copied to that file and `cif2mtz` is not run. Intensities in it still follow the next steps. Amplitudes already named `F`/`SIGF`, `FP`/`SIGFP`, `FOBS`/`SIGFOBS`, or `FMEAN`/`SIGFMEAN` skip `ctruncate`. A `FREE` column is the free set; without one, every reflection is used.
 
 **4. Choose the resolution shell.** With the resolution source set to the structure-factor file, `mtzdump` sets the low- and high-resolution cutoffs from `6w1v-sf.mtz`. With an explicit shell, the two numbers on the form are used. The explicit pair stored for this workflow is 30.0–1.89 Å, which matches the high-resolution limit recorded for the `6w1v` intensities. That shell is the range of `DELFWT` coefficients. Leave the FFT grid resolution blank to sample the map on the grid for this shell.
 
@@ -153,7 +153,7 @@ The point of an omit map is to keep the feature of interest out of \(F_c\), so t
 | Role | Form field | Required for the map |
 | --- | --- | --- |
 | Omit coordinates | Omit-model coordinates | Yes. This is the model REFMAC reads. |
-| Observed structure factors | Observed structure factors | Yes. |
+| Observed structure factors | Observed structure factors, mmCIF or MTZ | Yes. |
 | Light coordinates | Light coordinates | Yes, as the coordinate file of the dataset being compared. The figure is drawn on the REFMAC output. |
 
 The omit model’s own structure-factor file is not an input. \(F_o\) comes from the observed dataset. The two name fields are labels in the output files. They do not have to be PDB codes.
