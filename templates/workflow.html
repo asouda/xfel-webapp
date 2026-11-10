@@ -28,6 +28,18 @@
       <li>Coot clips the site from that difference map. The clip is centered on the site residue, or on a Cartesian point when you set one. PyMOL draws the refined coordinates and the ±nσ surfaces, saves the PNG and the <code>.pml</code> script beside the map, and centers that image on the same point as the clipped map.</li>
     </ol>
     <p>The light coordinates stay out of that calculation. In the interactive viewer, <strong>Light site</strong> draws the same site from that file as ball and stick. Yellow, green, blue, silver, and Name are the color choices. Name colors each atom by its element, the same scheme as the omit model.</p>
+    {% elif spec.slug == 'reconstruct' %}
+    <p class="equation">Δρ(r) ∝ Σ (m|F<sub>o</sub>| − D|F<sub>c</sub>|) exp(iφ<sub>c</sub>)</p>
+    <p>The starting omit model is rebuilt one heavy atom at a time. Each iteration calculates the omit-model mFo−DFc map. The highest peak of the clipped map is matched to the nearest heavy atom that is present in the reference model and absent from the omit model, and that atom’s PDB record is added at the Cartesian coordinates of the peak. Hydrogens are not candidates.</p>
+    <h2>How it is calculated</h2>
+    <ol>
+      <li>The omit-map workflow calculates the clipped mFo−DFc map of the current omit model. REFMAC runs for the number of cycles on the form. Zero cycles leave the atoms where they are. A custom dictionary is read only when the cycle count is greater than zero. When external harmonic restraints are on, each atom added in an earlier iteration is held at the coordinates written into the omit model. The default sigma is 0.1 Å, and the restraints are used only when the cycle count is greater than zero.</li>
+      <li>When the map-check interval is a positive integer, the calculation pauses after that many iterations. The 3D viewer shows the current residual map and the current omit model. <strong>Continue iterations</strong> resumes the search. An interval of 0 shows only the finished model and its residual map.</li>
+      <li>The peak is the strongest voxel that is a local maximum, using the neighborhood search from xfel-gaussian. When the spline maximum is on, the point moves to the spline maximum inside that neighborhood. The default neighborhood is 3 and the default spline order is 3.</li>
+      <li>The x, y, and z density profiles through that point, from −2 Å to +2 Å, are written in the iteration directory. The nearest missing heavy atom in the reference model is identified. A distance beyond 1 Å is a warning. A distance beyond 3 Å stops the reconstruction without adding that atom.</li>
+      <li>The reference atom’s PDB record is inserted into the omit model with the Cartesian coordinates of the peak. The atom name, residue, and chain stay those of the reference atom. The loop repeats until the requested number of atoms has been added, or until it stops. The viewer then shows the reconstructed model and the residual map of that model. Bonds are drawn wherever two displayed atoms are close enough to be bonded.</li>
+    </ol>
+    <p>Logs, maps, and the density profiles of each iteration are written in <code>r-iteration-01</code>, <code>r-iteration-02</code>, and so on, inside the output directory. <strong>Reference site</strong> in the viewer draws the reference model in ball and stick.</p>
     {% else %}
     <p class="equation">ρ(r) ∝ Σ F<sub>WT</sub> exp(−ΔB (sinθ/λ)<sup>2</sup>) exp(iφ<sub>WT</sub>)</p>
     <p>This is not a difference map. <code>FWT</code> is already the weighted 2m|F<sub>o</sub>| − D|F<sub>c</sub>| amplitude from the wwPDB validation file, and <code>PHWT</code> is the model phase. Mesh that covers an atom is accounted-for density. A gap on an atom, or a blob with no atom, is the usual hint that the model and the data disagree. Levels of 1–2σ are the normal view; 3–5σ is for difference maps and will often leave this mesh empty.</p>
@@ -50,7 +62,7 @@
         <legend>{{ label }}</legend>
         <p class="hint">{{ hint }}</p>
         <label class="file-btn">
-          <input type="file" name="file_{{ key }}" accept="{% if spec.slug == 'refinement' and key == 'light_sf' %}.cif,.mtz,.gz{% else %}.pdb,.cif,.ent,.gz{% endif %}">
+          <input type="file" name="file_{{ key }}" accept="{% if key == 'light_sf' and spec.slug in ['refinement', 'reconstruct'] %}.cif,.mtz,.gz{% elif spec.slug == 'reconstruct' %}.pdb,.ent,.gz{% else %}.pdb,.cif,.ent,.gz{% endif %}">
           <span>Choose file</span>
         </label>
         <label class="path-label" for="path_{{ key }}">or path</label>
@@ -70,6 +82,14 @@
       </fieldset>
       {% endif %}
     </div>
+    {% if spec.slug == 'reconstruct' %}
+    <div class="fields">
+      <label>Number of atoms to reconstruct
+        <input name="n_atoms" type="number" min="1" step="1" value="{{ defaults.n_atoms }}" required>
+        <span class="hint">How many missing heavy atoms to add, one per iteration.</span>
+      </label>
+    </div>
+    {% endif %}
 
     <h2>Parameters</h2>
     <div class="fields">
@@ -77,10 +97,10 @@
       <label>Structure name<input name="pdb_id" value="{{ defaults.pdb_id }}" required></label>
       <label>Sharpening ΔB (Å²)<input name="delta_b" type="number" step="any" value="{{ defaults.delta_b }}" required></label>
       {% else %}
-      <label>{% if spec.slug == 'refinement' %}Omit-model name{% else %}Dark name{% endif %}
+      <label>{% if spec.slug in ['refinement', 'reconstruct'] %}Omit-model name{% else %}Dark name{% endif %}
         <input name="dark_id" value="{{ defaults.dark_id }}" required>
       </label>
-      <label>{% if spec.slug == 'refinement' %}Observed-data name{% else %}Light name{% endif %}
+      <label>{% if spec.slug in ['refinement', 'reconstruct'] %}Observed-data name{% else %}Light name{% endif %}
         <input name="light_id" value="{{ defaults.light_id }}" required>
       </label>
       {% endif %}
@@ -105,15 +125,15 @@
       </label>
       <label>Low-resolution cutoff (Å)<input name="lowres" type="number" step="any" value="{{ defaults.lowres }}"></label>
       <label>High-resolution cutoff (Å)<input name="dmin" type="number" step="any" value="{{ defaults.dmin }}"></label>
-      {% if spec.slug == 'refinement' %}
-      <label class="wide">FFT grid resolution (Å)
+      {% if spec.slug in ['refinement', 'reconstruct'] %}
+      <label class="wide">FFT grid resolution for a final map (Å)
         <input name="fft_dmin" type="number" step="any" placeholder="blank = resolution limit above">
         <span class="hint">Leave blank to sample the map at the high-resolution limit selected above. A smaller number extends reciprocal space to that resolution. The added points are not in the observed data, so they enter the transform with zero amplitude and the real-space grid becomes denser. A much smaller number produces a much larger map.</span>
       </label>
       {% endif %}
       <label>Map border (Å)<input name="map_border" type="number" step="any" value="{{ defaults.map_border }}"></label>
 
-      {% if spec.slug == 'refinement' %}
+      {% if spec.slug in ['refinement', 'reconstruct'] %}
       <label>REFMAC cycles<input name="refmac_ncyc" type="number" min="0" step="1" value="{{ defaults.refmac_ncyc }}"></label>
       <label>Distance sigma (Å)<input name="distance_sigma" type="number" step="any" value="{{ defaults.distance_sigma }}"></label>
       <label>Angle sigma (degrees)<input name="angle_sigma" type="number" step="any" value="{{ defaults.angle_sigma }}"></label>
@@ -129,6 +149,32 @@
         <textarea name="angle_restraints">{{ defaults.angle_restraints }}</textarea>
         <span class="hint">The middle atom is the vertex: <code>MN3 O5 MN4</code>, optionally followed by the angle and sigma in degrees.</span>
       </label>
+      {% if spec.slug == 'reconstruct' %}
+      <label class="check"><input type="checkbox" name="harmonic_added" id="harmonic-added"> External harmonic restraints on added atoms</label>
+      <label>Harmonic sigma (Å)
+        <input name="harmonic_sigma" id="harmonic-sigma" type="number" step="any" min="0" value="{{ defaults.harmonic_sigma }}">
+        <span class="hint">REFMAC holds each atom added in an earlier iteration at the coordinates in the omit model. Used only when the cycle count is greater than zero. The default sigma is 0.1 Å.</span>
+      </label>
+      <fieldset class="wide">
+        <legend>Custom dictionary</legend>
+        <p class="hint">Optional monomer library from <code>libcheck</code> or AceDRG. REFMAC reads it only when the cycle count is greater than zero. With zero cycles this file is ignored. If distance widening is also on, the widened library is read after this file, so its site distances replace the matching residue in this dictionary.</p>
+        <label class="file-btn">
+          <input type="file" name="file_custom_dictionary" accept=".cif,.lib,.gz">
+          <span>Choose file</span>
+        </label>
+        <label class="path-label" for="path_custom_dictionary">or path</label>
+        <input id="path_custom_dictionary" name="path_custom_dictionary" value="" placeholder="/path/to/dictionary.cif" autocomplete="off">
+      </fieldset>
+      <label>Neighborhood size
+        <input name="neighborhood_size" type="number" min="1" step="2" value="{{ defaults.neighborhood_size }}">
+        <span class="hint">Odd integer. The peak is the strongest voxel that is a maximum inside a cube of this side. The default, 3, is the xfel-gaussian setting.</span>
+      </label>
+      <label class="check"><input type="checkbox" name="spline_seed"> Place the peak on a spline maximum</label>
+      <label>Spline order
+        <input name="spline_order" type="number" min="0" max="5" step="1" value="{{ defaults.spline_order }}">
+        <span class="hint">Used when the spline maximum is on. 3 is cubic. Orders run from 0 through 5.</span>
+      </label>
+      {% endif %}
       {% endif %}
     </div>
 
@@ -137,7 +183,7 @@
       <label>Chain<input name="site_chain" value="{{ defaults.site_chain }}" maxlength="1" required></label>
       <label>Residue<input name="site_resi" type="number" step="1" value="{{ defaults.site_resi }}" required></label>
       <label>Label<input name="site_label" value="{{ defaults.site_label }}" required></label>
-      {% if spec.slug == 'refinement' %}
+      {% if spec.slug in ['refinement', 'reconstruct'] %}
       <label class="wide">Map center
         <select name="map_center" id="map-center">
           <option value="residue" selected>Geometric center of the site residue</option>
@@ -196,22 +242,32 @@
       </label>
       <label>Figure width<input name="png_width" type="number" step="1" value="{{ defaults.png_width }}"></label>
       <label>Figure height<input name="png_height" type="number" step="1" value="{{ defaults.png_height }}"></label>
+      {% if spec.slug == 'reconstruct' %}
+      <label>Map check interval
+        <input name="n_check_map" type="number" min="0" step="1" value="{{ defaults.n_check_map }}">
+        <span class="hint">0 opens the 3D viewer only when the reconstruction finishes. A positive integer pauses after that many iterations and shows the current residual map and the current omit model. Continue iterations resumes the search.</span>
+      </label>
+      {% endif %}
+      {% if spec.slug != 'reconstruct' %}
       <label class="check"><input type="checkbox" name="show_oec_bonds" checked> Draw Mn/Ca–O bonds when those atom names exist</label>
+      {% endif %}
       <label class="check"><input type="checkbox" name="draw_distances" checked> Draw the default Mn1–O5 and Glu OE2 distances when those atoms exist</label>
+      {% if spec.slug != 'reconstruct' %}
       <label class="check"><input type="checkbox" name="ray_trace" checked> Ray-trace the figure</label>
       <label class="check"><input type="checkbox" name="recompute_map" checked> Recompute the map if one is already in the output directory</label>
       <label class="check"><input type="checkbox" name="recompute_fragment" checked> Recompute the Coot fragment</label>
+      {% endif %}
     </div>
 
     <h2>Output directory</h2>
     <label class="wide">Folder on this computer
       <input name="output_dir" value="{{ defaults.output_dir }}" required>
-      <span class="hint">The extended map, the site fragment, CCP4 logs, MTZ files, the PNG, and the PyMOL script are all written here.</span>
+      <span class="hint">{% if spec.slug == 'reconstruct' %}Each iteration writes its log, map, coordinates, and density profiles in a subdirectory named r-iteration-01, r-iteration-02, and so on.{% else %}The extended map, the site fragment, CCP4 logs, MTZ files, the PNG, and the PyMOL script are all written here.{% endif %}</span>
     </label>
 
     <div class="actions">
-      <button type="submit" class="pill solid" id="run-btn">Calculate and draw</button>
-      <p class="hint" id="runtime-note">A photosystem II map can take many minutes. REFMAC with more than zero cycles takes longer. The log updates while the job runs.</p>
+      <button type="submit" class="pill solid" id="run-btn">{% if spec.slug == 'reconstruct' %}Reconstruct and draw{% else %}Calculate and draw{% endif %}</button>
+      <p class="hint" id="runtime-note">{% if spec.slug == 'reconstruct' %}Each iteration calculates an omit mFo−DFc map, so a photosystem II site can take a long time. A map-check interval above zero pauses and waits until you continue.{% else %}A photosystem II map can take many minutes. REFMAC with more than zero cycles takes longer. The log updates while the job runs.{% endif %}</p>
     </div>
     <p class="error" id="form-error" hidden></p>
   </form>
@@ -232,10 +288,11 @@
       <h2 id="run-title">Calculation</h2>
       <p id="run-state" class="state">Queued</p>
     </div>
+    <button type="button" class="pill solid" id="continue-btn" hidden>Continue iterations</button>
     <pre id="log" class="log"></pre>
     <figure id="result" hidden>
       <div class="viewer-head">
-        <h3>Interactive 3D scene</h3>
+        <h3 id="viewer-title">Interactive 3D scene</h3>
         <div class="viewer-actions">
           <button type="button" class="pill ghost" id="viewer-save" disabled>Save PNG</button>
           <button type="button" class="pill ghost" id="viewer-reset">Reset view</button>
@@ -263,7 +320,7 @@
           <input id="light-transparency" type="range" min="0" max="100" value="40" step="1" disabled>
           <span id="light-transparency-value">40%</span>
         </label>
-        <p class="hint">Ball and stick of this site, including neighbouring residues, from the light coordinates. Add bond, Add distance, and Add label work on these atoms. A bond is kept on the omit model when both atoms are there, and on the light site when an atom was removed. Hide this site to click an omit-model atom behind it.</p>
+        <p class="hint" id="light-hint">Ball and stick of this site, including neighbouring residues, from the light coordinates. Add bond, Add distance, and Add label work on these atoms. A bond is kept on the omit model when both atoms are there, and on the light site when an atom was removed. Hide this site to click an omit-model atom behind it.</p>
       </div>
       <div class="viewer-style" id="viewer-style">
         <div class="viewer-style-main">
@@ -338,5 +395,5 @@
 </script>
 <script src="{{ url_for('static', filename='vendor/ngl-2.5.0.js') }}?v=2"></script>
 <script src="{{ url_for('static', filename='js/sigma-color.js') }}?v=1"></script>
-<script src="{{ url_for('static', filename='js/workflow.js') }}?v=24"></script>
+<script src="{{ url_for('static', filename='js/workflow.js') }}?v=28"></script>
 {% endblock %}

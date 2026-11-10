@@ -171,12 +171,12 @@ def fft_grid_resolution(low: float, data_high: float, requested: float | None) -
     grid = float(requested)
     if not (low > grid > 0):
         raise ValueError(
-            f"FFT grid resolution must be finer than the low-resolution cutoff "
+            f"FFT grid resolution for a final map must be finer than the low-resolution cutoff "
             f"of {low:.3f} Å and greater than zero. Got {grid}."
         )
     if grid > data_high + 1e-6:
         raise ValueError(
-            f"FFT grid resolution {grid:.3f} Å is coarser than the "
+            f"FFT grid resolution for a final map {grid:.3f} Å is coarser than the "
             f"{data_high:.3f} Å limit of the coefficients. "
             f"A finer grid needs a smaller number of ångströms."
         )
@@ -317,6 +317,163 @@ def residue_atom_names(pdb_path: Path, chain: str, resi: int) -> set[str]:
                 continue
             names.add(line[12:16].strip())
     return names
+
+
+# Cordero covalent radii, in ångströms. Carbon is C; calcium is CA.
+_COVALENT_RADII = {
+    "H": 0.31,
+    "D": 0.31,
+    "C": 0.76,
+    "N": 0.71,
+    "O": 0.66,
+    "F": 0.57,
+    "P": 1.07,
+    "S": 1.05,
+    "CL": 1.02,
+    "BR": 1.20,
+    "SE": 1.20,
+    "NA": 1.66,
+    "MG": 1.41,
+    "K": 2.03,
+    "CA": 1.76,
+    "MN": 1.39,
+    "FE": 1.32,
+    "CO": 1.26,
+    "NI": 1.24,
+    "CU": 1.32,
+    "ZN": 1.22,
+    "MO": 1.54,
+}
+_BOND_NAME = re.compile(r"^[A-Za-z0-9*'+]+$")
+
+
+def _element_symbol(line: str) -> str:
+    if len(line) >= 78 and line[76:78].strip():
+        return line[76:78].strip().upper()
+    letters = "".join(ch for ch in line[12:16] if ch.isalpha())
+    return letters[:1].upper()
+
+
+def _pymol_atom_clause(selection: str, name: str, alt: str) -> str:
+    if alt:
+        return f"{selection} and alt {alt} and name {name}"
+    return f"{selection} and name {name}"
+
+
+def _bond_spec(atom: dict) -> dict:
+    spec = {"chain": atom["chain"], "resi": atom["resi"], "atom": atom["name"]}
+    if atom["alt"]:
+        spec["alt"] = atom["alt"]
+    return spec
+
+
+def reasonable_bond_pairs(
+    pdb_path: Path,
+    chain: str,
+    resi: int,
+    extra_residues: list[dict] | None = None,
+) -> list[tuple[dict, dict]]:
+    """Atom pairs close enough to draw as a bond.
+
+    A pair qualifies when the distance is at least 0.40 Å and no longer than
+    the sum of covalent radii plus 0.45 Å, with a cap of 2.60 Å so a metal–metal
+    contact in a cluster is not drawn as a bond. Hydrogens are skipped.
+    Different altlocs are not bonded. Pairs are limited to the site residue
+    and to a site atom with a neighbouring residue.
+    """
+    selections = {(chain, int(resi)): "site"}
+    for extra in extra_residues or []:
+        key = (str(extra["chain"]), int(extra["resi"]))
+        selections.setdefault(key, extra.get("label") or f"{extra['chain']}{extra['resi']}")
+    site_key = (chain, int(resi))
+    atoms = []
+    with Path(pdb_path).open() as handle:
+        for raw in handle:
+            if not raw.startswith(("ATOM", "HETATM")) or len(raw) < 54:
+                continue
+            try:
+                key = (raw[21], int(raw[22:26]))
+                xyz = (float(raw[30:38]), float(raw[38:46]), float(raw[46:54]))
+            except ValueError:
+                continue
+            if key not in selections:
+                continue
+            name = raw[12:16].strip()
+            if not _BOND_NAME.match(name):
+                continue
+            element = _element_symbol(raw)
+            if element in {"H", "D"}:
+                continue
+            atoms.append(
+                {
+                    "sele": selections[key],
+                    "chain": key[0],
+                    "resi": key[1],
+                    "name": name,
+                    "alt": raw[16].strip(),
+                    "element": element,
+                    "xyz": xyz,
+                    "site": key == site_key,
+                }
+            )
+    pairs = []
+    seen: set[tuple] = set()
+    for index, left in enumerate(atoms):
+        for right in atoms[index + 1 :]:
+            if not left["site"] and not right["site"]:
+                continue
+            if left["alt"] and right["alt"] and left["alt"] != right["alt"]:
+                continue
+            limit = min(
+                2.60,
+                _COVALENT_RADII.get(left["element"], 0.77)
+                + _COVALENT_RADII.get(right["element"], 0.77)
+                + 0.45,
+            )
+            distance = math.dist(left["xyz"], right["xyz"])
+            if distance < 0.40 or distance > limit:
+                continue
+            pair = tuple(
+                sorted(
+                    (
+                        (left["sele"], left["name"], left["alt"]),
+                        (right["sele"], right["name"], right["alt"]),
+                    )
+                )
+            )
+            if pair in seen:
+                continue
+            seen.add(pair)
+            pairs.append((left, right))
+    return pairs
+
+
+def reasonable_bond_specs(
+    pdb_path: Path,
+    chain: str,
+    resi: int,
+    extra_residues: list[dict] | None = None,
+) -> list[dict]:
+    """Viewer bond records for the same pairs as :func:`reasonable_bond_commands`."""
+    return [{"a": _bond_spec(left), "b": _bond_spec(right)} for left, right in reasonable_bond_pairs(
+        pdb_path, chain, resi, extra_residues
+    )]
+
+
+def reasonable_bond_commands(
+    pdb_path: Path,
+    chain: str,
+    resi: int,
+    extra_residues: list[dict] | None = None,
+) -> list[str]:
+    """PyMOL ``bond`` commands for pairs from :func:`reasonable_bond_pairs`."""
+    return [
+        "bond "
+        + _pymol_atom_clause(left["sele"], left["name"], left["alt"])
+        + ", "
+        + _pymol_atom_clause(right["sele"], right["name"], right["alt"])
+        for left, right in reasonable_bond_pairs(pdb_path, chain, resi, extra_residues)
+    ]
 
 
 _PML_LOAD = re.compile(r'^load\s+"([^"]+)"\s*,\s*(\S+)')
@@ -1220,6 +1377,7 @@ except NameError:
         png_width: int,
         png_height: int,
         ray_trace: bool,
+        geometry_bonds: bool = False,
     ) -> None:
         stats = ccp4_map_stats(fragment)
         self.emit(
@@ -1273,6 +1431,10 @@ except NameError:
             for atom_a, atom_b in oec_pairs:
                 if atom_a in present and atom_b in present:
                     lines.append(f"bond site and name {atom_a}, site and name {atom_b}")
+        if geometry_bonds:
+            bond_lines = reasonable_bond_commands(model_pdb, site_chain, site_resi, extra_residues)
+            lines.extend(bond_lines)
+            self.emit(f"Distance bonds drawn for the site: {len(bond_lines)}")
         if draw_distances:
             if "MN1" in present and "O5" in present:
                 lines.append("distance d_mn1_o5, site and name MN1, site and name O5")

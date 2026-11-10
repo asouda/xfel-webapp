@@ -300,7 +300,7 @@ def direct_site_cube(
         raise RuntimeError(
             f"The site cube is {counts[0]} × {counts[1]} × {counts[2]} grid points "
             f"({points / 1e6:.1f} million) on the {d_high:.2f} Å sampling. "
-            "Reduce the clip radius or use a coarser FFT grid resolution."
+            "Reduce the clip radius or use a coarser FFT grid resolution for a final map."
         )
     lines = [
         "CCP4 fft cannot allocate this whole-cell grid, so the density is summed "

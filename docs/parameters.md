@@ -15,7 +15,7 @@ Shared crystallographic meaning is on the [background](concepts.md) page. Each w
 | Resolution | Structure-factor file reads the MTZ range. Explicit uses the two cutoffs |
 | Low-resolution cutoff (Å) | Larger number. Ignored when the source is the structure-factor file |
 | High-resolution cutoff (Å) | Smaller number. Ignored when the source is the structure-factor file |
-| FFT grid resolution (Å) | Omit map only. Blank samples at the high-resolution limit. A smaller number extends the `fft` grid with zero amplitude |
+| FFT grid resolution for a final map (Å) | Omit map only. Blank samples at the high-resolution limit. A smaller number extends the `fft` grid with zero amplitude |
 | Map border (Å) | Padding around the model, in ångströms. Default 5 |
 | Phase source | Fo−Fo only. Default is the light validation file |
 | Sharpening ΔB (Å²) | 2mFo−DFc only. Default −40 |
@@ -50,7 +50,7 @@ Shared crystallographic meaning is on the [background](concepts.md) page. Each w
 The structure-factor file is the default resolution source on every form.
 
 - Fo−Fo uses the common shell of the two structure-factor MTZs: the poorer low-resolution limit and the poorer high-resolution limit.
-- The omit map uses the observed reflection MTZ. An mmCIF is converted with `cif2mtz` first; an MTZ supplied on the form is that file. Resolution is read before `ctruncate`. Its FFT grid resolution, when set to a smaller number of ångströms, samples that shell on the grid of the finer limit. Reciprocal-space points beyond the coefficients contribute zero amplitude. A number coarser than the coefficient limit is rejected. The extended-map name gains `_grid` and that limit, so the finer map is not reused in place of the ordinary one.
+- The omit map uses the observed reflection MTZ. An mmCIF is converted with `cif2mtz` first; an MTZ supplied on the form is that file. Resolution is read before `ctruncate`. FFT grid resolution for a final map, when set to a smaller number of ångströms, samples that shell on the grid of the finer limit. Reciprocal-space points beyond the coefficients contribute zero amplitude. A number coarser than the coefficient limit is rejected. The extended-map name gains `_grid` and that limit, so the finer map is not reused in place of the ordinary one.
 - The 2mFo−DFc map uses the structure-factor MTZ as the cutoff. The coefficients that are transformed are `FWT` / `PHWT`, and the log warns if the high-resolution cutoff is finer than the `FWT` file.
 
 Explicit resolution requires the low-resolution cutoff to be larger than the high-resolution cutoff, and both to be positive. The explicit numbers stored on the forms, used only in that mode, are 20.0–2.10 Å (Fo−Fo), 30.0–1.89 Å (omit map), and 30.0–2.09 Å (2mFo−DFc).

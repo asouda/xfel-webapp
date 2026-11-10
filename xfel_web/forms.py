@@ -1,4 +1,4 @@
-"""Turn an HTML form into the dictionaries the three pipelines expect."""
+"""Turn an HTML form into the dictionaries the map pipelines expect."""
 
 from __future__ import annotations
 
@@ -64,6 +64,27 @@ def _identifier(form, name: str, label: str) -> str:
     if not ID_RE.match(value):
         raise FormError(f"{label} should be a short name such as 6w1v or 6w1v_omitO6.")
     return value
+
+
+def _pdb_coordinates(path: Path, label: str) -> Path:
+    if path.suffix.lower() not in {".pdb", ".ent"}:
+        raise FormError(f"{label} must be a PDB coordinate file.")
+    return path
+
+
+def _harmonic_sigma(form) -> float:
+    raw = _text(form, "harmonic_sigma")
+    sigma = 0.1 if not raw else _float(form, "harmonic_sigma", "Harmonic sigma")
+    if _flag(form, "harmonic_added") and sigma <= 0:
+        raise FormError("Harmonic sigma must be positive.")
+    return sigma
+
+
+def _odd_neighborhood(form) -> int:
+    size = _int(form, "neighborhood_size", "Neighborhood size")
+    if size < 1 or size % 2 == 0:
+        raise FormError("Neighborhood size must be a positive odd integer.")
+    return size
 
 
 def _map_center(form) -> tuple[str, tuple[float, float, float] | None]:
@@ -431,7 +452,7 @@ def parse_job(workflow: str, form, files, project: Path) -> dict:
         cycles = _int(form, "refmac_ncyc", "REFMAC cycles")
         if cycles < 0:
             raise FormError("REFMAC cycles cannot be negative. Use 0 to calculate the map without moving atoms.")
-        fft_dmin = _optional_float(form, "fft_dmin", "FFT grid resolution")
+        fft_dmin = _optional_float(form, "fft_dmin", "FFT grid resolution for the final map")
         if fft_dmin is not None and cfg["resolution_source"] == "explicit":
             try:
                 fft_grid_resolution(cfg["lowres"], cfg["dmin"], fft_dmin)
@@ -466,6 +487,72 @@ def parse_job(workflow: str, form, files, project: Path) -> dict:
                 "files": {
                     "dark_pdb": take("dark_pdb", "omit-model coordinates"),
                     "light_pdb": take("light_pdb", "light coordinates"),
+                    "light_sf": take("light_sf", "observed structure factors"),
+                },
+            }
+        )
+    elif workflow == "reconstruct":
+        positive, negative = _difference_levels(form)
+        cycles = _int(form, "refmac_ncyc", "REFMAC cycles")
+        if cycles < 0:
+            raise FormError("REFMAC cycles cannot be negative. Use 0 to calculate the map without moving atoms.")
+        n_atoms = _int(form, "n_atoms", "Number of atoms to reconstruct")
+        if n_atoms < 1:
+            raise FormError("Number of atoms to reconstruct must be at least 1.")
+        n_check = _int(form, "n_check_map", "Map check interval")
+        if n_check < 0:
+            raise FormError("Map check interval cannot be negative. Use 0 to show only the final model.")
+        spline_order = _int(form, "spline_order", "Spline order")
+        if not 0 <= spline_order <= 5:
+            raise FormError("Spline order must be an integer from 0 through 5.")
+        fft_dmin = _optional_float(form, "fft_dmin", "FFT grid resolution for the final map")
+        if fft_dmin is not None and cfg["resolution_source"] == "explicit":
+            try:
+                fft_grid_resolution(cfg["lowres"], cfg["dmin"], fft_dmin)
+            except ValueError as exc:
+                raise FormError(str(exc)) from exc
+        try:
+            distances = parse_distance_restraints(_text(form, "distance_restraints"))
+            angles = parse_angle_restraints(_text(form, "angle_restraints"))
+        except ValueError as exc:
+            raise FormError(str(exc)) from exc
+        center_mode, center_xyz = _map_center(form)
+        custom_dictionary = resolve_optional_input_file(
+            form, files, "custom_dictionary", "custom dictionary", output_dir, project
+        )
+        cfg["show_oec_bonds"] = False
+        cfg["ray_trace"] = True
+        cfg["recompute_map"] = True
+        cfg["recompute_fragment"] = True
+        cfg.update(
+            {
+                "dark_id": _identifier(form, "dark_id", "Omit-model name"),
+                "light_id": _identifier(form, "light_id", "Observed-data name"),
+                "refmac_ncyc": cycles,
+                "fft_dmin": fft_dmin,
+                "map_center": center_mode,
+                "map_center_xyz": center_xyz,
+                "distance_restraints": distances,
+                "distance_sigma": _float(form, "distance_sigma", "Distance sigma"),
+                "angle_restraints": angles,
+                "angle_sigma": _float(form, "angle_sigma", "Angle sigma"),
+                "use_libcheck": _flag(form, "use_libcheck"),
+                "lib_monomers": parse_monomers(_text(form, "lib_monomers")),
+                "custom_dictionary": custom_dictionary,
+                "positive_levels": positive,
+                "negative_levels": negative,
+                "n_atoms": n_atoms,
+                "n_check_map": n_check,
+                "harmonic_added": _flag(form, "harmonic_added"),
+                "harmonic_sigma": _harmonic_sigma(form),
+                "neighborhood_size": _odd_neighborhood(form),
+                "spline_seed": _flag(form, "spline_seed"),
+                "spline_order": spline_order,
+                "geometry_bonds": True,
+                "viewer_light_label": "Reference site",
+                "files": {
+                    "dark_pdb": _pdb_coordinates(take("dark_pdb", "starting omit-model coordinates"), "Starting omit-model coordinates"),
+                    "light_pdb": _pdb_coordinates(take("light_pdb", "reference model"), "Reference model"),
                     "light_sf": take("light_sf", "observed structure factors"),
                 },
             }

@@ -1,4 +1,4 @@
-"""The three notebook calculations: Fo−Fo, omit-model mFo−DFc, and 2Fo−Fc."""
+"""Fo−Fo, omit-model mFo−DFc, sharpened 2mFo−DFc, and omit-map reconstruction."""
 
 from __future__ import annotations
 
@@ -19,6 +19,7 @@ from xfel_web.ccp4 import (
     fft_grid_resolution,
     parse_scaleit_rfactor,
     require_files,
+    reasonable_bond_specs,
     residue_atom_names,
     residue_centroid,
 )
@@ -27,6 +28,7 @@ from xfel_web.restraints import (
     build_refinement_library,
     external_angle_keywords,
     external_distance_keywords,
+    external_harmonic_keywords,
 )
 
 
@@ -612,6 +614,19 @@ def run_refinement(cfg: dict, emit) -> dict:
                 ),
             )
             restraint_text = "\n".join(part for part in (distance_text, angle_text) if part)
+        harmonic_atoms = list(cfg.get("harmonic_atoms") or [])
+        if harmonic_atoms and int(cfg["refmac_ncyc"]) > 0:
+            harmonic_sigma = float(cfg.get("harmonic_sigma", 0.1))
+            harmonic_text = external_harmonic_keywords(harmonic_atoms, harmonic_sigma)
+            session.emit(
+                f"Harmonic restraints on {len(harmonic_atoms)} added atoms, sigma {harmonic_sigma:.3f} Å. "
+                "Each atom is held at the coordinates in the input model."
+            )
+            restraint_text = "\n".join(part for part in (restraint_text, harmonic_text) if part)
+        elif harmonic_atoms:
+            session.emit(
+                "Harmonic restraints on the added atoms were not applied. REFMAC cycles is 0."
+            )
         if restraint_text:
             restraint_path = out / f"{dark_id}_external_restraints.txt"
             restraint_path.write_text(restraint_text + "\n")
@@ -738,6 +753,7 @@ def run_refinement(cfg: dict, emit) -> dict:
         png_width=cfg["png_width"],
         png_height=cfg["png_height"],
         ray_trace=cfg["ray_trace"],
+        geometry_bonds=bool(cfg.get("geometry_bonds")),
     )
     sigma_txt = ", ".join(f"±{level:g}" for level in cfg["positive_levels"])
     grid_sentence = ""
@@ -972,9 +988,21 @@ def _viewer_scene(
         "sigma_max": sigma_max,
         "sigma": initial_viewer_sigma(sigma_min, sigma_max, levels, negative),
     }
+    if cfg.get("viewer_light_label"):
+        scene["light_label"] = str(cfg["viewer_light_label"])
     if light_pdb is not None:
         scene["light_model"] = str(light_pdb)
         scene["light_model_ext"] = light_pdb.suffix.lstrip(".").lower() or "pdb"
+        # The reference site has atoms the omit model lacks. Its sticks are
+        # calculated from these coordinates, so a missing omit atom still
+        # shows the bonds around it.
+        if cfg.get("geometry_bonds"):
+            scene["light_bonds"] = reasonable_bond_specs(
+                light_pdb,
+                cfg["site_chain"],
+                int(cfg["site_resi"]),
+                cfg.get("extra_residues"),
+            )
     return scene
 
 
@@ -1009,8 +1037,15 @@ def _result(caption, png_path, extended_map, fragment, pml_path, output_dir, ext
     }
 
 
+def run_reconstruct(cfg: dict, emit, pause=None, report_step=None) -> dict:
+    from xfel_web.reconstruction import run_reconstruct as _run
+
+    return _run(cfg, emit, pause=pause, omit_runner=run_refinement, report_step=report_step)
+
+
 RUNNERS = {
     "fofo": run_fofo,
     "refinement": run_refinement,
     "twofofc": run_twofofc,
+    "reconstruct": run_reconstruct,
 }

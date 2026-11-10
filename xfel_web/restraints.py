@@ -68,6 +68,36 @@ def _normalize_distance_specs(specs, default_sigma: float) -> list[dict]:
     return parsed
 
 
+def external_harmonic_keywords(atoms: list[dict], sigma: float) -> str:
+    """REFMAC external harmonic lines that hold atoms at their current coordinates.
+
+    The documented keyword is ``external harmonic chain … residue … atom … sigma``.
+    REFMAC uses the coordinates in the input PDB as the target. A smaller sigma
+    holds the atom more tightly. An empty atom list adds nothing.
+    """
+    sigma = float(sigma)
+    if sigma <= 0:
+        raise ValueError(f"Harmonic sigma must be positive, got {sigma}")
+    lines = []
+    for atom in atoms:
+        chain = str(atom.get("chain") or " ").strip() or "_"
+        resi = int(atom["resi"])
+        name = str(atom["name"]).strip()
+        if not name:
+            raise ValueError("A harmonic restraint needs an atom name.")
+        icode = str(atom.get("icode") or "").strip()
+        alt = str(atom.get("alt") or "").strip()
+        parts = ["exte harm", f"chain {chain}", f"residue {resi}"]
+        if icode:
+            parts.append(f"insertion {icode}")
+        parts.append(f"atom {name}")
+        if alt:
+            parts.append(f"altcode {alt}")
+        parts.append(f"sigma {sigma:.3f}")
+        lines.append(" ".join(parts))
+    return "\n".join(lines)
+
+
 def external_distance_keywords(
     pdb_path: Path,
     site_copies: list[tuple[str, int]],

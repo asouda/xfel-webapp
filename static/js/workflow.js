@@ -36,9 +36,14 @@
   const lightColorButtons = Array.from(document.querySelectorAll("[data-light-color]"));
   const lightTransparencyInput = document.getElementById("light-transparency");
   const lightTransparencyValue = document.getElementById("light-transparency-value");
+  const viewerTitle = document.getElementById("viewer-title");
+  const viewerTitleDefault = viewerTitle ? viewerTitle.textContent : "Interactive 3D scene";
   const caption = document.getElementById("caption");
   const fileList = document.getElementById("file-list");
   const runButton = document.getElementById("run-btn");
+  const continueButton = document.getElementById("continue-btn");
+  const lightHint = document.getElementById("light-hint");
+  const lightHintDefault = lightHint ? lightHint.textContent : "";
   const scanButton = document.getElementById("scan-btn");
   const scanPanel = document.getElementById("scan-panel");
   const scanBody = document.getElementById("scan-body");
@@ -47,6 +52,8 @@
   let jobId = null;
   let viewerToken = 0;
   let resultShown = false;
+  let shownView = null;
+  let lightSiteName = "";
   let structureComponent = null;
   let volumeComponent = null;
   let lightComponent = null;
@@ -79,6 +86,8 @@
   let distanceLabelRepresentation = null;
   let lightDistanceLabelRepresentation = null;
   let lightExtraBonds = [];
+  let lightRemovedBonds = [];
+  let lightBondScene = null;
   let showDistanceLabels = false;
   let editMode = null;
   let pendingPick = null;
@@ -116,6 +125,74 @@
       span.textContent = input.files[0] ? input.files[0].name : "Choose file";
     });
   });
+
+  const modelNameInput = form.querySelector('[name="dark_id"], [name="pdb_id"]');
+  const referenceNameInput = form.querySelector('[name="light_id"]');
+  const outputDirInput = form.querySelector('[name="output_dir"]');
+  const harmonicAdded = document.getElementById("harmonic-added");
+  const harmonicSigma = document.getElementById("harmonic-sigma");
+
+  function coordinateBasename(filename) {
+    const base = String(filename || "").split(/[/\\]/).pop();
+    if (!base) return "";
+    return base.replace(/\.gz$/i, "").replace(/\.(pdb|ent|cif|mmcif)$/i, "");
+  }
+
+  function syncHarmonic() {
+    if (!harmonicAdded || !harmonicSigma) return;
+    harmonicSigma.disabled = !harmonicAdded.checked;
+  }
+
+  if (harmonicAdded) {
+    harmonicAdded.addEventListener("change", syncHarmonic);
+    syncHarmonic();
+  }
+
+  const initialOutput = outputDirInput ? outputDirInput.value.replace(/\/+$/, "") : "";
+  const initialModelName = modelNameInput ? modelNameInput.value.trim() : "";
+  const outputRoot = initialModelName && initialOutput.endsWith(`/${initialModelName}`)
+    ? initialOutput.slice(0, -(initialModelName.length + 1))
+    : initialOutput;
+  let outputAuto = initialOutput;
+  let outputTouched = false;
+
+  function syncOutputDir() {
+    if (!outputDirInput || !modelNameInput || outputTouched) return;
+    const name = modelNameInput.value.trim().replace(/[\\/]/g, "");
+    const next = name ? `${outputRoot}/${name}` : outputRoot;
+    outputDirInput.value = next;
+    outputAuto = next;
+  }
+
+  function useCoordinateName(filename, input) {
+    const name = coordinateBasename(filename);
+    if (!name || !input) return;
+    input.value = name;
+    if (input === modelNameInput) syncOutputDir();
+  }
+
+  function bindCoordinateName(fileKey, input) {
+    if (!input) return;
+    const file = form.querySelector(`[name="file_${fileKey}"]`);
+    const path = form.querySelector(`[name="path_${fileKey}"]`);
+    const update = () => {
+      const fromFile = file && file.files[0] ? file.files[0].name : "";
+      const fromPath = path && path.value.trim() ? path.value.trim() : "";
+      if (fromFile || fromPath) useCoordinateName(fromFile || fromPath, input);
+    };
+    if (file) file.addEventListener("change", update);
+    if (path) path.addEventListener("change", update);
+  }
+
+  bindCoordinateName(form.querySelector('[name="pdb_id"]') ? "pdb" : "dark_pdb", modelNameInput);
+  bindCoordinateName("light_pdb", referenceNameInput);
+  if (modelNameInput) modelNameInput.addEventListener("input", syncOutputDir);
+  if (outputDirInput) {
+    outputDirInput.addEventListener("input", () => {
+      if (outputDirInput.value !== outputAuto) outputTouched = true;
+    });
+    syncOutputDir();
+  }
 
   scanButton.addEventListener("click", async () => {
     const key = window.XFEL_SCAN_KEY;
@@ -164,6 +241,9 @@
     result.hidden = true;
     jobId = null;
     resultShown = false;
+    shownView = null;
+    setViewerTitle(null);
+    if (continueButton) continueButton.hidden = true;
     disposeViewer();
     logBox.textContent = "";
     runPanel.hidden = false;
@@ -188,6 +268,24 @@
     }
   });
 
+  if (continueButton) {
+    continueButton.addEventListener("click", async () => {
+      if (!jobId) return;
+      continueButton.disabled = true;
+      try {
+        const response = await fetch(`/api/jobs/${jobId}/continue`, { method: "POST" });
+        const payload = await response.json();
+        if (!response.ok) {
+          showError(payload.error || "The calculation could not be continued.");
+          continueButton.disabled = false;
+        }
+      } catch (err) {
+        showError("Could not reach the calculation service.");
+        continueButton.disabled = false;
+      }
+    });
+  }
+
   async function poll(id, offset) {
     let response;
     try {
@@ -208,8 +306,19 @@
       logBox.textContent += payload.log;
       if (nearBottom) logBox.scrollTop = logBox.scrollHeight;
     }
-    const labels = { queued: "Queued", running: "Running", succeeded: "Finished", failed: "Failed" };
-    runState.textContent = labels[payload.status] || payload.status;
+    runState.textContent = statusLabel(payload);
+    if (continueButton) {
+      const waiting = payload.status === "paused";
+      continueButton.hidden = !waiting;
+      continueButton.disabled = !waiting;
+    }
+    const viewId = payload.result && payload.result.view_id;
+    if (payload.result && viewId && viewId !== shownView) {
+      shownView = viewId;
+      resultShown = true;
+      showResult(payload.result);
+      if (payload.result.checkpoint) result.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
     if (payload.status === "succeeded" || payload.status === "failed") {
       runButton.disabled = false;
       if (payload.status === "failed") showError(payload.error || "The calculation failed. The log above has the last CCP4 or PyMOL output.");
@@ -225,6 +334,21 @@
     window.setTimeout(() => poll(id, payload.offset), 1500);
   }
 
+  function statusLabel(payload) {
+    const step = Number(payload.step);
+    const numbered = Number.isInteger(step) && step >= 1;
+    if (payload.status === "running" && numbered) return `Running step ${step}`;
+    if (payload.status === "paused" && numbered) return `Paused for inspection after step ${step}`;
+    const labels = {
+      queued: "Queued",
+      running: "Running",
+      paused: "Paused for inspection",
+      succeeded: "Finished",
+      failed: "Failed",
+    };
+    return labels[payload.status] || payload.status;
+  }
+
   function appendFile(role, path) {
     const wrap = document.createElement("div");
     const dt = document.createElement("dt");
@@ -235,7 +359,16 @@
     fileList.append(wrap);
   }
 
+  function setViewerTitle(data) {
+    if (!viewerTitle) return;
+    const step = Number(data && data.iteration);
+    viewerTitle.textContent = Number.isInteger(step) && step >= 1
+      ? `Reconstruction Step: ${step}`
+      : viewerTitleDefault;
+  }
+
   function showResult(data) {
+    setViewerTitle(data);
     figure.src = `${data.figure_url}?t=${Date.now()}`;
     caption.textContent = data.caption;
     loadViewer(data.viewer);
@@ -527,8 +660,35 @@
     });
   }
 
+  function forgetLightRemoval(left, right) {
+    const key = pairIdentityKey(identityAt("light", left), identityAt("light", right));
+    lightRemovedBonds = lightRemovedBonds.filter((bond) => pairIdentityKey(bond.a, bond.b) !== key);
+  }
+
+  function rememberLightRemoval(left, right) {
+    forgetLightRemoval(left, right);
+    lightRemovedBonds.push({ a: identityAt("light", left), b: identityAt("light", right) });
+  }
+
+  function applyLightRemovals() {
+    lightRemovedBonds.forEach((bond) => {
+      const left = findAtom("light", bond.a);
+      const right = findAtom("light", bond.b);
+      if (left == null || right == null || left === right) return;
+      removeBondIn(lightComponent.structure, left, right);
+    });
+  }
+
   function syncLightBonds() {
-    if (!lightComponent || !structureComponent || !surfaceSelection) return;
+    if (!lightComponent || !surfaceSelection) return;
+    if (lightBondScene) {
+      applyScriptBonds(lightComponent, lightBondScene);
+      applyLightRemovals();
+      applyLightExtraBonds();
+      refreshComponentSticks(lightComponent);
+      return;
+    }
+    if (!structureComponent) return;
     copySelectionBonds(structureComponent.structure, lightComponent.structure, surfaceSelection);
     applyLightExtraBonds();
     refreshComponentSticks(lightComponent);
@@ -555,6 +715,16 @@
   }
 
   function addBondFromPicks(left, right) {
+    if (lightBondScene && left.source === "light" && right.source === "light") {
+      if (bondSlotIn(lightComponent.structure, left.index, right.index) >= 0) return false;
+      forgetLightRemoval(left.index, right.index);
+      lightExtraBonds.push({ a: identityAt("light", left.index), b: identityAt("light", right.index) });
+      const omitLeft = omitIndexFor(left);
+      const omitRight = omitIndexFor(right);
+      if (omitLeft != null && omitRight != null) return addBondBetween(omitLeft, omitRight);
+      syncLightBonds();
+      return true;
+    }
     const omitLeft = omitIndexFor(left);
     const omitRight = omitIndexFor(right);
     if (omitLeft != null && omitRight != null) return addBondBetween(omitLeft, omitRight);
@@ -567,8 +737,9 @@
 
   function removeBondFromPicks(left, right) {
     let removed = false;
-    if (left.source === "light" && right.source === "light" && dropLightExtra(left.index, right.index)) {
-      removed = true;
+    if (left.source === "light" && right.source === "light") {
+      if (lightBondScene) rememberLightRemoval(left.index, right.index);
+      if (dropLightExtra(left.index, right.index)) removed = true;
     }
     const omitLeft = omitIndexFor(left);
     const omitRight = omitIndexFor(right);
@@ -866,6 +1037,8 @@
     labeledAtoms = [];
     lightLabeledAtoms = [];
     lightExtraBonds = [];
+    lightRemovedBonds = [];
+    lightBondScene = null;
     labelRepresentation = null;
     lightLabelRepresentation = null;
     distanceLabelRepresentation = null;
@@ -1033,6 +1206,11 @@
 
   function lightStatusText() {
     const color = lightColor === "element" ? "by element name" : lightColor;
+    if (lightSiteName) {
+      if (!lightAtomCount) return `${lightSiteName} has no atoms in ${lightSiteDescription}.`;
+      if (showLightSite) return `${lightSiteName} is ball and stick, colored ${color}.`;
+      return `${lightSiteName} is hidden. Its color is ${color}.`;
+    }
     if (!lightAtomCount) return `The light coordinates have no atoms in ${lightSiteDescription}.`;
     if (showLightSite) return `Light site is ball and stick, colored ${color}.`;
     return `Light site is hidden. Its color is ${color}.`;
@@ -1464,6 +1642,7 @@
     lightRepresentation = null;
     lightAtomCount = 0;
     lightSiteDescription = "";
+    lightSiteName = "";
     showLightSite = false;
     lightColor = "yellow";
     lightTransparency = 40;
@@ -1476,6 +1655,13 @@
 
   async function loadViewer(scene) {
     disposeViewer();
+    lightSiteName = (scene && scene.light_label) || "";
+    if (lightSiteButton) lightSiteButton.textContent = lightSiteName || "Light site";
+    if (lightHint) {
+      lightHint.textContent = lightSiteName
+        ? "Ball and stick of this site, including neighbouring residues, from the reference model. Add bond, Add distance, and Add label work on these atoms. Hide this site to click an atom of the model being reconstructed."
+        : lightHintDefault;
+    }
     const token = viewerToken;
     viewerStatus.textContent = "Loading 3D coordinates and density map…";
     if (!scene || !window.NGL) {
@@ -1530,7 +1716,11 @@
           const neighbours = (scene.extra_residues || []).map((residue) => `${residue.chain}/${residue.resi}`);
           lightSiteDescription = `chain ${scene.site.chain} residue ${scene.site.resi}`;
           if (neighbours.length) lightSiteDescription += ` and ${neighbours.join(", ")}`;
-          copySelectionBonds(structure.structure, lightComponent.structure, structureSelection);
+          lightBondScene = Array.isArray(scene.light_bonds)
+            ? { bonds: scene.light_bonds, site: scene.site }
+            : null;
+          if (lightBondScene) applyScriptBonds(lightComponent, lightBondScene);
+          else copySelectionBonds(structure.structure, lightComponent.structure, structureSelection);
           lightComponent.setVisibility(false);
           lightRepresentation = lightComponent.addRepresentation("ball+stick", {
             sele: structureSelection,

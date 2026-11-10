@@ -232,8 +232,9 @@ input:focus, select:focus, textarea:focus {
   border-radius: 14px;
   padding: 12px 14px;
 }
-.run-head { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; }
-.state { margin: 0; color: var(--blue); font-size: 14px; }
+.run-head { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; flex-wrap: wrap; }
+#continue-btn { margin: 4px 0 12px; }
+.state { margin: 0; color: var(--blue); font-size: 14px; text-align: right; }
 .log {
   max-height: 360px;
   overflow: auto;

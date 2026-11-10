@@ -1,4 +1,4 @@
-"""Local site for the three XFEL electron-density workflows."""
+"""Local site for the XFEL electron-density workflows."""
 
 from __future__ import annotations
 
@@ -121,6 +121,50 @@ WORKFLOWS = {
             "png_height": "800",
         },
     },
+    "reconstruct": {
+        "slug": "reconstruct",
+        "nav": "Reconstruct",
+        "title": "Reconstruct the model from the omit mFo−DFc maps",
+        "kicker": "Omit-map reconstruction",
+        "card": "Add missing atoms one at a time by placing each one on the highest peak of the omit-model difference map.",
+        "how": "Each iteration runs the omit mFo−DFc calculation. The highest peak of the clipped map is matched to the nearest heavy atom that is in the reference model and absent from the omit model, and that atom is added. The viewer can pause every few iterations.",
+        "scan_key": "dark_pdb",
+        "scan_label": "starting omit-model coordinates",
+        "files": [
+            ("dark_pdb", "Starting omit-model coordinates", "PDB model the reconstruction starts from. Atoms or residues that should be rebuilt are absent from this file."),
+            ("light_pdb", "Reference model", "PDB model that supplies the atoms to add. The 3D viewer can draw this site in ball and stick so the rebuilt model can be compared with it."),
+            ("light_sf", "Observed structure factors", "mmCIF or MTZ. An mmCIF of intensities is converted with cif2mtz. An MTZ is used as the reflection file. Intensities still go through ctruncate. Amplitudes named F/SIGF, FP/SIGFP, FOBS/SIGFOBS, or FMEAN/SIGFMEAN are passed to REFMAC. A FREE column, when present, is the free set."),
+        ],
+        "paths": {
+            "dark_pdb": _existing("data/6w1v_omitO6_single_confB.pdb"),
+            "light_pdb": _existing("data/6w1v.pdb"),
+            "light_sf": _existing("data/6w1v-sf.cif"),
+        },
+        "defaults": {
+            "dark_id": "6w1v_omitO6_single_confB",
+            "light_id": "6w1v",
+            "site_chain": "A",
+            "site_resi": "416",
+            "site_label": "OEC",
+            "extra_residues": "A 189 GLU189",
+            "sigma_levels": "3.5",
+            "surface": "mesh",
+            "refmac_ncyc": "0",
+            "distance_sigma": "0.5",
+            "angle_sigma": "25",
+            "distance_restraints": "",
+            "angle_restraints": "",
+            "n_atoms": "1",
+            "n_check_map": "0",
+            "harmonic_sigma": "0.1",
+            "neighborhood_size": "3",
+            "spline_order": "3",
+            "lowres": "30",
+            "dmin": "1.89",
+            "png_width": "1600",
+            "png_height": "800",
+        },
+    },
     "twofofc": {
         "slug": "twofofc",
         "nav": "2Fo−Fc map",
@@ -195,7 +239,7 @@ def _load_jobs() -> None:
             data = json.loads(path.read_text())
         except (OSError, json.JSONDecodeError):
             continue
-        if data.get("status") == "running":
+        if data.get("status") in {"running", "paused"}:
             data["status"] = "failed"
             data["error"] = "The server stopped while this calculation was running. Files already written were left in the output directory."
             path.write_text(json.dumps(data, indent=2) + "\n")
@@ -218,6 +262,29 @@ class _Log:
         print(text, flush=True)
 
 
+def _note_step(job_id: str, step: int) -> None:
+    """Remember the reconstruction iteration shown in the calculation status."""
+    with _JOBS_LOCK:
+        _JOBS[job_id]["step"] = int(step)
+
+
+def _pause_job(job_id: str, partial: dict) -> None:
+    """Hold a reconstruction at a map check until the viewer asks to continue."""
+    event = threading.Event()
+    with _JOBS_LOCK:
+        job = _JOBS[job_id]
+        job["status"] = "paused"
+        job["result"] = partial
+        job["resume"] = event
+        _save_job(job)
+    event.wait()
+    with _JOBS_LOCK:
+        job = _JOBS[job_id]
+        job["status"] = "running"
+        job["resume"] = None
+        _save_job(job)
+
+
 def _execute(job_id: str) -> None:
     with _JOBS_LOCK:
         job = _JOBS[job_id]
@@ -227,7 +294,15 @@ def _execute(job_id: str) -> None:
         workflow = job["workflow"]
     emit = _Log(Path(job["log_path"]))
     try:
-        result = RUNNERS[workflow](config, emit)
+        if workflow == "reconstruct":
+            result = RUNNERS[workflow](
+                config,
+                emit,
+                pause=lambda partial: _pause_job(job_id, partial),
+                report_step=lambda step: _note_step(job_id, step),
+            )
+        else:
+            result = RUNNERS[workflow](config, emit)
         with _JOBS_LOCK:
             job["result"] = result
             job["status"] = "succeeded"
@@ -451,10 +526,15 @@ def job_status(job_id: str):
             "viewer": viewer,
             "files": result["files"],
         }
+        if result.get("view_id"):
+            public_result["view_id"] = result["view_id"]
+            public_result["checkpoint"] = bool(result.get("checkpoint"))
+            public_result["iteration"] = result.get("iteration")
     return jsonify(
         {
             "id": job_id,
             "status": job["status"],
+            "step": job.get("step"),
             "error": job.get("error"),
             "log": chunk,
             "offset": next_offset,
@@ -463,11 +543,28 @@ def job_status(job_id: str):
     )
 
 
+@app.post("/api/jobs/<job_id>/continue")
+def job_continue(job_id: str):
+    """Resume a reconstruction that is paused on a residual-map check."""
+    job = _get_job(job_id)
+    with _JOBS_LOCK:
+        if job.get("status") != "paused":
+            return jsonify({"error": "This calculation is not waiting to continue."}), 400
+        event = job.get("resume")
+        if event is None:
+            return jsonify({"error": "This calculation cannot be continued."}), 400
+        job["status"] = "running"
+        job["resume"] = None
+        _save_job(job)
+    event.set()
+    return jsonify({"ok": True})
+
+
 @app.post("/api/jobs/<job_id>/snapshot")
 def job_snapshot(job_id: str):
     """Store a PNG of the interactive view, after the user has moved the camera."""
     job = _get_job(job_id)
-    if job.get("status") != "succeeded":
+    if job.get("status") not in {"succeeded", "paused"}:
         return jsonify({"error": "The scene is not ready to save."}), 400
     result = job.get("result") or {}
     output_dir = Path(result.get("output_dir") or "")
