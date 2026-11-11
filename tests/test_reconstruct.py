@@ -13,8 +13,8 @@ from xfel_web.ccp4 import reasonable_bond_commands, reasonable_bond_specs
 from xfel_web.pipelines import _viewer_scene
 from xfel_web.restraints import external_harmonic_keywords
 from xfel_web.forms import FormError, parse_job
+from xfel_web.peaks import DensityMap
 from xfel_web.reconstruction import (
-    _peak_api,
     _section_directions,
     closest_atom,
     describe_atom,
@@ -242,7 +242,6 @@ class PeakTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "ramp.ccp4"
             _x_ramp_map(path)
-            DensityMap, _choose, _spline = _peak_api()
             density_map = DensityMap(path)
             origin = density_map.to_cart((8, 8, 8))
             sections = Path(tmp) / "density_sections.txt"

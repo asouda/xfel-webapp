@@ -35,7 +35,7 @@
     <ol>
       <li>The omit-map workflow calculates the clipped mFo−DFc map of the current omit model. REFMAC runs for the number of cycles on the form. Zero cycles leave the atoms where they are. A custom dictionary is read only when the cycle count is greater than zero. When external harmonic restraints are on, each atom added in an earlier iteration is held at the coordinates written into the omit model. The default sigma is 0.1 Å, and the restraints are used only when the cycle count is greater than zero.</li>
       <li>When the map-check interval is a positive integer, the calculation pauses after that many iterations. The 3D viewer shows the current residual map and the current omit model. <strong>Continue iterations</strong> resumes the search. An interval of 0 shows only the finished model and its residual map.</li>
-      <li>The peak is the strongest voxel that is a local maximum, using the neighborhood search from xfel-gaussian. When the spline maximum is on, the point moves to the spline maximum inside that neighborhood. The default neighborhood is 3 and the default spline order is 3.</li>
+      <li>The peak is the strongest voxel that is a local maximum inside a cubic neighborhood. When the spline maximum is on, the point moves to the spline maximum inside that neighborhood. The default neighborhood is 3 and the default spline order is 3.</li>
       <li>Density profiles through that point, from −2 Å to +2 Å, are written in the iteration directory. The offset is the distance in Ångstroms along the line. The columns are the Cartesian x, y, and z axes, the six face diagonals of the cube, and the four body diagonals. The nearest missing heavy atom in the reference model is identified. A distance beyond 1 Å is a warning. A distance beyond 3 Å stops the reconstruction without adding that atom.</li>
       <li>The reference atom’s PDB record is inserted into the omit model with the Cartesian coordinates of the peak. The atom name, residue, and chain stay those of the reference atom. The loop repeats until the requested number of atoms has been added, or until it stops. The viewer then shows the reconstructed model and the residual map of that model. Bonds are drawn wherever two displayed atoms are close enough to be bonded.</li>
     </ol>
@@ -167,7 +167,7 @@
       </fieldset>
       <label>Neighborhood size
         <input name="neighborhood_size" type="number" min="1" step="2" value="{{ defaults.neighborhood_size }}">
-        <span class="hint">Odd integer. The peak is the strongest voxel that is a maximum inside a cube of this side. The default, 3, is the xfel-gaussian setting.</span>
+        <span class="hint">Odd integer. The peak is the strongest voxel that is a maximum inside a cube of this side. The default is 3.</span>
       </label>
       <label class="check"><input type="checkbox" name="spline_seed"> Place the peak on a spline maximum</label>
       <label>Spline order

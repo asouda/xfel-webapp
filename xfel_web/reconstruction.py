@@ -1,16 +1,17 @@
 """Rebuild an omit model by placing reference atoms on omit-map peaks.
 
 Each iteration calls the omit-map workflow. The peak search is the local-maximum
-and optional spline placement from ``xfel_gaussian.sequential_peaks_gaussian``.
+and optional spline placement in ``xfel_web.peaks``.
 """
 
 from __future__ import annotations
 
 import math
 import shutil
-import sys
 from dataclasses import dataclass
 from pathlib import Path
+
+from xfel_web.peaks import DensityMap, choose_peak, spline_maximum_index
 
 WARN_DISTANCE_A = 1.0
 STOP_DISTANCE_A = 3.0
@@ -169,37 +170,6 @@ def insert_atom_record(pdb_text: str, record: str) -> str:
     return "\n".join(lines) + "\n"
 
 
-def _peak_api():
-    """The voxel search from xfel-gaussian: local maximum, then an optional spline."""
-    try:
-        from xfel_gaussian.sequential_peaks_gaussian import (
-            DensityMap,
-            choose_peak,
-            spline_maximum_index,
-        )
-    except ImportError:
-        sibling = Path(__file__).resolve().parents[2] / "xfel-gaussian" / "src"
-        if not sibling.is_dir():
-            raise RuntimeError(
-                "Locating a peak needs the xfel-gaussian package. "
-                "Expected it at " + str(sibling) + "."
-            )
-        if str(sibling) not in sys.path:
-            sys.path.insert(0, str(sibling))
-        try:
-            from xfel_gaussian.sequential_peaks_gaussian import (
-                DensityMap,
-                choose_peak,
-                spline_maximum_index,
-            )
-        except ImportError as exc:
-            raise RuntimeError(
-                "Locating a peak needs xfel-gaussian and scipy. "
-                f"The import failed: {exc}"
-            ) from exc
-    return DensityMap, choose_peak, spline_maximum_index
-
-
 def locate_peak(map_path: Path, neighborhood_size: int, spline_seed: bool, spline_order: int):
     """Return the highest local-maximum voxel, or None when the map has no finite peak.
 
@@ -208,7 +178,6 @@ def locate_peak(map_path: Path, neighborhood_size: int, spline_seed: bool, splin
     """
     import numpy as np
 
-    DensityMap, choose_peak, spline_maximum_index = _peak_api()
     density_map = DensityMap(map_path)
     rho = density_map.original
     valid = np.isfinite(rho)
@@ -401,7 +370,6 @@ def run_reconstruct(cfg: dict, emit, pause=None, omit_runner=None, report_step=N
         from xfel_web.pipelines import run_refinement
 
         omit_runner = run_refinement
-    _peak_api()
 
     output_dir = Path(cfg["output_dir"])
     output_dir.mkdir(parents=True, exist_ok=True)
