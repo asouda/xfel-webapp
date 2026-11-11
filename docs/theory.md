@@ -1,8 +1,8 @@
 # Theoretical background
 
-The three workflows turn deposited observations and atomic coordinates into a map on a grid. This page is the crystallography underneath that calculation: what a structure factor is, where its amplitude and phase come from, how the Fourier transform rebuilds the density, what a refinement cycle changes, and which numbers are already stored in a validation coefficient file.
+The workflows turn deposited observations and atomic coordinates into a map on a grid. This page is the crystallography underneath that calculation: what a structure factor is, where its amplitude and phase come from, how the Fourier transform rebuilds the density, what a refinement cycle changes, which numbers are already stored in a validation coefficient file, and how an omit model is rebuilt by placing one missing atom on each difference peak.
 
-The formulas for the three maps, and the files and programs each workflow uses, are on the [Fo−Fo](fo-fo.md), [omit-map](omit-map.md), and [2mFo−DFc](two-fo-fc.md) pages. Contours, clipping, and the browser viewer are on the [background](concepts.md) page.
+The formulas for the maps, and the files and programs each workflow uses, are on the [Fo−Fo](fo-fo.md), [omit-map](omit-map.md), [reconstruction](reconstruction.md), and [2mFo−DFc](two-fo-fc.md) pages. The reconstruction uses the omit-map coefficient. Its extra theory is which voxel is the peak and how the model changes before the next transform. Contours, clipping, and the browser viewer are on the [background](concepts.md) page.
 
 ## How structure factors are measured
 
@@ -66,6 +66,7 @@ Which model supplies \(\varphi_c\) depends on the workflow.
 
 - Fo−Fo borrows one phase for the whole difference. The default is `PHWT` from the light validation file, the phase stored with the weighted \(2mF_o-DF_c\) coefficient of the activated structure. The form can switch that to the dark validation phase, or to the phase written by either zero-cycle REFMAC job.
 - The omit map calculates \(\varphi_c\) and \(|F_c|\) from the omit coordinates. An atom deleted from that file is absent from \(F_c\), so it can show up in the difference.
+- The reconstruction uses that same omit-model phase on every iteration. After an atom is inserted, the next iteration calculates a new \(\varphi_c\) that includes it.
 - The sharpened \(2mF_o-DF_c\) map uses the phase `PHWT` already stored in the validation file. That phase is the model phase from the refinement that produced the deposition.
 
 ## How the density is obtained
@@ -83,6 +84,8 @@ The electron density on a real-space grid is the inverse Fourier sum. With \(V\)
 | Fo−Fo | \(\big(\|F_{\mathrm{light}}\| - \|F_{\mathrm{dark}}\|\big)\, e^{i\varphi_{\mathrm{ref}}}\), after `scaleit` has matched the overall scale and \(B\) factor of the two amplitude sets |
 | mFo−DFc | `DELFWT` with phase `PHDELWT`, where the amplitude is \(m\|F_o\| - D\|F_c\|\) |
 | 2mFo−DFc | `FWT` with phase `PHWT`, where the amplitude is \(2m\|F_o\| - D\|F_c\|\), multiplied in `fft` by the sharpening factor \(\exp\!\big(-\Delta B\,(\sin\theta/\lambda)^2\big)\) |
+
+The reconstruction workflow does not add a row. Every iteration transforms the omit-map coefficient of the model as it stands at that iteration.
 
 The weight \(m\) is the figure of merit, the expected cosine of the phase error. The factor \(D\) comes from the \(\sigma_A\) treatment of coordinate error: as the model becomes a poorer description of the data, \(D\) falls and \(|F_c|\) is down-weighted. REFMAC stores the already weighted difference as `DELFWT` / `PHDELWT`. The validation file stores the already weighted \(2mF_o-DF_c\) coefficient as `FWT` / `PHWT`.
 
@@ -109,6 +112,80 @@ Reflections tagged with a free-R flag are left out of the target function. Their
 `MAKE HYDR Y` and `MAKE HOUT Y` tell REFMAC to build riding hydrogens and to write them into the coordinate file. External distance and angle restraints, or a monomer library written by `libcheck`, are placed in front of those keywords when the form lists them. They matter once `NCYC` is greater than zero: refinement will try to explain leftover density by moving nearby atoms, and the restraints limit how far selected cluster distances and angles can go.
 
 The Fo−Fo workflow also calls `refmac5`, but only with `NCYC 0`, and only to place each amplitude set in a REFMAC-style MTZ. Those coordinates are not refined against each other.
+
+The reconstruction can add one further restraint once an atom has been inserted. An external harmonic restraint,
+
+```text
+exte harm chain A residue 416 atom O6 sigma 0.100
+```
+
+holds that atom at the coordinates in the PDB file REFMAC is reading. The sigma is in ångströms. A smaller sigma holds the atom more tightly. The default on the form is 0.1 Å. The line is written only when the option is on, the cycle count is greater than zero, and the atom was added on an earlier iteration. The target is the peak coordinate stored in the working omit model, not a coordinate typed separately.
+
+## How an omit model is rebuilt from successive peaks
+
+An omit map shows every feature the current model leaves out, phased by that incomplete model. The reconstruction turns the strongest of those features into an atom, then asks for the map again. It is a greedy loop, not a joint fit of every missing atom at once. One wrong peak can be locked in, because later phases and later \(|F_c|\) include the atom that was inserted.
+
+### Why the missing atom is a positive peak
+
+Atom \(j\) contributes to \(F_c\) only when it is in the coordinate file. Delete it, and the calculated amplitude no longer contains its scattering factor, its Debye–Waller factor, or the phase factor \(e^{2\pi i\, \mathbf{h}\cdot\mathbf{r}_j}\). The weighted difference \(m|F_o|-D|F_c|\) is then positive near \(\mathbf{r}_j\) when the observations still contain that atom and the model phase \(\varphi_c\) is a usable substitute for the phase of the difference. That substitution is the same difference-Fourier approximation used for an Fo−Fo map: the true phase of \(F_o-F_c\) is unknown. It holds best when the omitted change is local and the rest of the model already agrees with the data.
+
+The phase is still biased. \(\varphi_c\) was computed without the missing atom, so the peak can shift, weaken, or pick up a contribution from a neighbour. Inserting the atom and recalculating \(F_c\) removes that atom from the unexplained density. A positive cycle count also lets REFMAC move the surrounding atoms before the next transform. The default cycle count is zero, so the surrounding atoms stay put and only the newly inserted atom changes the model that enters the next \(F_c\).
+
+### Which voxel is the peak
+
+The search reads the Coot fragment, a sphere around the site, not the asymmetric unit. Inside that grid a voxel \(\mathbf{i}\) is a local maximum of a cube of odd side \(n\) when its density equals the strongest finite density in the cube:
+
+\[
+\rho(\mathbf{i}) = \max_{\|\mathbf{j}-\mathbf{i}\|_{\infty}\le (n-1)/2} \rho(\mathbf{j}).
+\]
+
+\(n\) is the neighborhood size. The default is 3, so the cube is the voxel and its 26 neighbours. Voxels outside the array are treated as \(-\infty\), and a voxel that is not finite is not a candidate. The peak is the local maximum with the largest \(\rho\). A voxel on the shoulder of a taller neighbour is not selected, because that neighbour lies inside the cube.
+
+The density recorded for the peak is \(\rho(\mathbf{i})\). The Cartesian position is the centre of the voxel, obtained from the CCP4 cell, axis order, and grid origin. It is not the reference atom’s coordinate.
+
+### Where the spline moves that position
+
+When the spline option is on, the neighborhood is interpolated with a `scipy.ndimage` spline of order \(k\), an integer from 0 through 5. Order 3, the default, is cubic. The reported position moves to the continuous stored index where that interpolant is highest, and then through the same orthogonalisation into ångströms. The density in the log stays the voxel value \(\rho(\mathbf{i})\), not the interpolated value.
+
+Orders below 2 reach their maximum at a sample, so the position stays on the voxel. A neighborhood that is not entirely finite, or a spline that cannot be built, also stays on the voxel. The option is off by default, so the inserted coordinates are the voxel centre unless you turn it on.
+
+### Which reference atom receives that peak
+
+The density does not name the atom. The reference model does. A candidate is a reference atom that is not hydrogen or deuterium, has occupancy greater than zero, and whose name is absent from the same chain, residue number, and insertion code in the current omit model. An atom name already present at any altloc is not missing. Atoms inserted earlier in the run are excluded. The match is the candidate closest to the peak in Euclidean ångströms.
+
+A distance greater than 1 Å is a warning: the nearest missing atom does not sit on the peak, and it is still inserted. A distance greater than 3 Å stops the run, and the atom is not inserted. The peak is then left as unexplained density. The same stop occurs when the clip has no finite peak, or when the reference has no remaining heavy atom of this kind. Both cutoffs are fixed.
+
+The PDB record that is inserted keeps the reference name, residue, chain, altloc, occupancy, element, and displacement parameters. Orthogonal \(x\), \(y\), and \(z\) are replaced by the peak position. The next \(F_c\) is therefore calculated from where the density was, not from where the reference model had placed the atom. The file you supplied is not edited. The working copy is `{omit model name}_working.pdb`.
+
+### What the next iteration calculates
+
+The next omit map uses that working file as its coordinate set. With zero cycles, atoms already inserted remain at their peak coordinates. REFMAC still writes a coordinate file with riding hydrogens for the figure, but the following iteration does not start from that rewritten file.
+
+With a positive cycle count, REFMAC refines the current omit model before `fft`. The figure for that iteration shows the refined coordinates. The following iteration still starts from the working file: the new atom at the peak, and earlier atoms where they were inserted, not where refinement moved them. Harmonic restraints, described above, are the way to hold those inserted atoms in place while the surrounding model is refined.
+
+After the requested number of atoms has been inserted, one more omit map is calculated and not searched. That map is the residual of the finished model. Positive density that remains is an atom still missing, a coordinate error, or noise.
+
+### The density along the diagonals of the cube
+
+Each peak is also sampled along the lines through it. The offset \(s\) runs from −2 Å to +2 Å in steps of 0.05 Å, and the sample is the trilinear density at
+
+\[
+\mathbf{r}(s) = \mathbf{r}_0 + s\,\hat{\mathbf{d}}.
+\]
+
+\(\hat{\mathbf{d}}\) is a unit vector, so \(s\) is the distance along the line in ångströms. The three axes use the Cartesian basis. A face diagonal of the cube has two non-zero components, and
+
+\[
+\hat{\mathbf{d}} = \frac{(\pm 1,\pm 1,0)}{\sqrt{2}}
+\]
+
+or the same pattern with the zero in \(x\) or in \(y\). One representative of each line is stored, six in all. A body diagonal has
+
+\[
+\hat{\mathbf{d}} = \frac{(\pm 1,\pm 1,\pm 1)}{\sqrt{3}},
+\]
+
+and the four lines are the four sign patterns with a positive \(x\) component. Dividing by \(\sqrt{2}\) or \(\sqrt{3}\) is required. Without it, a parameter step of 0.05 along \((1,1,1)\) would travel \(0.05\sqrt{3}\) Å, and the offset column would not be the distance. A sample that falls outside the clip is recorded as `nan`.
 
 ## What the validation coefficient files store
 

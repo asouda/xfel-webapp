@@ -1,5 +1,5 @@
 site_name: XFEL electron density maps
-site_description: Theory and step-by-step workflows for isomorphous Fo−Fo, omit-model mFo−DFc, and sharpened 2mFo−DFc maps.
+site_description: Theory and step-by-step workflows for isomorphous Fo−Fo, omit-model mFo−DFc, omit-map reconstruction, and sharpened 2mFo−DFc maps.
 site_author: Alexander Soudackov
 repo_url: https://github.com/asouda/xfel-webapp
 repo_name: asouda/xfel-webapp
@@ -14,6 +14,7 @@ nav:
   - Workflows:
       - Isomorphous Fo−Fo: fo-fo.md
       - Omit-model mFo−DFc: omit-map.md
+      - Reconstruct from omit maps: reconstruction.md
       - Sharpened 2mFo−DFc: two-fo-fc.md
   - Parameters: parameters.md
 

@@ -1,6 +1,6 @@
 # Shared background
 
-The three workflows differ in which amplitudes they transform. They share the crystallographic objects those amplitudes come from, the files you supply, and the clipping and drawing steps at the end.
+The workflows differ in which amplitudes they transform. They share the crystallographic objects those amplitudes come from, the files you supply, and the clipping and drawing steps at the end. The reconstruction uses the omit-map coefficient on every iteration.
 
 How a structure factor is measured, how an amplitude and a model phase are obtained, and what a validation coefficient file stores are on the [theoretical background](theory.md) page.
 
@@ -32,7 +32,7 @@ $$
 \Delta\rho(\mathbf{r}) \;\propto\; \sum_{hkl} \big(m|F_o|-D|F_c|\big)\, e^{i\varphi_c}\, e^{-2\pi i \mathbf{h}\cdot\mathbf{r}}.
 $$
 
-REFMAC writes that complex coefficient as `DELFWT` / `PHDELWT`. The workflow Fourier-transforms those columns. It does not recompute $m|F_o|-D|F_c|$ by hand.
+REFMAC writes that complex coefficient as `DELFWT` / `PHDELWT`. The omit-map workflow Fourier-transforms those columns. It does not recompute $m|F_o|-D|F_c|$ by hand. The reconstruction transforms the same columns, then inserts one missing reference atom at the highest peak and repeats. How that peak is chosen, and why the inserted coordinates are the peak rather than the reference coordinate, is on the [theoretical background](theory.md) page.
 
 **2mFo−DFc.** The same weighting, arranged so that density covers the model when the model and the data agree:
 
@@ -63,7 +63,7 @@ Each workflow starts from files you put on the form. The worked examples use fil
 | File | Typical name | Role |
 | --- | --- | --- |
 | Coordinates | `{pdbid}.pdb` or mmCIF | The model. REFMAC, the map padding, Coot, and PyMOL all read it. PDB and mmCIF coordinates are both accepted. |
-| Structure factors | `{pdbid}-sf.cif` | Deposited reflections. Fo−Fo and the omit map use the amplitudes (after conversion). The 2mFo−DFc workflow uses this file for the resolution range. |
+| Structure factors | `{pdbid}-sf.cif` | Deposited reflections. Fo−Fo, the omit map, and the reconstruction use the amplitudes (after conversion). The 2mFo−DFc workflow uses this file for the resolution range. |
 | Validation $2F_o-F_c$ coefficients | `{pdbid}_validation_2fo-fc_map_coef.cif` | `FWT` and `PHWT`. This file is the 2mFo−DFc map. In the Fo−Fo workflow it is only a phase source. |
 
 Validation coefficients are also published at
@@ -72,7 +72,7 @@ Validation coefficients are also published at
 https://files.rcsb.org/pub/pdb/validation_reports/xx/{pdbid}/{pdbid}_validation_2fo-fc_map_coef.cif.gz
 ```
 
-Deposited structure factors for the `6w1o` and `6w1v` examples are intensities, `_refln.intensity_meas` and `_refln.intensity_sigma`, with the free set marked by `_refln.status` `f`. `cif2mtz` stores those as `I`, `SIGI`, and `FREE`. The omit-map workflow converts intensities to amplitudes with `ctruncate` and copies `FREE` onto the amplitude MTZ. The observed-reflection field also accepts an MTZ, and amplitudes already in that file skip `ctruncate`. The Fo−Fo workflow lets a zero-cycle REFMAC job place the amplitudes in a REFMAC-style MTZ. The `9z35` structure-factor file stores anomalous intensities and `_refln.pdbx_r_free_flag`. The omit-map workflow converts that Friedel pair to mean amplitudes. The sharpened-map workflow uses the same file for the resolution range.
+Deposited structure factors for the `6w1o` and `6w1v` examples are intensities, `_refln.intensity_meas` and `_refln.intensity_sigma`, with the free set marked by `_refln.status` `f`. `cif2mtz` stores those as `I`, `SIGI`, and `FREE`. The omit-map workflow, and each reconstruction iteration, converts intensities to amplitudes with `ctruncate` and copies `FREE` onto the amplitude MTZ. The observed-reflection field also accepts an MTZ, and amplitudes already in that file skip `ctruncate`. The Fo−Fo workflow lets a zero-cycle REFMAC job place the amplitudes in a REFMAC-style MTZ. The `9z35` structure-factor file stores anomalous intensities and `_refln.pdbx_r_free_flag`. The omit-map workflow converts that Friedel pair to mean amplitudes. The sharpened-map workflow uses the same file for the resolution range.
 
 Column names are read from each MTZ with `mtzdump` and matched against a short list of candidates (`FP`, `F`, `FOBS`, `SIGFP`, `PHWT`, `PHIC`, `DELFWT`, `FWT`, and so on), so a slightly different mmCIF layout still runs.
 
@@ -86,7 +86,7 @@ For two datasets, the common shell is the poorer low-resolution limit and the po
 
 ## The shared tail of every workflow
 
-After the map exists, the three workflows do the same three things, and then open the fragment in the browser.
+After the map exists, the workflows do the same three things, and then open the fragment in the browser. The reconstruction does this once per iteration. Its peak search reads the Coot fragment from that iteration.
 
 ### Extend the map
 
@@ -128,11 +128,11 @@ The edit buttons act on the model in the viewer. Add bond and Add distance each 
 | --- | --- |
 | `cif2mtz` | Reflection mmCIF to MTZ, in every workflow |
 | `mtzdump` | Column names and resolution limits |
-| `refmac5` | Zero-cycle amplitude preparation (Fo−Fo), or the omit-model job that writes `DELFWT` |
-| `cad` | Combine amplitude and phase columns (Fo−Fo), or copy `FREE` (omit map) |
+| `refmac5` | Zero-cycle amplitude preparation (Fo−Fo), or the omit-model job that writes `DELFWT`. The reconstruction runs that job once per iteration |
+| `cad` | Combine amplitude and phase columns (Fo−Fo), or copy `FREE` (omit map and reconstruction) |
 | `scaleit` | Scale light amplitudes onto the dark reference (Fo−Fo only) |
-| `ctruncate` | Intensities to amplitudes (omit map only) |
-| `libcheck` | Optional monomer library when omit-map distances are widened in the dictionary |
+| `ctruncate` | Intensities to amplitudes (omit map and reconstruction) |
+| `libcheck` | Optional monomer library when omit-map or reconstruction distances are widened in the dictionary |
 | `fft` | The Fourier transform, including sharpening for 2mFo−DFc |
 | Coot | Clip the site |
 | PyMOL | Contour and render |

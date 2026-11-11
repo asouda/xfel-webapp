@@ -1,9 +1,10 @@
 # Construction of XFEL electron density maps
 
-Local site web application for the three workflows:
+Local site web application for the workflows:
 
 - isomorphous Fo−Fo difference map
 - omit-model mFo−DFc difference map, with optional refinement
+- reconstruction of an omit model from successive mFo−DFc peaks
 - sharpened 2mFo−DFc electron density map
 
 CCP4, Coot, and PyMOL do the calculation. This application collects the files and parameters, runs the same programs, and shows the isodensity figure.
@@ -84,8 +85,10 @@ Python package imported by `xfel-app.py`.
 - `__init__.py` — package marker.
 - `ccp4.py` — locates CCP4, Coot, and PyMOL, runs the suite after sourcing `ccp4.setup-sh`, and builds the PyMOL scene.
 - `forms.py` — reads the workflow form into the dictionaries the pipelines expect.
-- `pipelines.py` — the three calculations: Fo−Fo, omit-model mFo−DFc, and 2mFo−DFc.
-- `restraints.py` — REFMAC external restraints and optional `libcheck` monomer libraries.
+- `pipelines.py` — Fo−Fo, omit-model mFo−DFc, and 2mFo−DFc. The reconstruction calls the omit-map calculation once per iteration.
+- `reconstruction.py` — the loop that places one missing reference atom on each omit-map peak.
+- `peaks.py` — the local-maximum search and the optional spline placement on the clipped map.
+- `restraints.py` — REFMAC external restraints, including harmonic restraints on atoms the reconstruction has added, and optional `libcheck` monomer libraries.
 
 
 
@@ -113,7 +116,7 @@ Browser assets.
 
 ### `notebooks/`
 
-The three tutorial Jupyter notebooks:
+The three tutorial Jupyter notebooks. The reconstruction workflow repeats the omit-map calculation and has no separate notebook:
 
 - `XFEL_fo-fo_diffmap.ipynb` — isomorphous Fo−Fo difference map
 - `XFEL_fo-fc_diffmap_refinement.ipynb` — omit-model mFo−DFc map, with optional refinement
@@ -127,17 +130,17 @@ Example inputs grouped by PDB id: `6w1o`, `6w1p`, `6w1v`, `8iri`, `9z35`, and `1
 
 ### `tests/`
 
-`test_forms.py` checks form parsing, resolution selection, and restraint text. Run it with:
+`test_forms.py` checks form parsing, resolution selection, and restraint text. `test_reconstruct.py` checks the peak search, atom insertion, and the reconstruction form. Run them with:
 
 ```bash
-uv run python -m unittest tests.test_forms
+uv run python -m unittest tests.test_forms tests.test_reconstruct
 ```
 
 
 
 ### `docs/`
 
-MkDocs site for the three workflows. The pages follow the tutorial notebooks: the map each workflow calculates, the files it needs, and the CCP4, Coot, and PyMOL steps.
+MkDocs site for the workflows. The pages follow the tutorial notebooks for the three maps, and add the reconstruction: the map each workflow calculates, the files it needs, and the CCP4, Coot, and PyMOL steps. The theoretical background includes the peak search.
 
 ```bash
 uv sync --group docs

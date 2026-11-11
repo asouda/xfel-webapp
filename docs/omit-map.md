@@ -174,7 +174,7 @@ The omit model’s own structure-factor file is not an input. \(F_o\) comes from
 
 ## Reading the figure
 
-The model in the figure is the REFMAC coordinate set. With zero cycles it is the omit model rewritten by REFMAC, hydrogens included, atoms unmoved. A positive peak where `6w1v` has an atom and the omit model does not is the expected \(mF_o-DF_c\) signal. Whether the 2F data support an inserted oxo or water at the O6 position is the question discussed by Wang, Armstrong, and Batista; this workflow reproduces the map they compare.
+The model in the figure is the REFMAC coordinate set. With zero cycles it is the omit model rewritten by REFMAC, hydrogens included, atoms unmoved. A positive peak where `6w1v` has an atom and the omit model does not is the expected \(mF_o-DF_c\) signal. Whether the 2F data support an inserted oxo or water at the O6 position is the question discussed by Wang, Armstrong, and Batista; this workflow reproduces the map they compare. The [reconstruction](reconstruction.md) repeats this calculation and places the missing reference atom closest to each peak.
 
 If the mesh is empty, lower the contour (try `3`). If the cage swallows the model, decrease the carve radius or raise the contour.
 
