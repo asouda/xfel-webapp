@@ -1,4 +1,26 @@
 (() => {
+  const root = document.documentElement;
+  const buttons = document.querySelectorAll("[data-theme-choice]");
+
+  function applyTheme(theme) {
+    const next = theme === "light" ? "light" : "dark";
+    if (next === "light") root.setAttribute("data-theme", "light");
+    else root.removeAttribute("data-theme");
+    buttons.forEach((button) => {
+      button.setAttribute("aria-pressed", button.dataset.themeChoice === next ? "true" : "false");
+    });
+    try {
+      localStorage.setItem("xfel-theme", next);
+    } catch (err) {}
+    window.dispatchEvent(new CustomEvent("xfel-theme", { detail: next }));
+  }
+
+  const saved = root.getAttribute("data-theme") === "light" ? "light" : "dark";
+  buttons.forEach((button) => {
+    button.setAttribute("aria-pressed", button.dataset.themeChoice === saved ? "true" : "false");
+    button.addEventListener("click", () => applyTheme(button.dataset.themeChoice));
+  });
+
   const form = document.getElementById("probe-form");
   const list = document.getElementById("status-list");
   if (!form || !list) return;

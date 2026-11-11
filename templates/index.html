@@ -1,11 +1,17 @@
 {% extends "base.html" %}
 {% block title %}XFEL Maps{% endblock %}
+{% block nav_extra %}
+<div class="theme-switch" role="group" aria-label="Page background">
+  <button type="button" data-theme-choice="dark" aria-pressed="true">Dark</button>
+  <button type="button" data-theme-choice="light" aria-pressed="false">Light</button>
+</div>
+{% endblock %}
 {% block body %}
 <section class="hero">
   <div class="glass hero-card">
     <p class="eyebrow">Batista Lab · Yale</p>
     <h1>Electron-density maps from XFEL structures</h1>
-    <p class="lede">Map calculations from the tutorial notebooks, plus a reconstruction that builds an omit model back from its mFo−DFc map. Each one builds a CCP4 map, clips the site you choose, and draws isodensity surfaces in PyMOL.</p>
+    <p class="lede">Density difference map calculations, plus a reconstruction that builds an omit model back from its mFo−DFc map. Each one builds a CCP4 map, clips the site you choose, and draws isodensity surfaces in a 3D viewer.</p>
   </div>
 </section>
 
@@ -81,5 +87,5 @@ python app.py</code></pre>
 </section>
 {% endblock %}
 {% block scripts %}
-<script src="{{ url_for('static', filename='js/home.js') }}"></script>
+<script src="{{ url_for('static', filename='js/home.js') }}?v=2"></script>
 {% endblock %}

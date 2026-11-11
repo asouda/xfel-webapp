@@ -263,31 +263,71 @@ def _sample_density(values, index):
     return float(total)
 
 
+def _section_directions() -> list[tuple[str, tuple[float, float, float]]]:
+    """Unit vectors for the Cartesian cube through the peak.
+
+    The three axes, six face diagonals, and four body diagonals are lines
+    through the same point. Each vector has length 1 Å, so an offset along
+    it is a distance in angstroms. A face diagonal is divided by √2 and a
+    body diagonal by √3.
+    """
+    face = math.sqrt(2.0)
+    body = math.sqrt(3.0)
+    directions = [
+        ("density_x", (1.0, 0.0, 0.0)),
+        ("density_y", (0.0, 1.0, 0.0)),
+        ("density_z", (0.0, 0.0, 1.0)),
+        ("density_xy_p", (1.0 / face, 1.0 / face, 0.0)),
+        ("density_xy_m", (1.0 / face, -1.0 / face, 0.0)),
+        ("density_xz_p", (1.0 / face, 0.0, 1.0 / face)),
+        ("density_xz_m", (1.0 / face, 0.0, -1.0 / face)),
+        ("density_yz_p", (0.0, 1.0 / face, 1.0 / face)),
+        ("density_yz_m", (0.0, 1.0 / face, -1.0 / face)),
+    ]
+    for signs in ((1, 1, 1), (1, 1, -1), (1, -1, 1), (1, -1, -1)):
+        label = "".join("p" if sign > 0 else "m" for sign in signs)
+        directions.append(
+            (
+                f"density_xyz_{label}",
+                tuple(sign / body for sign in signs),
+            )
+        )
+    return directions
+
+
 def write_cross_sections(density_map, xyz, path: Path, *, header: list[str]) -> None:
-    """Write x, y, and z density profiles through ``xyz``, from −2 Å to +2 Å."""
+    """Write density profiles through ``xyz``, from −2 Å to +2 Å along each line."""
     import numpy as np
 
     origin = np.asarray(xyz, dtype=float)
+    directions = _section_directions()
     count = int(round((2 * SECTION_HALF_A) / SECTION_STEP_A))
     offsets = [-SECTION_HALF_A + index * SECTION_STEP_A for index in range(count + 1)]
     columns = []
-    for axis in range(3):
+    for _name, direction in directions:
+        vector = np.asarray(direction, dtype=float)
         samples = []
         for offset in offsets:
-            point = origin.copy()
-            point[axis] += float(offset)
+            point = origin + float(offset) * vector
             samples.append(_sample_density(density_map.original, density_map.to_index(point)))
         columns.append(samples)
     lines = list(header)
-    lines.append("# offset_A density_x density_y density_z")
+    lines.append(
+        "# offset_A is the signed distance in angstroms along each line. "
+        "Face diagonals are unit vectors with components ±1/sqrt(2). "
+        "Body diagonals are unit vectors with components ±1/sqrt(3). "
+        "p is positive and m is negative, in x, y, z order."
+    )
+    lines.append("# offset_A " + " ".join(name for name, _direction in directions))
 
     def _fmt(value: float) -> str:
         if not math.isfinite(value):
             return "nan"
         return f"{value:.6f}"
 
-    for offset, dx, dy, dz in zip(offsets, columns[0], columns[1], columns[2]):
-        lines.append(f"{float(offset):7.3f} {_fmt(dx)} {_fmt(dy)} {_fmt(dz)}")
+    for row, offset in enumerate(offsets):
+        values = " ".join(_fmt(column[row]) for column in columns)
+        lines.append(f"{float(offset):7.3f} {values}")
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 

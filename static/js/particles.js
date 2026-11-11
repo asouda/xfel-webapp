@@ -3,13 +3,24 @@
   if (!canvas) return;
   const ctx = canvas.getContext("2d");
   const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-  const colors = [
+  const darkColors = [
     [90, 150, 255],
     [70, 120, 255],
     [150, 90, 255],
     [190, 80, 255],
     [120, 160, 255],
   ];
+  const lightColors = [
+    [37, 84, 196],
+    [46, 70, 190],
+    [104, 58, 186],
+    [132, 48, 176],
+    [28, 96, 176],
+  ];
+
+  function colors() {
+    return document.documentElement.getAttribute("data-theme") === "light" ? lightColors : darkColors;
+  }
   let particles = [];
 
   function resize() {
@@ -27,7 +38,6 @@
     const count = Math.round(Math.min(110, Math.max(50, canvas.width * canvas.height / 18000)));
     particles = [];
     for (let i = 0; i < count; i += 1) {
-      const color = colors[i % colors.length];
       const large = Math.random() < 0.08;
       particles.push({
         x: bell() * canvas.width,
@@ -36,17 +46,21 @@
         vx: (Math.random() - 0.5) * (large ? 0.08 : 0.22),
         vy: (Math.random() - 0.5) * (large ? 0.08 : 0.22),
         a: large ? 0.05 + Math.random() * 0.08 : 0.25 + Math.random() * 0.55,
-        color,
+        colorIndex: i % colors().length,
       });
     }
   }
 
   function draw() {
+    const palette = colors();
+    const light = document.documentElement.getAttribute("data-theme") === "light";
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     for (const p of particles) {
+      const color = palette[p.colorIndex % palette.length];
+      const alpha = light ? (p.r > 10 ? p.a * 1.8 : p.a * 0.7) : p.a;
       ctx.beginPath();
-      ctx.fillStyle = `rgba(${p.color[0]}, ${p.color[1]}, ${p.color[2]}, ${p.a})`;
-      ctx.shadowColor = `rgba(${p.color[0]}, ${p.color[1]}, ${p.color[2]}, ${Math.min(0.9, p.a + 0.2)})`;
+      ctx.fillStyle = `rgba(${color[0]}, ${color[1]}, ${color[2]}, ${alpha})`;
+      ctx.shadowColor = `rgba(${color[0]}, ${color[1]}, ${color[2]}, ${Math.min(0.9, alpha + 0.2)})`;
       ctx.shadowBlur = p.r > 10 ? 40 : 16;
       ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
       ctx.fill();
@@ -67,6 +81,7 @@
     requestAnimationFrame(tick);
   }
 
+  window.addEventListener("xfel-theme", draw);
   window.addEventListener("resize", resize);
   resize();
   if (!reduce) requestAnimationFrame(tick);

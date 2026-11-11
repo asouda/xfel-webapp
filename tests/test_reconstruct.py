@@ -1,5 +1,6 @@
 """Reconstruction workflow: peak placement, atom insertion, and the form."""
 
+import math
 import shutil
 import tempfile
 import unittest
@@ -13,6 +14,8 @@ from xfel_web.pipelines import _viewer_scene
 from xfel_web.restraints import external_harmonic_keywords
 from xfel_web.forms import FormError, parse_job
 from xfel_web.reconstruction import (
+    _peak_api,
+    _section_directions,
     closest_atom,
     describe_atom,
     insert_atom_record,
@@ -43,15 +46,31 @@ def _pdb_line(serial, name, x, y, z, element, resname="OEX", resi=416, alt=" "):
     return "".join(line)
 
 
+def _write_map(path: Path, grid: gemmi.FloatGrid) -> None:
+    ccp4 = gemmi.Ccp4Map()
+    ccp4.grid = grid
+    ccp4.update_ccp4_header(2)
+    ccp4.write_ccp4_map(str(path))
+
+
 def _spike_map(path: Path) -> None:
     grid = gemmi.FloatGrid(16, 16, 16)
     grid.set_unit_cell(gemmi.UnitCell(32, 32, 32, 90, 90, 90))
     grid.spacegroup = gemmi.SpaceGroup("P 1")
     grid.set_value(8, 8, 8, 5.0)
-    ccp4 = gemmi.Ccp4Map()
-    ccp4.grid = grid
-    ccp4.update_ccp4_header(2)
-    ccp4.write_ccp4_map(str(path))
+    _write_map(path, grid)
+
+
+def _x_ramp_map(path: Path) -> None:
+    """Orthogonal map whose value at each node is that node's Cartesian x, in Å."""
+    grid = gemmi.FloatGrid(16, 16, 16)
+    grid.set_unit_cell(gemmi.UnitCell(32, 32, 32, 90, 90, 90))
+    grid.spacegroup = gemmi.SpaceGroup("P 1")
+    for i in range(16):
+        for j in range(16):
+            for k in range(16):
+                grid.set_value(i, j, k, 2.0 * i)
+    _write_map(path, grid)
 
 
 class HarmonicTests(unittest.TestCase):
@@ -185,14 +204,63 @@ class PeakTests(unittest.TestCase):
             self.assertAlmostEqual(peak["density"], 5.0, places=4)
             sections = Path(tmp) / "density_sections.txt"
             write_cross_sections(peak["map"], peak["xyz"], sections, header=["# test"])
-            rows = [line.split() for line in sections.read_text().splitlines() if line[:1].isdigit() or line.startswith(" ")]
+            text = sections.read_text()
+            self.assertIn("density_xy_p", text)
+            self.assertIn("density_xyz_ppp", text)
+            rows = [line.split() for line in text.splitlines() if line[:1].isdigit() or line.startswith(" ")]
             center = [row for row in rows if abs(float(row[0])) < 1e-6][0]
-            self.assertAlmostEqual(float(center[1]), 5.0, places=4)
-            self.assertAlmostEqual(float(center[2]), 5.0, places=4)
-            self.assertAlmostEqual(float(center[3]), 5.0, places=4)
+            self.assertEqual(len(center), 14)
+            for value in center[1:]:
+                self.assertAlmostEqual(float(value), 5.0, places=4)
             refined = locate_peak(path, 3, True, 3)
             self.assertAlmostEqual(refined["density"], 5.0, places=4)
             self.assertTrue(np.all(np.isfinite(refined["xyz"])))
+
+    def test_diagonal_offsets_are_distances_in_angstroms(self):
+        directions = _section_directions()
+        self.assertEqual(
+            [name for name, _vector in directions],
+            [
+                "density_x",
+                "density_y",
+                "density_z",
+                "density_xy_p",
+                "density_xy_m",
+                "density_xz_p",
+                "density_xz_m",
+                "density_yz_p",
+                "density_yz_m",
+                "density_xyz_ppp",
+                "density_xyz_ppm",
+                "density_xyz_pmp",
+                "density_xyz_pmm",
+            ],
+        )
+        for _name, vector in directions:
+            self.assertAlmostEqual(float(np.linalg.norm(vector)), 1.0, places=8)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "ramp.ccp4"
+            _x_ramp_map(path)
+            DensityMap, _choose, _spline = _peak_api()
+            density_map = DensityMap(path)
+            origin = density_map.to_cart((8, 8, 8))
+            sections = Path(tmp) / "density_sections.txt"
+            write_cross_sections(density_map, origin, sections, header=["# ramp"])
+            rows = [
+                line.split()
+                for line in sections.read_text().splitlines()
+                if line[:1].isdigit() or line.startswith(" ") or line.startswith("-")
+            ]
+            row = [item for item in rows if abs(float(item[0]) - 1.0) < 1e-6][0]
+            by_name = {name: float(row[index + 1]) for index, (name, _vector) in enumerate(directions)}
+            self.assertAlmostEqual(by_name["density_x"], 17.0, places=5)
+            self.assertAlmostEqual(by_name["density_y"], 16.0, places=5)
+            self.assertAlmostEqual(by_name["density_xy_p"], 16.0 + 1.0 / math.sqrt(2.0), places=5)
+            self.assertAlmostEqual(by_name["density_xy_m"], 16.0 + 1.0 / math.sqrt(2.0), places=5)
+            self.assertAlmostEqual(by_name["density_yz_p"], 16.0, places=5)
+            self.assertAlmostEqual(by_name["density_xyz_ppp"], 16.0 + 1.0 / math.sqrt(3.0), places=5)
+            self.assertAlmostEqual(by_name["density_xyz_pmm"], 16.0 + 1.0 / math.sqrt(3.0), places=5)
 
 
 class LoopTests(unittest.TestCase):
