@@ -13,12 +13,15 @@ from xfel_web.ccp4 import (
     copy_ccp4_header_statistics,
     delta_b_tag,
     fft_grid_resolution,
+    format_pymol_view,
     grid_res_tag,
+    ngl_to_pymol_view,
     pad_map_around_model,
     pymol_scene_links,
     residue_conformers,
     selection_coordinates,
     view_frame_half_widths,
+    viewer_pymol_text,
 )
 from xfel_web.forms import (
     FormError,
@@ -634,6 +637,147 @@ class PadMapTests(unittest.TestCase):
             value = struct.unpack_from("<f", raw, 1024 + nsymbt)[0]
             self.assertEqual(value, 111.0)
             self.assertAlmostEqual(struct.unpack_from("<f", raw, 54 * 4)[0], 1.25, places=5)
+
+
+_SCENE_SCRIPT = """\
+viewport 800, 600
+set orthoscopic, on
+set auto_zoom, 0
+orient carve_sel
+zoom (view_frame_lo or view_frame_hi), 2
+hide view_center
+isosurface map_3, MAP, 3.000000, carve_sel, carve=3.00
+"""
+
+
+class ViewerPyMOLScriptTests(unittest.TestCase):
+    def test_identity_view_flips_ngl_z(self):
+        view = ngl_to_pymol_view(
+            [1, 0, 0, 0, 1, 0, 0, 0, 1],
+            [0, 0, 0],
+            40,
+            40,
+            10,
+            80,
+        )
+        self.assertEqual(view[:9], [1, 0, 0, 0, 1, 0, 0, 0, -1])
+        self.assertEqual(view[9:12], [0, 0, -40])
+        self.assertEqual(view[12:15], [0, 0, 0])
+        self.assertEqual(view[15:18], [10, 80, -40])
+
+    def test_pan_becomes_the_rotation_origin(self):
+        view = ngl_to_pymol_view(
+            [1, 0, 0, 0, 1, 0, 0, 0, 1],
+            [3, -2, 0.5],
+            50,
+            40,
+            5,
+            120,
+        )
+        self.assertEqual(view[12:15], [-3, 2, -0.5])
+
+    def test_y_rotation_matches_screen_axes(self):
+        # 90 degrees about Y: model +Z moves to NGL world +X (screen right).
+        view = ngl_to_pymol_view(
+            [0, 0, 1, 0, 1, 0, -1, 0, 0],
+            [0, 0, 0],
+            40,
+            40,
+            8,
+            90,
+        )
+        self.assertEqual(view[:9], [0, 0, 1, 0, 1, 0, 1, 0, 0])
+
+    def test_script_uses_viewer_camera_when_requested(self):
+        text = viewer_pymol_text(
+            _SCENE_SCRIPT,
+            use_orientation=True,
+            rotation=[1, 0, 0, 0, 1, 0, 0, 0, 1],
+            translation=[1, 0, 0],
+            distance=40,
+            fov=40,
+            near=10,
+            far=80,
+            width=640,
+            height=480,
+        )
+        self.assertIn("viewport 640, 480", text)
+        self.assertIn("set orthoscopic, off", text)
+        self.assertIn("set field_of_view, 40", text)
+        self.assertIn("set_view (", text)
+        self.assertNotIn("orient carve_sel", text)
+        self.assertNotIn("zoom (view_frame_lo or view_frame_hi), 2", text)
+        self.assertIn("isosurface map_3, MAP, 3.000000, carve_sel, carve=3.00", text)
+        self.assertIn("-1.000000000", text)
+        command = format_pymol_view(ngl_to_pymol_view(
+            [1, 0, 0, 0, 1, 0, 0, 0, 1], [1, 0, 0], 40, 40, 10, 80
+        ))
+        self.assertTrue(command.endswith(" )"))
+        self.assertNotIn(", )", command)
+
+    def test_script_keeps_calculated_framing_when_orientation_is_off(self):
+        text = viewer_pymol_text(_SCENE_SCRIPT, use_orientation=False)
+        self.assertEqual(text, _SCENE_SCRIPT)
+
+    def test_rejects_a_view_that_is_not_a_rotation(self):
+        with self.assertRaises(ValueError):
+            ngl_to_pymol_view([2, 0, 0, 0, 2, 0, 0, 0, 2], [0, 0, 0], 40, 40, 10, 80)
+
+    def test_endpoint_writes_the_script_beside_the_calculation(self):
+        import importlib.util
+
+        module_path = Path(__file__).resolve().parents[1] / "xfel-app.py"
+        spec = importlib.util.spec_from_file_location("xfel_app_under_test", module_path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        job_id = "c" * 32
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            script = root / "scene.pml"
+            script.write_text(_SCENE_SCRIPT)
+            module._JOBS[job_id] = {
+                "id": job_id,
+                "status": "succeeded",
+                "workflow": "fofo",
+                "created": 0,
+                "log_path": str(root / "log.txt"),
+                "result": {
+                    "pymol_script": str(script),
+                    "output_dir": str(root),
+                    "files": [],
+                },
+            }
+            client = module.app.test_client()
+            try:
+                turned_on = client.post(
+                    f"/api/jobs/{job_id}/pymol-script",
+                    json={
+                        "use_orientation": True,
+                        "rotation": [1, 0, 0, 0, 1, 0, 0, 0, 1],
+                        "translation": [0, 0, 0],
+                        "distance": 40,
+                        "fov": 40,
+                        "near": 10,
+                        "far": 80,
+                        "width": 320,
+                        "height": 240,
+                    },
+                )
+                self.assertEqual(turned_on.status_code, 200)
+                body = turned_on.get_json()
+                self.assertIn("viewport 320, 240", body["script"])
+                self.assertIn("set_view (", body["script"])
+                self.assertTrue(Path(body["path"]).is_file())
+                self.assertEqual(Path(body["path"]).parent, root)
+                turned_off = client.post(
+                    f"/api/jobs/{job_id}/pymol-script",
+                    json={"use_orientation": False},
+                )
+                self.assertEqual(turned_off.status_code, 200)
+                self.assertEqual(turned_off.get_json()["script"], _SCENE_SCRIPT)
+            finally:
+                module._JOBS.pop(job_id, None)
+                module._job_path(job_id).unlink(missing_ok=True)
 
 
 if __name__ == "__main__":

@@ -485,6 +485,10 @@ _PML_DISTANCE = re.compile(r"^distance\s+(\S+)\s*,\s*(.+?)\s*,\s*(.+)$")
 _PML_ATOM = re.compile(r"\bname\s+(\S+)")
 _PML_ALT = re.compile(r"\balt\s+([A-Za-z0-9])")
 _PML_CARVE = re.compile(r"\bcarve=([+-]?\d+(?:\.\d+)?)")
+_PML_VIEWPORT = re.compile(r"^viewport\s+\d+\s*,\s*\d+\s*$")
+_PML_ORTHO = re.compile(r"^set orthoscopic,\s*on\s*$")
+_PML_ORIENT = re.compile(r"^orient\s+carve_sel\s*$")
+_PML_ZOOM = re.compile(r"^zoom\s+\(view_frame_lo or view_frame_hi\)\s*,\s*2\s*$")
 
 
 def _pml_atom(clause: str, selections: dict[str, dict]) -> dict | None:
@@ -548,6 +552,158 @@ def pymol_scene_links(pml_path: Path) -> dict:
             if carved:
                 carve = float(carved.group(1))
     return {"map": map_path, "bonds": bonds, "distances": distances, "carve": carve}
+
+
+def _as_float(value, label: str) -> float:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        raise ValueError(f"The 3D viewer did not send a usable {label}.") from None
+    if not math.isfinite(number):
+        raise ValueError(f"The 3D viewer did not send a usable {label}.")
+    return number
+
+
+def _rotation_matrix(values) -> list[float]:
+    """Row-major rotation that takes model coordinates into the NGL world."""
+    if not isinstance(values, (list, tuple)) or len(values) != 9:
+        raise ValueError("The 3D viewer did not send a usable orientation.")
+    matrix = [_as_float(item, "orientation") for item in values]
+    rows = [matrix[0:3], matrix[3:6], matrix[6:9]]
+
+    def dot(left: list[float], right: list[float]) -> float:
+        return sum(a * b for a, b in zip(left, right))
+
+    for row in rows:
+        if abs(math.sqrt(dot(row, row)) - 1) > 1e-2:
+            raise ValueError("The 3D viewer did not send a usable orientation.")
+    if abs(dot(rows[0], rows[1])) > 1e-2 or abs(dot(rows[0], rows[2])) > 1e-2 or abs(dot(rows[1], rows[2])) > 1e-2:
+        raise ValueError("The 3D viewer did not send a usable orientation.")
+    det = (
+        rows[0][0] * (rows[1][1] * rows[2][2] - rows[1][2] * rows[2][1])
+        - rows[0][1] * (rows[1][0] * rows[2][2] - rows[1][2] * rows[2][0])
+        + rows[0][2] * (rows[1][0] * rows[2][1] - rows[1][1] * rows[2][0])
+    )
+    if abs(det - 1) > 1e-2:
+        raise ValueError("The 3D viewer did not send a usable orientation.")
+    return matrix
+
+
+def ngl_to_pymol_view(rotation, translation, distance, fov, near, far) -> list[float]:
+    """PyMOL ``set_view`` for the camera the interactive viewer is using.
+
+    NGL looks along +Z from a camera on the negative Z axis, with +X to the
+    right and +Y up. PyMOL's ``set_view`` matrix maps model coordinates into a
+    camera that looks down −Z, with +X to the right, +Y up, and +Z toward the
+    observer. The sign flip on the third row converts one into the other.
+    The last element is the vertical field of view, negative for perspective.
+    """
+    matrix = _rotation_matrix(rotation)
+    if not isinstance(translation, (list, tuple)) or len(translation) != 3:
+        raise ValueError("The 3D viewer did not send a usable pan.")
+    shifted = [_as_float(item, "pan") for item in translation]
+    if any(abs(item) > 1e6 for item in shifted):
+        raise ValueError("The 3D viewer did not send a usable pan.")
+    dist = abs(_as_float(distance, "zoom"))
+    if dist < 0.2 or dist > 1e6:
+        raise ValueError("The 3D viewer did not send a usable zoom.")
+    field = abs(_as_float(fov, "field of view"))
+    if field < 1 or field > 120:
+        raise ValueError("The 3D viewer did not send a usable field of view.")
+    front = _as_float(near, "clipping")
+    back = _as_float(far, "clipping")
+    if front <= 0 or front >= dist * 0.98:
+        front = max(0.1, dist * 0.05)
+    if back <= dist * 1.02 or back > 1e7:
+        back = dist * 4
+    # Flip the world Z row. The determinant changes sign; PyMOL applies that
+    # matrix as the model-to-camera transform.
+    pymol_rotation = matrix[:6] + [-matrix[6], -matrix[7], -matrix[8]]
+    origin = [-shifted[0], -shifted[1], -shifted[2]]
+    return pymol_rotation + [0.0, 0.0, -dist] + origin + [front, back, -field]
+
+
+def format_pymol_view(view: list[float]) -> str:
+    """``set_view`` command in the form PyMOL writes with ``get_view``."""
+    if len(view) != 18:
+        raise ValueError("A PyMOL view needs 18 numbers.")
+    lines = ["set_view (\\"]
+    for index in range(0, 18, 3):
+        row = "%14.9f, %14.9f, %14.9f" % (view[index], view[index + 1], view[index + 2])
+        if index < 15:
+            lines.append(f"  {row},\\")
+        else:
+            lines.append(f"  {row} )")
+    return "\n".join(lines)
+
+
+def _viewer_viewport(width, height) -> tuple[int, int]:
+    try:
+        wide = int(width)
+        high = int(height)
+    except (TypeError, ValueError):
+        raise ValueError("The 3D viewer size was not sent.") from None
+    if wide < 2 or high < 2:
+        raise ValueError("The 3D viewer size was not sent.")
+    limit = 4096
+    if wide > limit or high > limit:
+        scale = limit / max(wide, high)
+        wide = max(2, int(round(wide * scale)))
+        high = max(2, int(round(high * scale)))
+    return wide, high
+
+
+def viewer_pymol_text(
+    script: str,
+    *,
+    use_orientation: bool,
+    rotation=None,
+    translation=None,
+    distance=None,
+    fov=None,
+    near=None,
+    far=None,
+    width=None,
+    height=None,
+) -> str:
+    """Return a PyMOL script for this scene.
+
+    With ``use_orientation``, the script keeps the scene and replaces PyMOL's
+    ``orient`` and ``zoom`` with the interactive viewer's camera. Otherwise the
+    script is the one written by the calculation, which frames the site itself.
+    """
+    if not use_orientation:
+        return script
+    view = ngl_to_pymol_view(rotation, translation, distance, fov, near, far)
+    wide, high = _viewer_viewport(width, height)
+    field = abs(view[17])
+    lines = script.splitlines()
+    written: list[str] = []
+    placed_view = False
+    for line in lines:
+        stripped = line.strip()
+        if _PML_VIEWPORT.match(stripped):
+            written.append(f"viewport {wide}, {high}")
+            continue
+        if _PML_ORTHO.match(stripped):
+            written.append("set orthoscopic, off")
+            written.append(f"set field_of_view, {field:.6g}")
+            continue
+        if _PML_ORIENT.match(stripped):
+            written.append("# Camera from the interactive 3D viewer.")
+            written.append(format_pymol_view(view))
+            placed_view = True
+            continue
+        if _PML_ZOOM.match(stripped):
+            continue
+        written.append(line)
+    if not placed_view:
+        written.append("# Camera from the interactive 3D viewer.")
+        written.append(format_pymol_view(view))
+    text = "\n".join(written)
+    if script.endswith("\n"):
+        text += "\n"
+    return text
 
 
 def residue_name(pdb_path: Path, chain: str, resi: int) -> str:

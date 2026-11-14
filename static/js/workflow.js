@@ -11,6 +11,8 @@
   const viewerStatus = document.getElementById("viewer-status");
   const viewerReset = document.getElementById("viewer-reset");
   const viewerSave = document.getElementById("viewer-save");
+  const viewerPymol = document.getElementById("viewer-pymol");
+  const viewerOrientation = document.getElementById("viewer-orientation");
   const editBond = document.getElementById("edit-bond");
   const editDistance = document.getElementById("edit-distance");
   const editDelete = document.getElementById("edit-delete");
@@ -89,6 +91,9 @@
   let lightRemovedBonds = [];
   let lightBondScene = null;
   let showDistanceLabels = false;
+  let siteResidue = null;
+  let neighbourResidues = [];
+  let modelStick = null;
   let editMode = null;
   let pendingPick = null;
   let sceneNote = "";
@@ -367,10 +372,76 @@
       : viewerTitleDefault;
   }
 
+  function showReconstructionSteps(steps) {
+    const box = document.getElementById("reconstruction-steps");
+    const host = document.getElementById("reconstruction-steps-table");
+    if (!box || !host) return;
+    host.replaceChildren();
+    if (!Array.isArray(steps) || !steps.length) {
+      box.hidden = true;
+      return;
+    }
+    const dash = "—";
+    const fixed = (value, digits) => (
+      typeof value === "number" && Number.isFinite(value) ? value.toFixed(digits) : dash
+    );
+    const coordinates = (value) => (
+      Array.isArray(value) && value.length === 3
+        ? value.map((item) => fixed(item, 3)).join(", ")
+        : dash
+    );
+    const columns = [
+      ["Step", ""],
+      ["R-factor", "num"],
+      ["R-free", "num"],
+      ["Added atom", ""],
+      ["Coordinates (Å)", "num"],
+      ["Distance to reference (Å)", "num"],
+      ["Voxel density", "num"],
+      ["Note", "note"],
+    ];
+    const table = document.createElement("table");
+    const header = document.createElement("tr");
+    columns.forEach(([label, kind]) => {
+      const cell = document.createElement("th");
+      cell.textContent = label;
+      if (kind) cell.className = kind;
+      cell.scope = "col";
+      header.append(cell);
+    });
+    const thead = document.createElement("thead");
+    thead.append(header);
+    const tbody = document.createElement("tbody");
+    steps.forEach((step) => {
+      const values = [
+        [String(step.step), ""],
+        [fixed(step.r_factor, 4), "num"],
+        [fixed(step.r_free, 4), "num"],
+        [step.atom ? String(step.atom) : dash, ""],
+        [coordinates(step.coordinates), "num"],
+        [fixed(step.distance, 2), "num"],
+        [fixed(step.density, 3), "num"],
+        [step.note ? String(step.note) : "", "note"],
+      ];
+      const row = document.createElement("tr");
+      values.forEach(([value, kind]) => {
+        const cell = document.createElement("td");
+        cell.textContent = value;
+        if (kind) cell.className = kind;
+        row.append(cell);
+      });
+      tbody.append(row);
+    });
+    table.append(thead, tbody);
+    host.append(table);
+    box.hidden = false;
+  }
+
   function showResult(data) {
     setViewerTitle(data);
     figure.src = `${data.figure_url}?t=${Date.now()}`;
     caption.textContent = data.caption;
+    showReconstructionSteps(data.steps);
     loadViewer(data.viewer);
     fileList.replaceChildren();
     const rows = [
@@ -800,6 +871,7 @@
     if (!structure || !pairs.length) return;
     const atom = structure.getAtomProxy();
     pairs.forEach(([left, right]) => {
+      if (!pairResidueShown(source, [left, right])) return;
       atom.index = left;
       const start = [atom.x, atom.y, atom.z];
       atom.index = right;
@@ -827,9 +899,11 @@
   }
 
   function mountDistanceLabels(component, pairs) {
-    if (!component || !showDistanceLabels || !pairs.length) return null;
+    const source = component === lightComponent ? "light" : "model";
+    const visible = pairs.filter((pair) => pairResidueShown(source, pair));
+    if (!component || !showDistanceLabels || !visible.length) return null;
     const representation = component.addRepresentation("distance", {
-      atomPair: pairs.map((pair) => pair.slice()),
+      atomPair: visible.map((pair) => pair.slice()),
       labelUnit: "",
       labelColor: LABEL_COLOR,
       labelBorder: true,
@@ -891,7 +965,8 @@
   function redrawLabels(source) {
     const saved = captureView();
     const component = componentFor(source);
-    const indices = source === "light" ? lightLabeledAtoms : labeledAtoms;
+    const indices = (source === "light" ? lightLabeledAtoms : labeledAtoms)
+      .filter((index) => atomResidueShown(source, index));
     const current = source === "light" ? lightLabelRepresentation : labelRepresentation;
     if (current && component) component.removeRepresentation(current);
     let next = null;
@@ -1198,10 +1273,83 @@
     finishPair(pendingPick, pick);
   }
 
-  function selectionFor(scene) {
-    const residues = [`${scene.site.resi}:${scene.site.chain}`];
-    (scene.extra_residues || []).forEach((residue) => residues.push(`${residue.resi}:${residue.chain}`));
+  function residueSele(residue) {
+    return `${residue.resi}:${residue.chain}`;
+  }
+
+  function structureSelection(includeHidden) {
+    const residues = [];
+    if (siteResidue) residues.push(residueSele(siteResidue));
+    neighbourResidues.forEach((residue) => {
+      if (includeHidden || residue.shown) residues.push(residueSele(residue));
+    });
     return residues.join(" or ");
+  }
+
+  function atomResidueShown(source, index) {
+    const structure = structureFor(source);
+    if (!structure || !neighbourResidues.length) return true;
+    const atom = structure.getAtomProxy();
+    atom.index = index;
+    const chain = String(atom.chainname || "").trim();
+    const resi = Number(atom.resno);
+    const match = neighbourResidues.find((residue) => residue.chain === chain && residue.resi === resi);
+    return !match || match.shown;
+  }
+
+  function pairResidueShown(source, pair) {
+    return atomResidueShown(source, pair[0]) && atomResidueShown(source, pair[1]);
+  }
+
+  function neighbourButtonLabel(residue) {
+    const same = neighbourResidues.filter((item) => item.label === residue.label).length;
+    return same > 1 ? `${residue.label} ${residue.chain}${residue.resi}` : residue.label;
+  }
+
+  function syncNeighbourControls() {
+    const box = document.getElementById("viewer-neighbours");
+    const host = document.getElementById("neighbour-toggles");
+    if (!box || !host) return;
+    host.replaceChildren();
+    if (!neighbourResidues.length) {
+      box.hidden = true;
+      return;
+    }
+    box.hidden = false;
+    neighbourResidues.forEach((residue) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "pill";
+      const name = neighbourButtonLabel(residue);
+      button.textContent = name;
+      const describe = () => `${residue.shown ? "Hide" : "Show"} ${name}, chain ${residue.chain} residue ${residue.resi}`;
+      button.setAttribute("aria-pressed", residue.shown ? "true" : "false");
+      button.setAttribute("aria-label", describe());
+      button.addEventListener("click", () => {
+        if (!structureComponent) return;
+        residue.shown = !residue.shown;
+        button.setAttribute("aria-pressed", residue.shown ? "true" : "false");
+        button.setAttribute("aria-label", describe());
+        applyNeighbourVisibility();
+        viewerStatus.textContent = residue.shown ? `${name} is shown.` : `${name} is hidden.`;
+      });
+      host.append(button);
+    });
+  }
+
+  function applyNeighbourVisibility() {
+    const sele = structureSelection(false);
+    const saved = captureView();
+    if (modelStick) modelStick.setSelection(sele);
+    if (lightRepresentation) lightRepresentation.setSelection(sele);
+    if (pendingPick && !atomResidueShown(pendingPick.source, pendingPick.index)) {
+      pendingPick = null;
+      clearMarker();
+    }
+    redrawDistances();
+    redrawLabels("model");
+    redrawLabels("light");
+    whenStageIdle(viewerToken, () => restoreView(saved));
   }
 
   function lightStatusText() {
@@ -1646,8 +1794,14 @@
     showLightSite = false;
     lightColor = "yellow";
     lightTransparency = 40;
+    siteResidue = null;
+    neighbourResidues = [];
+    modelStick = null;
+    syncNeighbourControls();
     viewer.replaceChildren();
     if (viewerSave) viewerSave.disabled = true;
+    if (viewerPymol) viewerPymol.disabled = true;
+    if (viewerOrientation) viewerOrientation.disabled = true;
     syncSurfaceControls(false);
     syncSigmaControls(false);
     syncLightControls(false);
@@ -1674,7 +1828,17 @@
       // handler runs. Deleting a stick or dash invalidates that pick, and the
       // camera leaves the site.
       stage.mouseControls.remove("clickPick-*");
-      const structureSelection = selectionFor(scene);
+      siteResidue = scene.site
+        ? { chain: String(scene.site.chain || "").trim(), resi: Number(scene.site.resi) }
+        : null;
+      neighbourResidues = (scene.extra_residues || []).map((residue) => ({
+        chain: String(residue.chain || "").trim(),
+        resi: Number(residue.resi),
+        label: residue.label || `${residue.chain}${residue.resi}`,
+        shown: true,
+      }));
+      const shownSelection = structureSelection(true);
+      syncNeighbourControls();
       const [structure, volume] = await Promise.all([
         stage.loadFile(scene.model_url, { ext: scene.model_ext || "pdb", defaultRepresentation: false }),
         stage.loadFile(scene.map_url, { ext: "ccp4", defaultRepresentation: false }),
@@ -1682,7 +1846,7 @@
       if (token !== viewerToken) return;
       structureComponent = structure;
       volumeComponent = volume;
-      surfaceSelection = structureSelection;
+      surfaceSelection = shownSelection;
       carveRadius = Number(scene.carve) > 0 ? Number(scene.carve) : 0;
       surfaceStyle = scene.surface === "mesh" ? "mesh" : "solid";
       surfaceOpacity = surfaceStyle === "solid" ? 0.55 : 1;
@@ -1693,8 +1857,8 @@
       colorScale = "signed";
       contourIsSigma = scene.contour_mode !== "absolute";
       applyScriptBonds(structure, scene);
-      structure.addRepresentation("ball+stick", {
-        sele: structureSelection,
+      modelStick = structure.addRepresentation("ball+stick", {
+        sele: shownSelection,
         colorScheme: "element",
         multipleBond: false,
         aspectRatio: 2,
@@ -1711,7 +1875,7 @@
         }
         if (token !== viewerToken) return;
         if (lightComponent) {
-          const lightAtoms = lightComponent.structure.getAtomIndices(new NGL.Selection(structureSelection));
+          const lightAtoms = lightComponent.structure.getAtomIndices(new NGL.Selection(shownSelection));
           lightAtomCount = lightAtoms ? lightAtoms.length : 0;
           const neighbours = (scene.extra_residues || []).map((residue) => `${residue.chain}/${residue.resi}`);
           lightSiteDescription = `chain ${scene.site.chain} residue ${scene.site.resi}`;
@@ -1720,10 +1884,10 @@
             ? { bonds: scene.light_bonds, site: scene.site }
             : null;
           if (lightBondScene) applyScriptBonds(lightComponent, lightBondScene);
-          else copySelectionBonds(structure.structure, lightComponent.structure, structureSelection);
+          else copySelectionBonds(structure.structure, lightComponent.structure, shownSelection);
           lightComponent.setVisibility(false);
           lightRepresentation = lightComponent.addRepresentation("ball+stick", {
-            sele: structureSelection,
+            sele: shownSelection,
             color: lightColor,
             opacity: lightOpacityValue(),
             depthWrite: lightOpacityValue() >= 0.999,
@@ -1742,6 +1906,8 @@
       stage.autoView(0);
       stage.handleResize();
       viewerSave.disabled = false;
+      if (viewerPymol) viewerPymol.disabled = false;
+      if (viewerOrientation) viewerOrientation.disabled = false;
       [editBond, editDistance, editDelete, editLabel, editDistanceLabels].forEach((button) => {
         if (button) button.disabled = false;
       });
@@ -1757,12 +1923,12 @@
       } else if (lightComponent) {
         notes.push("Light site draws that file in ball and stick.");
       }
-      notes.push("Drag to rotate, scroll to zoom, and right-drag to pan. Save PNG keeps this orientation.");
+      notes.push("Drag to rotate, scroll to zoom, and right-drag to pan. Save PNG keeps this orientation. PyMOL script writes a .pml file. When Current orientation is on, that script uses this view.");
       sceneNote = notes.join(" ");
       viewerStatus.textContent = sceneNote;
       if (carveRadius > 0) {
         whenSurfaceReady(mounted, () => {
-          const carved = limitDensityToModel(volume, structure, structureSelection, carveRadius);
+          const carved = limitDensityToModel(volume, structure, shownSelection, carveRadius);
           if (!carved || token !== viewerToken) return;
           const radiusText = Number.isInteger(carveRadius) ? String(carveRadius) : String(carveRadius);
           sceneNote = `${sceneNote} Density is kept within ${radiusText} Å of the model atoms, as in the PyMOL figure.`;
@@ -1786,6 +1952,78 @@
     link.click();
     link.remove();
     window.setTimeout(() => URL.revokeObjectURL(url), 2000);
+  }
+
+  function orientationIsOn() {
+    return viewerOrientation && viewerOrientation.getAttribute("aria-pressed") === "true";
+  }
+
+  function captureViewerOrientation() {
+    const camera = stage.viewer;
+    camera.rotationGroup.updateMatrix();
+    const elements = camera.rotationGroup.matrix.elements;
+    const pan = camera.translationGroup.position;
+    return {
+      use_orientation: true,
+      rotation: [
+        elements[0], elements[4], elements[8],
+        elements[1], elements[5], elements[9],
+        elements[2], elements[6], elements[10],
+      ],
+      translation: [pan.x, pan.y, pan.z],
+      distance: camera.cameraDistance,
+      fov: camera.perspectiveCamera.fov,
+      near: camera.camera.near,
+      far: camera.camera.far,
+      width: Math.round(camera.width),
+      height: Math.round(camera.height),
+    };
+  }
+
+  if (viewerOrientation) {
+    viewerOrientation.addEventListener("click", () => {
+      const turnOn = !orientationIsOn();
+      viewerOrientation.setAttribute("aria-pressed", turnOn ? "true" : "false");
+      viewerStatus.textContent = turnOn
+        ? "Current orientation is on. PyMOL script will use the rotation, zoom, and pan of the 3D viewer."
+        : "Current orientation is off. PyMOL script will keep the framing from the calculation.";
+    });
+  }
+
+  if (viewerPymol) {
+    viewerPymol.addEventListener("click", async () => {
+      if (!stage || !jobId) {
+        viewerStatus.textContent = "The scene is not ready to save.";
+        return;
+      }
+      const useOrientation = orientationIsOn();
+      viewerPymol.disabled = true;
+      viewerStatus.textContent = useOrientation
+        ? "Writing a PyMOL script from the current view…"
+        : "Writing a PyMOL script with the calculated framing…";
+      try {
+        const payload = useOrientation ? captureViewerOrientation() : { use_orientation: false };
+        const response = await fetch(`/api/jobs/${jobId}/pymol-script`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          viewerStatus.textContent = data.error || "The PyMOL script could not be written.";
+          return;
+        }
+        downloadBlob(new Blob([data.script || ""], { type: "text/plain" }), data.name || "scene.pml");
+        appendFile(data.role || "PyMOL script", data.path);
+        viewerStatus.textContent = useOrientation
+          ? `Saved ${data.name} using the orientation in the 3D viewer. A copy was also downloaded.`
+          : `Saved ${data.name} with the framing from the calculation. A copy was also downloaded.`;
+      } catch (err) {
+        viewerStatus.textContent = "The PyMOL script could not be written.";
+      } finally {
+        viewerPymol.disabled = !stage;
+      }
+    });
   }
 
   viewerSave.addEventListener("click", async () => {

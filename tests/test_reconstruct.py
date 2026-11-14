@@ -23,6 +23,7 @@ from xfel_web.reconstruction import (
     locate_peak,
     missing_atoms,
     read_pdb_atoms,
+    read_refmac_rfactors,
     run_reconstruct,
     write_cross_sections,
 )
@@ -164,6 +165,8 @@ class AtomTests(unittest.TestCase):
         omit = read_pdb_atoms_from([_pdb_line(1, "MN1", 0, 0, 0, "MN")])
         missing = missing_atoms(reference, omit, set())
         self.assertEqual([atom.name for atom in missing], ["O5"])
+        eligible = missing_atoms(reference, omit, set(), include_present=True)
+        self.assertEqual([atom.name for atom in eligible], ["MN1", "O5"])
         atom, distance = closest_atom(missing, (1.2, 0, 0))
         self.assertEqual(atom.name, "O5")
         self.assertAlmostEqual(distance, 0.2, places=3)
@@ -263,13 +266,26 @@ class PeakTests(unittest.TestCase):
 
 
 class LoopTests(unittest.TestCase):
-    def _run(self, root: Path, xyz, extra_atoms, n_atoms=1, n_check=0, pause=None, report_step=None, harmonic=False):
+    def _run(
+        self,
+        root: Path,
+        xyz,
+        extra_atoms,
+        n_atoms=1,
+        n_check=0,
+        pause=None,
+        report_step=None,
+        harmonic=False,
+        candidate_atoms="missing",
+        omit_lines=(),
+        shift_refined=0.0,
+    ):
         source = root / "spike.ccp4"
         _spike_map(source)
         omit = root / "omit.pdb"
         reference = root / "reference.pdb"
         keeper = _pdb_line(1, "MN1", 0, 0, 0, "MN")
-        omit.write_text(keeper + "\nEND\n")
+        omit.write_text("\n".join([keeper, *omit_lines, "END"]) + "\n")
         reference_lines = [keeper, _pdb_line(2, "O5", *xyz, "O"), *extra_atoms, "END"]
         reference.write_text("\n".join(reference_lines) + "\n")
         calls = []
@@ -278,6 +294,29 @@ class LoopTests(unittest.TestCase):
             emit("omit map")
             dest = Path(cfg["output_dir"]) / "fragment.ccp4"
             shutil.copy2(source, dest)
+            refined = Path(cfg["output_dir"]) / f"{cfg['dark_id']}_refined.pdb"
+            source_text = Path(cfg["files"]["dark_pdb"]).read_text(encoding="utf-8")
+            if shift_refined:
+                shifted_lines = []
+                for line in source_text.splitlines():
+                    if line.startswith(("ATOM", "HETATM")) and len(line) >= 54:
+                        x = float(line[30:38]) + shift_refined
+                        line = f"{line[:30]}{x:8.3f}{line[38:]}"
+                    shifted_lines.append(line)
+                refined.write_text("\n".join(shifted_lines) + "\n", encoding="utf-8")
+            else:
+                refined.write_text(source_text, encoding="utf-8")
+            log_path = Path(cfg["output_dir"]) / (
+                f"{cfg['dark_id']}_vs_{cfg['light_id']}_refmac{int(cfg['refmac_ncyc'])}.log"
+            )
+            log_path.write_text(
+                "$TEXT:Result: $$ Final results $$\n"
+                " Initial Final\n"
+                " R factor 0.2102 0.1631\n"
+                " R free 0.2508 0.2185\n"
+                " $$\n",
+                encoding="utf-8",
+            )
             calls.append(Path(cfg["files"]["dark_pdb"]).read_text())
             self.last_harmonics.append(cfg.get("harmonic_atoms"))
             return {
@@ -305,6 +344,7 @@ class LoopTests(unittest.TestCase):
                 "spline_order": 3,
                 "harmonic_added": harmonic,
                 "harmonic_sigma": 0.1,
+                "candidate_atoms": candidate_atoms,
                 "refmac_ncyc": 0,
                 "files": {"dark_pdb": omit, "light_pdb": reference, "light_sf": reference},
             },
@@ -327,10 +367,33 @@ class LoopTests(unittest.TestCase):
             self.assertEqual(len(calls), 2)
             self.assertIn("O5", calls[1])
             self.assertNotIn("O5", calls[0])
+            added_model = root / "out" / "r-iteration-01" / "omit_refined_added_O5_step01.pdb"
+            self.assertTrue(added_model.is_file())
+            self.assertEqual(calls[1], added_model.read_text(encoding="utf-8"))
+            self.assertFalse((root / "out" / "r-iteration-02" / "omit_refined_added_O5_step02.pdb").is_file())
             self.assertEqual(result["view_id"], "final-2")
             self.assertFalse(result["checkpoint"])
-            self.assertIn("O5", (root / "out" / "omit_reconstructed.pdb").read_text())
-            self.assertTrue((root / "out" / "r-iteration-01" / "density_sections.txt").is_file())
+            self.assertIn("O5", (root / "out" / "omit_reconstructed_final.pdb").read_text())
+            self.assertTrue((root / "out" / "r-iteration-01" / "density_sections_step01.txt").is_file())
+            self.assertFalse((root / "out" / "r-iteration-01" / "density_sections.txt").is_file())
+            self.assertTrue((root / "out" / "r-iteration-01" / "omit_omit_step01.pdb").is_file())
+            self.assertTrue((root / "out" / "r-iteration-01" / "fragment_step01.ccp4").is_file())
+            self.assertTrue((root / "out" / "r-iteration-02" / "omit_refined_step02.pdb").is_file())
+            self.assertFalse((root / "out" / "omit_reconstructed.pdb").is_file())
+            self.assertEqual(
+                (root / "out" / "omit_reconstructed_final.pdb").read_text(),
+                (root / "out" / "r-iteration-02" / "omit_refined_step02.pdb").read_text(),
+            )
+            self.assertTrue(str(result["figure"]).endswith("fragment_step02.ccp4"))
+            self.assertTrue(Path(result["fragment"]).is_file())
+            self.assertEqual([row["step"] for row in result["steps"]], [1, 2])
+            self.assertIn("O5", result["steps"][0]["atom"])
+            self.assertAlmostEqual(result["steps"][0]["r_factor"], 0.1631)
+            self.assertAlmostEqual(result["steps"][0]["r_free"], 0.2185)
+            self.assertAlmostEqual(result["steps"][0]["distance"], 0.0, places=2)
+            self.assertEqual(len(result["steps"][0]["coordinates"]), 3)
+            self.assertEqual(result["steps"][1]["atom"], "")
+            self.assertIn("Residual map", result["steps"][1]["note"])
             self.assertTrue(any("Added" in line and "O5" in line for line in logs))
             self.assertIn("omit caption", result["caption"])
 
@@ -343,9 +406,14 @@ class LoopTests(unittest.TestCase):
             far = (peak["xyz"][0] + 4.0, peak["xyz"][1], peak["xyz"][2])
             result, calls, logs = self._run(root, far, [])
             self.assertEqual(len(calls), 1)
-            self.assertNotIn("O5", (root / "out" / "omit_reconstructed.pdb").read_text())
+            self.assertNotIn("O5", (root / "out" / "omit_reconstructed_final.pdb").read_text())
+            self.assertFalse((root / "out" / "r-iteration-01" / "omit_refined_added_O5_step01.pdb").is_file())
             self.assertTrue(any("farther than 3" in line for line in logs))
             self.assertIn("not added", result["caption"])
+            self.assertEqual(len(result["steps"]), 1)
+            self.assertIn("O5", result["steps"][0]["atom"])
+            self.assertGreater(result["steps"][0]["distance"], 3)
+            self.assertIn("Not added", result["steps"][0]["note"])
 
     def test_an_atom_farther_than_1_angstrom_is_added_with_a_warning(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -357,13 +425,41 @@ class LoopTests(unittest.TestCase):
             _result, calls, logs = self._run(root, near, [])
             self.assertEqual(len(calls), 2)
             self.assertTrue(any(line.startswith("Warning:") and "1.50" in line for line in logs))
-            rebuilt = read_pdb_atoms(root / "out" / "omit_reconstructed.pdb")
+            rebuilt = read_pdb_atoms(root / "out" / "omit_reconstructed_final.pdb")
             added = [atom for atom in rebuilt if atom.name == "O5"]
             self.assertEqual(len(added), 1)
             self.assertAlmostEqual(added[0].xyz[0], peak["xyz"][0], places=3)
             self.assertAlmostEqual(added[0].xyz[1], peak["xyz"][1], places=3)
             self.assertAlmostEqual(added[0].xyz[2], peak["xyz"][2], places=3)
             self.assertGreater(abs(added[0].xyz[0] - near[0]), 1.0)
+            self.assertIn("Farther than 1 Å", _result["steps"][0]["note"])
+
+    def test_the_next_omit_model_keeps_the_refined_coordinates(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "spike.ccp4"
+            _spike_map(source)
+            peak = locate_peak(source, 3, False, 3)
+            _result, calls, _logs = self._run(root, peak["xyz"], [], shift_refined=1.0)
+            refined = read_pdb_atoms(root / "out" / "r-iteration-01" / "omit_refined_step01.pdb")
+            carried = read_pdb_atoms(root / "out" / "r-iteration-01" / "omit_refined_added_O5_step01.pdb")
+            final = read_pdb_atoms(root / "out" / "omit_reconstructed_final.pdb")
+            self.assertAlmostEqual(next(atom.xyz[0] for atom in refined if atom.name == "MN1"), 1.0)
+            self.assertAlmostEqual(next(atom.xyz[0] for atom in carried if atom.name == "MN1"), 1.0)
+            placed = next(atom for atom in carried if atom.name == "O5")
+            self.assertAlmostEqual(placed.xyz[0], peak["xyz"][0], places=3)
+            self.assertAlmostEqual(placed.xyz[1], peak["xyz"][1], places=3)
+            self.assertAlmostEqual(placed.xyz[2], peak["xyz"][2], places=3)
+            self.assertEqual(
+                calls[1],
+                (root / "out" / "r-iteration-01" / "omit_refined_added_O5_step01.pdb").read_text(encoding="utf-8"),
+            )
+            self.assertAlmostEqual(next(atom.xyz[0] for atom in final if atom.name == "MN1"), 2.0)
+            self.assertAlmostEqual(next(atom.xyz[0] for atom in final if atom.name == "O5"), peak["xyz"][0] + 1.0)
+            self.assertEqual(
+                (root / "out" / "omit_reconstructed_final.pdb").read_text(encoding="utf-8"),
+                (root / "out" / "r-iteration-02" / "omit_refined_step02.pdb").read_text(encoding="utf-8"),
+            )
 
     def test_a_map_check_pauses_before_the_atom_is_added(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -381,7 +477,7 @@ class LoopTests(unittest.TestCase):
             self.assertEqual([item["view_id"] for item in pauses], ["checkpoint-1"])
             self.assertTrue(pauses[0]["checkpoint"])
             self.assertEqual(len(calls), 2)
-            self.assertIn("O5", (root / "out" / "omit_reconstructed.pdb").read_text())
+            self.assertIn("O5", (root / "out" / "omit_reconstructed_final.pdb").read_text())
 
     def test_atoms_added_earlier_are_sent_as_harmonic_restraints(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -394,6 +490,45 @@ class LoopTests(unittest.TestCase):
             self.assertEqual(self.last_harmonics[1][0]["name"], "O5")
             self.assertEqual(self.last_harmonics[1][0]["resi"], 416)
             self.assertEqual(self.last_harmonics[1][0]["chain"], "A")
+
+    def test_an_atom_already_in_the_omit_model_is_added_when_every_atom_is_eligible(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "spike.ccp4"
+            _spike_map(source)
+            peak = locate_peak(source, 3, False, 3)
+            water = _pdb_line(3, "O", *peak["xyz"], "O", resname="HOH", resi=814)
+            shifted = _pdb_line(3, "O", peak["xyz"][0] + 5, peak["xyz"][1], peak["xyz"][2], "O", resname="HOH", resi=814)
+            far = (peak["xyz"][0] + 4.0, peak["xyz"][1], peak["xyz"][2])
+            _result, _calls, logs = self._run(
+                root,
+                far,
+                [water],
+                candidate_atoms="all",
+                omit_lines=[shifted],
+            )
+            rebuilt = read_pdb_atoms(root / "out" / "omit_reconstructed_final.pdb")
+            waters = [atom for atom in rebuilt if atom.resname == "HOH"]
+            self.assertEqual(len(waters), 2)
+            placed = [atom for atom in waters if abs(atom.xyz[0] - peak["xyz"][0]) < 0.01]
+            self.assertEqual(len(placed), 1)
+            self.assertTrue(any("Closest reference atom" in line and "HOH" in line for line in logs))
+            self.assertNotIn("O5", (root / "out" / "omit_reconstructed_final.pdb").read_text())
+
+    def test_an_atom_already_in_the_omit_model_stays_ineligible_by_default(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "spike.ccp4"
+            _spike_map(source)
+            peak = locate_peak(source, 3, False, 3)
+            water = _pdb_line(3, "O", *peak["xyz"], "O", resname="HOH", resi=814)
+            shifted = _pdb_line(3, "O", peak["xyz"][0] + 5, peak["xyz"][1], peak["xyz"][2], "O", resname="HOH", resi=814)
+            far = (peak["xyz"][0] + 4.0, peak["xyz"][1], peak["xyz"][2])
+            _result, _calls, logs = self._run(root, far, [water], omit_lines=[shifted])
+            rebuilt = read_pdb_atoms(root / "out" / "omit_reconstructed_final.pdb")
+            self.assertEqual(len([atom for atom in rebuilt if atom.resname == "HOH"]), 1)
+            self.assertTrue(any("farther than 3" in line for line in logs))
+            self.assertTrue(any("O5" in line and "Closest missing atom" in line for line in logs))
 
 
 class ReconstructFormTests(unittest.TestCase):
@@ -461,6 +596,7 @@ class ReconstructFormTests(unittest.TestCase):
         self.assertEqual(cfg["viewer_light_label"], "Reference site")
         self.assertFalse(cfg["harmonic_added"])
         self.assertEqual(cfg["harmonic_sigma"], 0.1)
+        self.assertEqual(cfg["candidate_atoms"], "missing")
 
     def test_a_non_positive_harmonic_sigma_is_rejected_when_the_option_is_on(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -470,6 +606,14 @@ class ReconstructFormTests(unittest.TestCase):
             cfg = parse_job("reconstruct", self._form(root, harmonic_added="on", harmonic_sigma="0.1"), {}, root)
         self.assertTrue(cfg["harmonic_added"])
         self.assertEqual(cfg["harmonic_sigma"], 0.1)
+
+    def test_every_reference_atom_can_be_made_eligible(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with self.assertRaises(FormError):
+                parse_job("reconstruct", self._form(root, candidate_atoms="waters"), {}, root)
+            cfg = parse_job("reconstruct", self._form(root, candidate_atoms="all"), {}, root)
+        self.assertEqual(cfg["candidate_atoms"], "all")
 
     def test_even_neighborhood_and_a_non_pdb_model_are_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -491,3 +635,44 @@ class ReconstructFormTests(unittest.TestCase):
         self.assertNotIn("geometry_bonds", cfg)
         self.assertNotIn("n_check_map", cfg)
         self.assertNotIn("harmonic_added", cfg)
+        self.assertNotIn("candidate_atoms", cfg)
+
+
+class RefmacRfactorTests(unittest.TestCase):
+    def test_the_final_column_is_preferred_over_the_initial_value(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            log = Path(tmp) / "refmac.log"
+            log.write_text(
+                "$TABLE: Rfactor analysis, stats vs cycle :\n"
+                "$$ Ncyc Rfact Rfree $$\n"
+                "$$ 0 0.2102 0.2508 $$\n"
+                " 1 0.1631 0.2185\n"
+                "$$\n"
+                "$TEXT:Result: $$ Final results $$\n"
+                " Initial Final\n"
+                " R factor 0.2102 0.1631\n"
+                " R free 0.2508 0.2185\n"
+                " $$\n",
+                encoding="utf-8",
+            )
+            r_factor, r_free = read_refmac_rfactors(log)
+            self.assertAlmostEqual(r_factor, 0.1631)
+            self.assertAlmostEqual(r_free, 0.2185)
+
+    def test_the_last_cycle_row_is_used_when_the_summary_is_absent(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            log = Path(tmp) / "refmac.log"
+            log.write_text(
+                "Rfactor analysis, stats vs cycle :\n"
+                "$$ Ncyc Rfact Rfree $$\n"
+                " 0 0.4065 0.2789\n"
+                " 10 0.3615 0.2401\n"
+                "$$\n",
+                encoding="utf-8",
+            )
+            r_factor, r_free = read_refmac_rfactors(log)
+            self.assertAlmostEqual(r_factor, 0.3615)
+            self.assertAlmostEqual(r_free, 0.2401)
+
+    def test_a_missing_log_has_no_r_factors(self):
+        self.assertEqual(read_refmac_rfactors(Path("/no/such/refmac.log")), (None, None))

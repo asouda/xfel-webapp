@@ -49,10 +49,10 @@ uv sync
 uv run python xfel-app.py
 ```
 
-Open [http://127.0.0.1:5050](http://127.0.0.1:5050). The server listens on `127.0.0.1`. Set `PORT` to use another port:
+Open [http://127.0.0.1:5050](http://127.0.0.1:5050). The server listens on `127.0.0.1`. Choose another port with `--port`, or with the `XFEL_PORT` environment variable when `--port` is omitted:
 
 ```bash
-PORT=8080 uv run python xfel-app.py
+uv run python xfel-app.py --port 8080
 ```
 
 Installation notes for CCP4, Coot, and PyMOL are also on that page. Uploaded files and intermediates (MTZ, logs, the extended map, the site fragment, the PNG, and the PyMOL script) are written to the output directory entered on the workflow form. The default is `runs/`.

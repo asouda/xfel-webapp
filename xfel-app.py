@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import threading
@@ -13,7 +14,13 @@ from pathlib import Path
 from flask import Flask, abort, jsonify, render_template, request, send_file
 from werkzeug.utils import secure_filename
 
-from xfel_web.ccp4 import LIPID_PIGMENT, probe_software, pymol_scene_links, scan_hetatm
+from xfel_web.ccp4 import (
+    LIPID_PIGMENT,
+    probe_software,
+    pymol_scene_links,
+    scan_hetatm,
+    viewer_pymol_text,
+)
 from xfel_web.forms import FormError, decompress_gzip, parse_job
 from xfel_web.pipelines import RUNNERS
 
@@ -127,7 +134,7 @@ WORKFLOWS = {
         "title": "Reconstruct the model from the omit mFo−DFc maps",
         "kicker": "Omit-map reconstruction",
         "card": "Add missing atoms one at a time by placing each one on the highest peak of the omit-model difference map.",
-        "how": "Each iteration runs the omit mFo−DFc calculation. The highest peak of the clipped map is matched to the nearest heavy atom that is in the reference model and absent from the omit model, and that atom is added. The viewer can pause every few iterations.",
+        "how": "Each iteration refines the omit model and calculates the omit mFo−DFc map. The highest peak is matched to the nearest eligible heavy atom in the reference model, and that atom is inserted into the refined coordinates. The next iteration starts from that model. By default the atom must be absent from the omit model. The form can instead make every heavy atom eligible. The viewer can pause every few iterations.",
         "scan_key": "dark_pdb",
         "scan_label": "starting omit-model coordinates",
         "files": [
@@ -525,6 +532,7 @@ def job_status(job_id: str):
             "figure_url": f"/api/jobs/{job_id}/figure",
             "viewer": viewer,
             "files": result["files"],
+            "steps": result.get("steps"),
         }
         if result.get("view_id"):
             public_result["view_id"] = result["view_id"]
@@ -592,6 +600,59 @@ def job_snapshot(job_id: str):
     return jsonify({"path": str(dest), "name": dest.name})
 
 
+@app.post("/api/jobs/<job_id>/pymol-script")
+def job_pymol_script(job_id: str):
+    """Write a PyMOL script for this scene.
+
+    When the request asks for the viewer orientation, the script uses the
+    camera sent from the 3D viewer. Otherwise it keeps the framing from the
+    calculation.
+    """
+    job = _get_job(job_id)
+    if job.get("status") not in {"succeeded", "paused"}:
+        return jsonify({"error": "The scene is not ready to save."}), 400
+    result = job.get("result") or {}
+    script_path = Path(result.get("pymol_script") or "")
+    output_dir = Path(result.get("output_dir") or "")
+    if not script_path.is_file() or not output_dir.is_dir():
+        return jsonify({"error": "The PyMOL script for this calculation is not available."}), 400
+    try:
+        script_path.resolve().relative_to(output_dir.resolve())
+    except ValueError:
+        return jsonify({"error": "The PyMOL script for this calculation is not available."}), 400
+    payload = request.get_json(silent=True) or {}
+    use_orientation = bool(payload.get("use_orientation"))
+    try:
+        text = viewer_pymol_text(
+            script_path.read_text(encoding="utf-8", errors="replace"),
+            use_orientation=use_orientation,
+            rotation=payload.get("rotation"),
+            translation=payload.get("translation"),
+            distance=payload.get("distance"),
+            fov=payload.get("fov"),
+            near=payload.get("near"),
+            far=payload.get("far"),
+            width=payload.get("width"),
+            height=payload.get("height"),
+        )
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    millis = int((time.time() % 1) * 1000)
+    tag = "orientation" if use_orientation else "framed"
+    dest = script_path.with_name(f"{script_path.stem}_{tag}_{stamp}-{millis:03d}.pml")
+    while dest.exists():
+        millis = (millis + 1) % 1000
+        dest = script_path.with_name(f"{script_path.stem}_{tag}_{stamp}-{millis:03d}.pml")
+    dest.write_text(text, encoding="utf-8")
+    role = "PyMOL script, viewer orientation" if use_orientation else "PyMOL script, calculated framing"
+    with _JOBS_LOCK:
+        files = result.setdefault("files", [])
+        files.append({"role": role, "path": str(dest)})
+        _save_job(job)
+    return jsonify({"path": str(dest), "name": dest.name, "script": text, "role": role})
+
+
 @app.get("/api/jobs/<job_id>/figure")
 def job_figure(job_id: str):
     job = _get_job(job_id)
@@ -631,6 +692,28 @@ def not_found(_exc):
     return render_template("index.html", workflows=WORKFLOWS, software=_software("/Applications/ccp4-9"), ccp4_root="/Applications/ccp4-9"), 404
 
 
+def _listen_port(argv: list[str] | None = None) -> int:
+    """Port from ``--port``, otherwise the ``XFEL_PORT`` environment variable, otherwise 5050."""
+    parser = argparse.ArgumentParser(description="Local site for the XFEL electron-density workflows.")
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=None,
+        help="Port to listen on (default: 5050)",
+    )
+    args = parser.parse_args(argv)
+    if args.port is None:
+        raw = os.environ.get("XFEL_PORT", "5050")
+        try:
+            port = int(raw)
+        except ValueError:
+            parser.error(f"XFEL_PORT must be an integer, got {raw!r}")
+    else:
+        port = args.port
+    if not 1 <= port <= 65535:
+        parser.error(f"port must be from 1 to 65535, got {port}")
+    return port
+
+
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", "5050"))
-    app.run(host="127.0.0.1", port=port, threaded=True, debug=False)
+    app.run(host="127.0.0.1", port=_listen_port(), threaded=True, debug=False)

@@ -1,12 +1,15 @@
 """Rebuild an omit model by placing reference atoms on omit-map peaks.
 
-Each iteration calls the omit-map workflow. The peak search is the local-maximum
-and optional spline placement in ``xfel_web.peaks``.
+Each iteration refines the current omit model, calculates the omit map, and
+inserts the closest reference atom at the highest peak. The next iteration
+starts from those refined coordinates with the new atom included. The peak
+search is the local-maximum and optional spline placement in ``xfel_web.peaks``.
 """
 
 from __future__ import annotations
 
 import math
+import re
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
@@ -96,9 +99,17 @@ def missing_atoms(
     reference: list[PdbAtom],
     omit: list[PdbAtom],
     excluded: set[tuple],
+    *,
+    include_present: bool = False,
 ) -> list[PdbAtom]:
-    """Heavy reference atoms whose name is absent from the omit model."""
-    present = {atom.identity for atom in omit}
+    """Heavy reference atoms that may be placed on a peak.
+
+    Hydrogens and non-positive occupancies are left out. Unless
+    ``include_present`` is set, an atom whose name is already in the omit
+    model is left out as well. ``excluded`` holds atoms already placed in
+    this run.
+    """
+    present = set() if include_present else {atom.identity for atom in omit}
     missing = []
     for atom in reference:
         if atom.element in {"H", "D"} or atom.occ <= 0:
@@ -129,6 +140,12 @@ def place_record_at(record: str, xyz: tuple[float, float, float]) -> str:
         raise ValueError("The reference atom is not an ATOM or HETATM record.")
     x, y, z = (float(value) for value in xyz)
     return f"{text[:30]}{x:8.3f}{y:8.3f}{z:8.3f}{text[54:]}".rstrip()
+
+
+def _refined_added_name(dark_id: str, atom_name: str, iteration: int) -> str:
+    """File name for the refined model after one atom has been inserted."""
+    label = "".join(ch if ch.isalnum() else "_" for ch in atom_name.strip()) or "atom"
+    return f"{dark_id}_refined_added_{label}_step{iteration:02d}.pdb"
 
 
 def insert_atom_record(pdb_text: str, record: str) -> str:
@@ -346,7 +363,16 @@ def _iteration_config(cfg: dict, omit_pdb: Path, output_dir: Path) -> dict:
     return child
 
 
-def _present(result: dict, *, view_id: str, iteration: int, checkpoint: bool, caption: str, extras: list) -> dict:
+def _present(
+    result: dict,
+    *,
+    view_id: str,
+    iteration: int,
+    checkpoint: bool,
+    caption: str,
+    extras: list,
+    steps: list | None = None,
+) -> dict:
     shown = dict(result)
     shown["view_id"] = view_id
     shown["iteration"] = iteration
@@ -357,11 +383,158 @@ def _present(result: dict, *, view_id: str, iteration: int, checkpoint: bool, ca
         if Path(path).is_file():
             files.append({"role": role, "path": str(path)})
     shown["files"] = files
+    if steps is not None:
+        shown["steps"] = steps
     return shown
 
 
 def _xyz_text(xyz) -> str:
     return f"{xyz[0]:.3f} {xyz[1]:.3f} {xyz[2]:.3f}"
+
+
+def _atom_table_label(atom: PdbAtom) -> str:
+    """Short residue label for one row of the reconstruction table."""
+    icode = atom.icode.strip()
+    label = f"{atom.name} {atom.resname} {atom.chain}{atom.resseq}{icode}"
+    alt = atom.alt.strip()
+    if alt:
+        label += f" alt {alt}"
+    return label
+
+
+def _refmac_log(directory: Path, cfg: dict) -> Path:
+    cycles = int(cfg.get("refmac_ncyc") or 0)
+    return directory / f"{cfg['dark_id']}_vs_{cfg['light_id']}_refmac{cycles}.log"
+
+
+_FINAL_BLOCK = re.compile(r"Final results\s*\$\$(.*?)\n\s*\$\$", re.DOTALL)
+_STAT_LINE = re.compile(
+    r"^\s*(R factor|R free)\s+([+-]?\d+(?:\.\d+)?)(?:\s+([+-]?\d+(?:\.\d+)?))?\s*$",
+    re.MULTILINE,
+)
+_CYCLE_ROW = re.compile(
+    r"^\s*\d+\s+([+-]?\d+(?:\.\d+)?)\s+([+-]?\d+(?:\.\d+)?)\b",
+    re.MULTILINE,
+)
+
+
+def read_refmac_rfactors(log_path: Path) -> tuple[float | None, float | None]:
+    """Final working and free R factors from a refmac5 log.
+
+    The Final column of the ``Final results`` block is preferred. When that
+    block is absent, the last row of the cycle table is used. A missing log
+    or an unrecognised log returns ``(None, None)``.
+    """
+    if not log_path.is_file():
+        return None, None
+    text = log_path.read_text(encoding="utf-8", errors="replace")
+    block = _FINAL_BLOCK.search(text)
+    if block:
+        found: dict[str, float] = {}
+        for kind, first, second in _STAT_LINE.findall(block.group(1)):
+            found[kind] = float(second if second else first)
+        if "R factor" in found:
+            return found.get("R factor"), found.get("R free")
+    start = text.find("Rfactor analysis, stats vs cycle")
+    if start < 0:
+        return None, None
+    end = text.find("Final results", start)
+    section = text[start:] if end < 0 else text[start:end]
+    rows = _CYCLE_ROW.findall(section)
+    if not rows:
+        return None, None
+    r_factor, r_free = rows[-1]
+    return float(r_factor), float(r_free)
+
+
+def _step_row(
+    step: int,
+    r_factor: float | None,
+    r_free: float | None,
+    *,
+    atom: str = "",
+    coordinates=None,
+    distance: float | None = None,
+    density: float | None = None,
+    note: str = "",
+) -> dict:
+    return {
+        "step": step,
+        "r_factor": r_factor,
+        "r_free": r_free,
+        "atom": atom,
+        "coordinates": None if coordinates is None else [float(value) for value in coordinates],
+        "distance": None if distance is None else float(distance),
+        "density": None if density is None else float(density),
+        "note": note,
+    }
+
+
+_STAMPED_SUFFIXES = {".pdb", ".map", ".ccp4", ".png"}
+_BINARY_SUFFIXES = _STAMPED_SUFFIXES | {".ent", ".mrc", ".mtz", ".jpg", ".jpeg", ".gif", ".webp"}
+
+
+def _step_tag(iteration: int) -> str:
+    return f"_step{iteration:02d}"
+
+
+def _rewrite_mentions(directory: Path, replacements: list[tuple[str, str]]) -> None:
+    """Point logs and scripts at the renamed iteration files."""
+    for path in directory.rglob("*"):
+        if not path.is_file() or path.suffix.lower() in _BINARY_SUFFIXES:
+            continue
+        data = path.read_bytes()
+        if b"\0" in data:
+            continue
+        try:
+            text = data.decode("utf-8")
+        except UnicodeDecodeError:
+            continue
+        updated = text
+        for old, new in replacements:
+            updated = updated.replace(old, new)
+        if updated != text:
+            path.write_text(updated, encoding="utf-8")
+
+
+def _retarget_paths(value, replacements: list[tuple[str, str]]):
+    if isinstance(value, str):
+        for old, new in replacements:
+            value = value.replace(old, new)
+        return value
+    if isinstance(value, dict):
+        return {key: _retarget_paths(item, replacements) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_retarget_paths(item, replacements) for item in value]
+    return value
+
+
+def _stamp_iteration_outputs(directory: Path, iteration: int, result: dict) -> dict:
+    """Append ``_stepNN`` to pdb, map, ccp4, png, and density-section names.
+
+    The number matches the ``r-iteration-NN`` directory. Paths stored in the
+    omit-map result, and the same paths written into logs and scripts, follow
+    the files.
+    """
+    tag = _step_tag(iteration)
+    renamed: list[tuple[Path, Path]] = []
+    for path in list(directory.iterdir()):
+        if not path.is_file():
+            continue
+        if path.suffix.lower() not in _STAMPED_SUFFIXES and path.name != "density_sections.txt":
+            continue
+        dest = path.with_name(f"{path.stem}{tag}{path.suffix}")
+        path.rename(dest)
+        renamed.append((path, dest))
+    if not renamed:
+        return result
+    replacements: list[tuple[str, str]] = []
+    for old, new in renamed:
+        replacements.append((str(old), str(new)))
+        replacements.append((old.name, new.name))
+    replacements.sort(key=lambda item: len(item[0]), reverse=True)
+    _rewrite_mentions(directory, replacements)
+    return _retarget_paths(result, replacements)
 
 
 def run_reconstruct(cfg: dict, emit, pause=None, omit_runner=None, report_step=None) -> dict:
@@ -385,31 +558,47 @@ def run_reconstruct(cfg: dict, emit, pause=None, omit_runner=None, report_step=N
     if not read_pdb_atoms(working):
         raise ValueError(f"No atoms were found in the omit model {Path(cfg['files']['dark_pdb']).name}.")
 
-    missing = missing_atoms(reference, read_pdb_atoms(working), set())
-    emit(
-        f"Heavy atoms in {reference_path.name} that are absent from the omit model: {len(missing)}. "
-        "Hydrogens are not candidates."
-    )
+    include_present = cfg.get("candidate_atoms", "missing") == "all"
+    missing = missing_atoms(reference, read_pdb_atoms(working), set(), include_present=include_present)
+    if include_present:
+        emit(
+            f"Heavy atoms in {reference_path.name}: {len(missing)}. "
+            "Atoms already in the omit model are eligible. Hydrogens are not candidates."
+        )
+    else:
+        emit(
+            f"Heavy atoms in {reference_path.name} that are absent from the omit model: {len(missing)}. "
+            "Hydrogens are not candidates."
+        )
     if not missing:
+        if include_present:
+            raise ValueError("The reference model has no heavy atom, so there is nothing to reconstruct.")
         raise ValueError(
             "The reference model has no heavy atom that is absent from the omit model, "
             "so there is nothing to reconstruct."
         )
     if n_atoms > len(missing):
-        emit(
-            f"Warning: {n_atoms} atoms were requested, and only {len(missing)} heavy atoms are missing. "
-            "The run stops when none remain."
-        )
+        if include_present:
+            emit(
+                f"Warning: {n_atoms} atoms were requested, and the reference model has only {len(missing)} heavy atoms. "
+                "The run stops when none remain."
+            )
+        else:
+            emit(
+                f"Warning: {n_atoms} atoms were requested, and only {len(missing)} heavy atoms are missing. "
+                "The run stops when none remain."
+            )
     if int(cfg.get("refmac_ncyc") or 0) > 0:
         emit(
-            "REFMAC cycles is greater than zero. Each map is calculated from the refined coordinates. "
-            "The next iteration still starts from the omit model with the reference atom inserted, "
-            "not from the shifted coordinates."
+            "REFMAC cycles is greater than zero. Each map is calculated after refinement. "
+            "The new atom is inserted into those refined coordinates, "
+            "and the next iteration starts from that model."
         )
 
     added: list[dict] = []
     excluded: set[tuple] = set()
     extras: list[tuple[str, Path]] = []
+    steps: list[dict] = []
     iteration = 0
     result = None
     stop_reason = ""
@@ -425,10 +614,13 @@ def run_reconstruct(cfg: dict, emit, pause=None, omit_runner=None, report_step=N
         shutil.copy2(working, snapshot)
         log("")
         log(f"Reconstruction iteration {iteration}: omit model {snapshot.name}, {len(added)} atoms added so far")
-        result = omit_runner(_omit_config(cfg, snapshot, iter_dir, added), log)
+        result = _stamp_iteration_outputs(
+            iter_dir, iteration, omit_runner(_omit_config(cfg, snapshot, iter_dir, added), log)
+        )
         fragment = Path(result["fragment"])
         if not fragment.is_file():
             raise FileNotFoundError(f"The omit-map clip was not written: {fragment}")
+        r_factor, r_free = read_refmac_rfactors(_refmac_log(iter_dir, cfg))
 
         if n_check and iteration % n_check == 0:
             if pause is None:
@@ -460,6 +652,7 @@ def run_reconstruct(cfg: dict, emit, pause=None, omit_runner=None, report_step=N
         if peak is None:
             stop_reason = "The clipped difference map has no finite density peak."
             log(f"Stopping: {stop_reason}")
+            steps.append(_step_row(iteration, r_factor, r_free, note=stop_reason))
             break
 
         xyz = peak["xyz"]
@@ -475,7 +668,9 @@ def run_reconstruct(cfg: dict, emit, pause=None, omit_runner=None, report_step=N
                 "The density is the value on the selected voxel."
             )
 
-        candidates = missing_atoms(reference, read_pdb_atoms(working), excluded)
+        candidates = missing_atoms(
+            reference, read_pdb_atoms(working), excluded, include_present=include_present
+        )
         atom, distance = closest_atom(candidates, xyz)
         header = [
             "# Cross sections of the omit mFo-DFc density through the peak",
@@ -484,14 +679,23 @@ def run_reconstruct(cfg: dict, emit, pause=None, omit_runner=None, report_step=N
             f"# peak_xyz {_xyz_text(xyz)}",
         ]
         action = "stopped"
+        placed_atom = ""
+        placed_xyz = None
+        placed_distance = None
+        placed_note = ""
         if atom is None or distance is None:
-            stop_reason = "The reference model has no heavy atom that is still missing from the omit model."
+            if include_present:
+                stop_reason = "Every heavy atom in the reference model has already been added."
+            else:
+                stop_reason = "The reference model has no heavy atom that is still missing from the omit model."
             header.append("# atom none")
             log(f"Stopping: {stop_reason}")
+            placed_note = stop_reason
         else:
             header.append(f"# atom {describe_atom(atom)}")
             header.append(f"# distance_A {distance:.4f}")
-            log(f"Closest missing atom: {describe_atom(atom)}, {distance:.2f} Å from the peak")
+            kind = "reference" if include_present else "missing"
+            log(f"Closest {kind} atom: {describe_atom(atom)}, {distance:.2f} Å from the peak")
             if distance > STOP_DISTANCE_A:
                 stop_reason = (
                     f"{describe_atom(atom)} is {distance:.2f} Å from the peak, farther than "
@@ -499,15 +703,30 @@ def run_reconstruct(cfg: dict, emit, pause=None, omit_runner=None, report_step=N
                 )
                 header.append("# action not_added")
                 log(f"Stopping: {stop_reason}")
+                placed_atom = _atom_table_label(atom)
+                placed_xyz = xyz
+                placed_distance = distance
+                placed_note = f"Not added. Farther than {STOP_DISTANCE_A:.0f} Å from the reference atom."
             else:
                 if distance > WARN_DISTANCE_A:
                     log(
                         f"Warning: {describe_atom(atom)} is {distance:.2f} Å from the peak, "
                         f"farther than {WARN_DISTANCE_A:.0f} Å."
                     )
-                text = working.read_text(encoding="utf-8", errors="replace")
+                refined_path = iter_dir / f"{cfg['dark_id']}_refined{_step_tag(iteration)}.pdb"
+                if not refined_path.is_file():
+                    raise FileNotFoundError(
+                        f"REFMAC did not write {cfg['dark_id']}_refined.pdb in {iter_dir.name}, "
+                        "so the atom cannot be inserted into the refined model."
+                    )
                 placed = place_record_at(atom.line, xyz)
-                working.write_text(insert_atom_record(text, placed), encoding="utf-8")
+                added_text = insert_atom_record(
+                    refined_path.read_text(encoding="utf-8", errors="replace"),
+                    placed,
+                )
+                added_path = iter_dir / _refined_added_name(cfg["dark_id"], atom.name, iteration)
+                added_path.write_text(added_text, encoding="utf-8")
+                working.write_text(added_text, encoding="utf-8")
                 excluded.add(atom.record_key)
                 added.append(
                     {
@@ -526,12 +745,37 @@ def run_reconstruct(cfg: dict, emit, pause=None, omit_runner=None, report_step=N
                 action = "added"
                 header.append("# action added")
                 log(
-                    f"Added {describe_atom(atom)} at the peak coordinates {_xyz_text(xyz)} Å."
+                    f"Added {describe_atom(atom)} at the peak coordinates {_xyz_text(xyz)} Å "
+                    f"in the refined model. Next omit model: {added_path.name}."
                 )
-        sections = iter_dir / "density_sections.txt"
+                extras.append(
+                    (f"Iteration {iteration} refined model with {atom.name.strip()}", added_path)
+                )
+                placed_atom = _atom_table_label(atom)
+                placed_xyz = xyz
+                placed_distance = distance
+                notes = []
+                if distance > WARN_DISTANCE_A:
+                    notes.append(f"Farther than {WARN_DISTANCE_A:.0f} Å from the reference atom.")
+                if cfg["spline_seed"]:
+                    notes.append("Coordinates are the spline maximum. Density is the voxel value.")
+                placed_note = " ".join(notes)
+        sections = iter_dir / f"density_sections{_step_tag(iteration)}.txt"
         write_cross_sections(peak["map"], xyz, sections, header=header)
         log(f"Density sections: {sections}")
         extras.append((f"Iteration {iteration} density sections", sections))
+        steps.append(
+            _step_row(
+                iteration,
+                r_factor,
+                r_free,
+                atom=placed_atom,
+                coordinates=placed_xyz,
+                distance=placed_distance,
+                density=peak["density"],
+                note=placed_note,
+            )
+        )
         del peak
         if action != "added":
             break
@@ -550,22 +794,33 @@ def run_reconstruct(cfg: dict, emit, pause=None, omit_runner=None, report_step=N
         shutil.copy2(working, snapshot)
         log("")
         log(f"Final residual map of the reconstructed model ({len(added)} atoms added)")
-        result = omit_runner(_omit_config(cfg, snapshot, iter_dir, added), log)
+        result = _stamp_iteration_outputs(
+            iter_dir, iteration, omit_runner(_omit_config(cfg, snapshot, iter_dir, added), log)
+        )
+        r_factor, r_free = read_refmac_rfactors(_refmac_log(iter_dir, cfg))
+        steps.append(
+            _step_row(
+                iteration,
+                r_factor,
+                r_free,
+                note="Residual map of the finished model.",
+            )
+        )
         stop_reason = f"Added all {n_atoms} requested atoms."
 
-    reconstructed = output_dir / f"{cfg['dark_id']}_reconstructed.pdb"
-    shutil.copy2(working, reconstructed)
-    extras.append(("Reconstructed model", reconstructed))
-    if added:
-        detail = "; ".join(
-            f"{item['name']} {item['resname']} {item['chain']}{item['residue']} ({item['distance']:.2f} Å)"
-            for item in added
+    refined = iter_dir / f"{cfg['dark_id']}_refined{_step_tag(iteration)}.pdb"
+    if not refined.is_file():
+        raise FileNotFoundError(
+            f"REFMAC did not write {cfg['dark_id']}_refined.pdb in {iter_dir.name}, "
+            "so the reconstructed model cannot be saved."
         )
-    else:
-        detail = "no atoms were added"
+    reconstructed = output_dir / f"{cfg['dark_id']}_reconstructed_final.pdb"
+    shutil.copy2(refined, reconstructed)
+    emit(f"Reconstructed model after the final refinement: {reconstructed}")
+    extras.append(("Reconstructed model", reconstructed))
     caption = (
         f"Reconstruction of {cfg['dark_id']} against {cfg['light_id']}: "
-        f"{len(added)} of {n_atoms} atoms added ({detail}). {stop_reason} "
+        f"{len(added)} of {n_atoms} atoms added. {stop_reason} "
         f"Each iteration is in {output_dir}. {result['caption']}"
     )
     emit("")
@@ -577,4 +832,5 @@ def run_reconstruct(cfg: dict, emit, pause=None, omit_runner=None, report_step=N
         checkpoint=False,
         caption=caption,
         extras=extras,
+        steps=steps,
     )

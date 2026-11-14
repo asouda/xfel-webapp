@@ -302,6 +302,8 @@ input:focus, select:focus, textarea:focus {
 }
 .check { flex-direction: row; align-items: center; gap: 10px; grid-column: 1 / -1; }
 .check input { width: auto; accent-color: var(--blue); }
+.choice { flex-direction: row; align-items: center; gap: 10px; margin-top: 8px; }
+.choice input { width: auto; accent-color: var(--blue); }
 .actions { display: flex; gap: 16px; align-items: center; margin-top: 18px; }
 .actions .hint { margin: 0; }
 .error {
@@ -332,9 +334,16 @@ figure img {
 }
 .viewer-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
 .viewer-head h3 { margin: 0; }
-.viewer-actions { display: flex; gap: 8px; flex-shrink: 0; }
+.viewer-actions { display: flex; gap: 8px; flex-shrink: 0; flex-wrap: wrap; justify-content: flex-end; }
 .viewer-actions .pill { padding: 7px 12px; font-size: 13px; }
+.viewer-actions .pill[aria-pressed="true"] { background: var(--pill-solid-bg); color: var(--pill-solid-fg); border-color: var(--pill-solid-bg); font-weight: 600; }
 .viewer-help { margin: 6px 0 10px; }
+.viewer-neighbours { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0 0 10px; }
+.viewer-neighbours[hidden] { display: none; }
+.viewer-neighbours-label { font-size: 13px; color: var(--muted); }
+.viewer-neighbours .pill { padding: 7px 12px; font-size: 13px; }
+.viewer-neighbours .pill[aria-pressed="true"] { background: var(--pill-solid-bg); color: var(--pill-solid-fg); border-color: var(--pill-solid-bg); font-weight: 600; }
+.viewer-neighbours .hint { flex-basis: 100%; margin: 0; }
 .viewer-edit { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 10px; }
 .viewer-edit .pill { padding: 7px 12px; font-size: 13px; }
 .viewer-edit .pill[aria-pressed="true"] { background: var(--pill-solid-bg); color: var(--pill-solid-fg); border-color: var(--pill-solid-bg); font-weight: 600; }
@@ -474,6 +483,12 @@ label.viewer-sigma-exact { flex-direction: row; align-items: center; gap: 4px; c
 .static-figure summary { cursor: pointer; }
 .static-figure img { margin-top: 10px; }
 figcaption { margin-top: 12px; color: var(--muted); }
+.reconstruction-steps { margin-top: 14px; }
+.reconstruction-steps .hint { margin: 0 0 8px; }
+.reconstruction-steps tbody tr,
+.reconstruction-steps tbody tr:hover { cursor: default; background: transparent; }
+.reconstruction-steps .num { text-align: right; font-variant-numeric: tabular-nums; }
+.reconstruction-steps td.note { white-space: normal; min-width: 14em; }
 .legend { display: flex; flex-wrap: wrap; gap: 10px 16px; list-style: none; padding: 0; margin: 12px 0; font-size: 13px; color: var(--muted); }
 .legend i { display: inline-block; width: 12px; height: 12px; border-radius: 3px; margin-right: 6px; vertical-align: -1px; }
 .files { margin: 0; }

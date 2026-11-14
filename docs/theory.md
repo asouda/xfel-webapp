@@ -119,7 +119,7 @@ The reconstruction can add one further restraint once an atom has been inserted.
 exte harm chain A residue 416 atom O6 sigma 0.100
 ```
 
-holds that atom at the coordinates in the PDB file REFMAC is reading. The sigma is in ångströms. A smaller sigma holds the atom more tightly. The default on the form is 0.1 Å. The line is written only when the option is on, the cycle count is greater than zero, and the atom was added on an earlier iteration. The target is the peak coordinate stored in the working omit model, not a coordinate typed separately.
+holds that atom at the coordinates in the PDB file REFMAC is reading. The sigma is in ångströms. A smaller sigma holds the atom more tightly. The default on the form is 0.1 Å. The line is written only when the option is on, the cycle count is greater than zero, and the atom was added on an earlier iteration. The target is the coordinate already stored in this iteration’s omit model. An atom added on the previous iteration is held at the peak where it was inserted. An atom added earlier than that is held where the previous refinement left it.
 
 ## How an omit model is rebuilt from successive peaks
 
@@ -129,7 +129,7 @@ An omit map shows every feature the current model leaves out, phased by that inc
 
 Atom \(j\) contributes to \(F_c\) only when it is in the coordinate file. Delete it, and the calculated amplitude no longer contains its scattering factor, its Debye–Waller factor, or the phase factor \(e^{2\pi i\, \mathbf{h}\cdot\mathbf{r}_j}\). The weighted difference \(m|F_o|-D|F_c|\) is then positive near \(\mathbf{r}_j\) when the observations still contain that atom and the model phase \(\varphi_c\) is a usable substitute for the phase of the difference. That substitution is the same difference-Fourier approximation used for an Fo−Fo map: the true phase of \(F_o-F_c\) is unknown. It holds best when the omitted change is local and the rest of the model already agrees with the data.
 
-The phase is still biased. \(\varphi_c\) was computed without the missing atom, so the peak can shift, weaken, or pick up a contribution from a neighbour. Inserting the atom and recalculating \(F_c\) removes that atom from the unexplained density. A positive cycle count also lets REFMAC move the surrounding atoms before the next transform. The default cycle count is zero, so the surrounding atoms stay put and only the newly inserted atom changes the model that enters the next \(F_c\).
+The phase is still biased. \(\varphi_c\) was computed without the missing atom, so the peak can shift, weaken, or pick up a contribution from a neighbour. Inserting the atom and recalculating \(F_c\) removes that atom from the unexplained density. REFMAC refines the current omit model before the transform. A positive cycle count moves the surrounding atoms, and the new atom is then placed on that refined model. The default cycle count is zero, so the heavy atoms stay put. In either case the model that enters the next \(F_c\) is the coordinate file REFMAC wrote, plus the new atom at the peak.
 
 ### Which voxel is the peak
 
@@ -155,15 +155,17 @@ The density does not name the atom. The reference model does. A candidate is a r
 
 A distance greater than 1 Å is a warning: the nearest missing atom does not sit on the peak, and it is still inserted. A distance greater than 3 Å stops the run, and the atom is not inserted. The peak is then left as unexplained density. The same stop occurs when the clip has no finite peak, or when the reference has no remaining heavy atom of this kind. Both cutoffs are fixed.
 
-The PDB record that is inserted keeps the reference name, residue, chain, altloc, occupancy, element, and displacement parameters. Orthogonal \(x\), \(y\), and \(z\) are replaced by the peak position. The next \(F_c\) is therefore calculated from where the density was, not from where the reference model had placed the atom. The file you supplied is not edited. The working copy is `{omit model name}_working.pdb`.
+The PDB record that is inserted keeps the reference name, residue, chain, altloc, occupancy, element, and displacement parameters. Orthogonal \(x\), \(y\), and \(z\) are replaced by the peak position. The record is written into the refined coordinate file of this iteration, so the next \(F_c\) is calculated from the refined model with the new atom where the density was. The file you supplied is not edited. `{omit model name}_working.pdb` is replaced by that refined model plus the inserted atom.
 
 ### What the next iteration calculates
 
-The next omit map uses that working file as its coordinate set. With zero cycles, atoms already inserted remain at their peak coordinates. REFMAC still writes a coordinate file with riding hydrogens for the figure, but the following iteration does not start from that rewritten file.
+The next omit map reads `{omit model name}_refined_added_{atom name}_stepNN.pdb` from the iteration that inserted the atom. That file is the refined coordinates, with the new atom at the peak and every other atom where REFMAC left it.
 
-With a positive cycle count, REFMAC refines the current omit model before `fft`. The figure for that iteration shows the refined coordinates. The following iteration still starts from the working file: the new atom at the peak, and earlier atoms where they were inserted, not where refinement moved them. Harmonic restraints, described above, are the way to hold those inserted atoms in place while the surrounding model is refined.
+With zero cycles, REFMAC does not move the heavy atoms. It can still write riding hydrogens. Atoms already inserted stay at the coordinates in that refined file, which for an atom just inserted is the peak.
 
-After the requested number of atoms has been inserted, one more omit map is calculated and not searched. That map is the residual of the finished model. Positive density that remains is an atom still missing, a coordinate error, or noise.
+With a positive cycle count, REFMAC moves coordinates before `fft`. The figure shows those refined coordinates, without the atom this iteration is about to insert. The following iteration starts from the refined model with that atom at the peak. Atoms added on earlier iterations enter where this refinement left them. Harmonic restraints, described above, hold those atoms at the coordinates in the omit model while the surrounding model is refined again.
+
+After the requested number of atoms has been inserted, one more omit map is calculated and not searched. That map is the residual of the finished model. Positive density that remains is an atom still missing, a coordinate error, or noise. The coordinates REFMAC writes for this last map are saved as `{omit model name}_reconstructed_final.pdb`. The same copy is made when an earlier search stops without inserting an atom: the saved structure is the refined model of the iteration that stopped. No `{omit model name}_refined_added_…` file is written for an iteration that inserts no atom.
 
 ### The density along the diagonals of the cube
 

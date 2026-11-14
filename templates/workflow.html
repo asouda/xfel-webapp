@@ -30,16 +30,16 @@
     <p>The light coordinates stay out of that calculation. In the interactive viewer, <strong>Light site</strong> draws the same site from that file as ball and stick. Yellow, green, blue, silver, and Name are the color choices. Name colors each atom by its element, the same scheme as the omit model.</p>
     {% elif spec.slug == 'reconstruct' %}
     <p class="equation">Δρ(r) ∝ Σ (m|F<sub>o</sub>| − D|F<sub>c</sub>|) exp(iφ<sub>c</sub>)</p>
-    <p>The starting omit model is rebuilt one heavy atom at a time. Each iteration calculates the omit-model mFo−DFc map. The highest peak of the clipped map is matched to the nearest heavy atom that is present in the reference model and absent from the omit model, and that atom’s PDB record is added at the Cartesian coordinates of the peak. Hydrogens are not candidates.</p>
+    <p>The starting omit model is rebuilt one heavy atom at a time. Each iteration refines the current omit model and calculates its mFo−DFc map. The highest peak of the clipped map is matched to the nearest eligible heavy atom in the reference model, and that atom’s PDB record is added to the refined coordinates at the Cartesian position of the peak. That structure is the omit model of the next iteration. By default an atom already in the omit model is not eligible. The form can include every heavy atom in the reference model instead. Hydrogens are not candidates.</p>
     <h2>How it is calculated</h2>
     <ol>
-      <li>The omit-map workflow calculates the clipped mFo−DFc map of the current omit model. REFMAC runs for the number of cycles on the form. Zero cycles leave the atoms where they are. A custom dictionary is read only when the cycle count is greater than zero. When external harmonic restraints are on, each atom added in an earlier iteration is held at the coordinates written into the omit model. The default sigma is 0.1 Å, and the restraints are used only when the cycle count is greater than zero.</li>
-      <li>When the map-check interval is a positive integer, the calculation pauses after that many iterations. The 3D viewer shows the current residual map and the current omit model. <strong>Continue iterations</strong> resumes the search. An interval of 0 shows only the finished model and its residual map.</li>
-      <li>The peak is the strongest voxel that is a local maximum inside a cubic neighborhood. When the spline maximum is on, the point moves to the spline maximum inside that neighborhood. The default neighborhood is 3 and the default spline order is 3.</li>
-      <li>Density profiles through that point, from −2 Å to +2 Å, are written in the iteration directory. The offset is the distance in Ångstroms along the line. The columns are the Cartesian x, y, and z axes, the six face diagonals of the cube, and the four body diagonals. The nearest missing heavy atom in the reference model is identified. A distance beyond 1 Å is a warning. A distance beyond 3 Å stops the reconstruction without adding that atom.</li>
-      <li>The reference atom’s PDB record is inserted into the omit model with the Cartesian coordinates of the peak. The atom name, residue, and chain stay those of the reference atom. The loop repeats until the requested number of atoms has been added, or until it stops. The viewer then shows the reconstructed model and the residual map of that model. Bonds are drawn wherever two displayed atoms are close enough to be bonded.</li>
+      <li>The omit-map workflow refines the current omit model and calculates its clipped mFo−DFc map. REFMAC runs for the number of cycles on the form. Zero cycles leave the heavy atoms where they are. The refined coordinates are saved as the omit-model name followed by <code>_refined_stepNN.pdb</code>. A custom dictionary is read only when the cycle count is greater than zero. When external harmonic restraints are on, each atom added in an earlier iteration is held at the coordinates written into the omit model. The default sigma is 0.1 Å, and the restraints are used only when the cycle count is greater than zero.</li>
+      <li>When the map-check interval is a positive integer, the calculation pauses after that many iterations. The 3D viewer shows the current residual map and the refined model. <strong>Continue iterations</strong> resumes the search. An interval of 0 shows only the finished model and its residual map.</li>
+      <li>The peak is the strongest voxel that is a local maximum inside a cubic neighborhood of the map calculated after REFMAC. When the spline maximum is on, the point moves to the spline maximum inside that neighborhood. The default neighborhood is 3 and the default spline order is 3.</li>
+      <li>Density profiles through that point, from −2 Å to +2 Å, are written in the iteration directory. The offset is the distance in Ångstroms along the line. The columns are the Cartesian x, y, and z axes, the six face diagonals of the cube, and the four body diagonals. The nearest eligible heavy atom in the reference model is identified. A distance beyond 1 Å is a warning. A distance beyond 3 Å stops the reconstruction without adding that atom.</li>
+      <li>The reference atom’s PDB record is inserted into the refined coordinates, at the peak. The atom name, residue, and chain stay those of the reference atom. The result is saved as the omit-model name followed by <code>_refined_added_</code>, the atom name, and <code>_stepNN.pdb</code>. The next iteration refines that file. The loop repeats until the requested number of atoms has been added, or until no atom can be added. The last iteration refines the model and does not insert an atom. The viewer shows those refined coordinates and the residual map. They are saved as the omit-model name followed by <code>_reconstructed_final.pdb</code>. A table under the viewer lists each step, the final REFMAC R-factor and R-free, the atom added at the peak, its coordinates, and its distance to the reference atom. Bonds are drawn wherever two displayed atoms are close enough to be bonded.</li>
     </ol>
-    <p>Logs, maps, and the density profiles of each iteration are written in <code>r-iteration-01</code>, <code>r-iteration-02</code>, and so on, inside the output directory. <strong>Reference site</strong> in the viewer draws the reference model in ball and stick.</p>
+    <p>Logs, maps, and the density profiles of each iteration are written in <code>r-iteration-01</code>, <code>r-iteration-02</code>, and so on, inside the output directory. PDB, CCP4, map, PNG, and density-section files in those directories end in <code>_step01</code>, <code>_step02</code>, and so on. <strong>Reference site</strong> in the viewer draws the reference model in ball and stick.</p>
     {% else %}
     <p class="equation">ρ(r) ∝ Σ F<sub>WT</sub> exp(−ΔB (sinθ/λ)<sup>2</sup>) exp(iφ<sub>WT</sub>)</p>
     <p>This is not a difference map. <code>FWT</code> is already the weighted 2m|F<sub>o</sub>| − D|F<sub>c</sub>| amplitude from the wwPDB validation file, and <code>PHWT</code> is the model phase. Mesh that covers an atom is accounted-for density. A gap on an atom, or a blob with no atom, is the usual hint that the model and the data disagree. Levels of 1–2σ are the normal view; 3–5σ is for difference maps and will often leave this mesh empty.</p>
@@ -86,8 +86,20 @@
     <div class="fields">
       <label>Number of atoms to reconstruct
         <input name="n_atoms" type="number" min="1" step="1" value="{{ defaults.n_atoms }}" required>
-        <span class="hint">How many missing heavy atoms to add, one per iteration.</span>
+        <span class="hint">How many heavy atoms to add, one per iteration.</span>
       </label>
+      <fieldset class="wide">
+        <legend>Atoms eligible for placement</legend>
+        <label class="choice">
+          <input type="radio" name="candidate_atoms" value="missing" checked>
+          Only heavy atoms absent from the omit model
+        </label>
+        <label class="choice">
+          <input type="radio" name="candidate_atoms" value="all">
+          Every heavy atom in the reference model
+        </label>
+        <p class="hint">The second choice turns off the exclusion of atoms that are already in the omit model. A selected atom is inserted at the peak even when that residue already has the same atom name. Hydrogens are not candidates in either choice.</p>
+      </fieldset>
     </div>
     {% endif %}
 
@@ -203,7 +215,7 @@
       </div>
       <label class="wide">Neighbouring residues
         <textarea name="extra_residues">{{ defaults.extra_residues }}</textarea>
-        <span class="hint">One per line: <code>chain residue label</code>, for example <code>A 189 GLU189</code>. Drawn as sticks. Leave blank for none.</span>
+        <span class="hint">One per line: <code>chain residue label</code>, for example <code>A 189 GLU189</code>. Drawn as sticks. The 3D viewer has a show/hide button for each residue. Leave blank for none.</span>
       </label>
       <label class="wide">Additional copies
         <textarea name="extra_copies" placeholder="D 416"></textarea>
@@ -262,7 +274,7 @@
     <h2>Output directory</h2>
     <label class="wide">Folder on this computer
       <input name="output_dir" value="{{ defaults.output_dir }}" required>
-      <span class="hint">{% if spec.slug == 'reconstruct' %}Each iteration writes its log, map, coordinates, and density profiles in a subdirectory named r-iteration-01, r-iteration-02, and so on.{% else %}The extended map, the site fragment, CCP4 logs, MTZ files, the PNG, and the PyMOL script are all written here.{% endif %}</span>
+      <span class="hint">{% if spec.slug == 'reconstruct' %}Each iteration writes its log, map, coordinates, and density profiles in a subdirectory named r-iteration-01, r-iteration-02, and so on. PDB, CCP4, map, PNG, and density-section files there end in _step01, _step02, and so on. When an atom is added, the refined model plus that atom is saved there as the omit-model name followed by _refined_added_, the atom name, and _stepNN.pdb, and the next iteration starts from it. The finished coordinates, after the last refinement, are saved beside those directories as the omit-model name followed by _reconstructed_final.pdb.{% else %}The extended map, the site fragment, CCP4 logs, MTZ files, the PNG, and the PyMOL script are all written here.{% endif %}</span>
     </label>
 
     <div class="actions">
@@ -295,16 +307,23 @@
         <h3 id="viewer-title">Interactive 3D scene</h3>
         <div class="viewer-actions">
           <button type="button" class="pill ghost" id="viewer-save" disabled>Save PNG</button>
+          <button type="button" class="pill ghost" id="viewer-pymol" disabled>PyMOL script</button>
+          <button type="button" class="pill ghost" id="viewer-orientation" aria-pressed="true" disabled>Current orientation</button>
           <button type="button" class="pill ghost" id="viewer-reset">Reset view</button>
         </div>
       </div>
-      <p class="hint viewer-help" id="viewer-help">Drag to rotate, scroll to zoom, and right-drag to pan. Add bond and Add distance: click two atoms. Delete: click a stick, or click two atoms to remove the bond and distance between them. Add label: click an atom to show its name, and click it again to remove the label. Distance labels turns the angstrom lengths on the dashed lines on or off. The sigma slider sets the single isosurface, and the number box sets an exact sigma inside the range from the form. Blue / red colors positive density blue and negative density red, darker farther from zero. Temperature colors the low end of the range cold and the high end hot. Solid and Mesh switch the isosurface style. The transparency slider runs from opaque to clear. Save PNG keeps the orientation you are looking at.</p>
+      <p class="hint viewer-help" id="viewer-help">Drag to rotate, scroll to zoom, and right-drag to pan. Add bond and Add distance: click two atoms. Delete: click a stick, or click two atoms to remove the bond and distance between them. Add label: click an atom to show its name, and click it again to remove the label. Distance labels turns the angstrom lengths on the dashed lines on or off. The sigma slider sets the single isosurface, and the number box sets an exact sigma inside the range from the form. Blue / red colors positive density blue and negative density red, darker farther from zero. Temperature colors the low end of the range cold and the high end hot. Solid and Mesh switch the isosurface style. The transparency slider runs from opaque to clear. Save PNG keeps the orientation you are looking at. PyMOL script writes a .pml file in the output directory and downloads a copy. When Current orientation is on, that script uses the rotation, zoom, and pan of the 3D viewer. When Current orientation is off, the script keeps the framing from the calculation.</p>
       <div class="viewer-edit" id="viewer-edit">
         <button type="button" class="pill" id="edit-bond" aria-pressed="false" disabled>Add bond</button>
         <button type="button" class="pill" id="edit-distance" aria-pressed="false" disabled>Add distance</button>
         <button type="button" class="pill" id="edit-delete" aria-pressed="false" disabled>Delete</button>
         <button type="button" class="pill" id="edit-label" aria-pressed="false" disabled>Add label</button>
         <button type="button" class="pill" id="edit-distance-labels" aria-pressed="false" disabled>Distance labels</button>
+      </div>
+      <div class="viewer-neighbours" id="viewer-neighbours" hidden>
+        <span class="viewer-neighbours-label">Neighbouring residues</span>
+        <div class="viewer-style-group" id="neighbour-toggles" role="group" aria-label="Show or hide neighbouring residues"></div>
+        <p class="hint">A pressed button draws that residue in ball and stick. Hiding it also hides it on the reference site, including bonds, labels, and distances that use its atoms.</p>
       </div>
       <div class="viewer-light" id="viewer-light" hidden>
         <button type="button" class="pill" id="light-site" aria-pressed="false" disabled>Light site</button>
@@ -363,6 +382,10 @@
       </div>
       <p id="viewer-status" class="viewer-status" aria-live="polite"></p>
       <figcaption id="caption"></figcaption>
+      <div id="reconstruction-steps" class="reconstruction-steps" hidden>
+        <p class="hint">Each row is one iteration. The R-factor and R-free are the final values from that iteration’s REFMAC job. On a search step the atom is inserted after that job, at the coordinates of the peak. The last row of a finished run is the residual map, which adds no atom.</p>
+        <div class="table-wrap" id="reconstruction-steps-table"></div>
+      </div>
       <details class="static-figure">
         <summary>Show saved PNG</summary>
         <p class="hint">This figure is the PyMOL rendering at the PNG sigma levels. The slider does not change it.</p>
@@ -395,5 +418,5 @@
 </script>
 <script src="{{ url_for('static', filename='vendor/ngl-2.5.0.js') }}?v=2"></script>
 <script src="{{ url_for('static', filename='js/sigma-color.js') }}?v=1"></script>
-<script src="{{ url_for('static', filename='js/workflow.js') }}?v=28"></script>
+<script src="{{ url_for('static', filename='js/workflow.js') }}?v=31"></script>
 {% endblock %}

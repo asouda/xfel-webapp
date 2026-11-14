@@ -34,7 +34,7 @@ Three of the calculations are written out as Jupyter notebooks in this repositor
 
     ---
 
-    The omit-model \(mF_o-DF_c\) map, repeated. Each iteration places the missing reference atom closest to the highest peak, at the peak coordinates, and the next map includes that atom in \(F_c\).
+    The omit-model \(mF_o-DF_c\) map, repeated. Each iteration refines the omit model, places the missing reference atom closest to the highest peak into those refined coordinates, and the next map starts from that model.
 
     [:octicons-arrow-right-24: Theory and steps](reconstruction.md)
 

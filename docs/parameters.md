@@ -25,7 +25,7 @@ Shared crystallographic meaning is on the [background](concepts.md) page. Each w
 | Neighborhood size | Reconstruction only. Odd integer, the side of the local-maximum cube. Default 3 |
 | Spline maximum | Reconstruction only. Off by default. On places the atom at the spline maximum |
 | Spline order | Reconstruction only. Integer from 0 through 5. Default 3 |
-| External harmonic restraints | Reconstruction only. Off by default. Holds atoms already added at their peak coordinates |
+| External harmonic restraints | Reconstruction only. Off by default. Holds atoms already added at the coordinates in the current omit model |
 | Harmonic sigma (Å) | Reconstruction only. Default 0.1. Used only when the cycle count is greater than zero |
 | Distance restraints | Omit map and reconstruction. One pair per line. Empty by default on the reconstruction form |
 | Distance sigma (Å) | Default 0.50 |
@@ -161,4 +161,4 @@ Every job writes logs beside the maps. The names follow the labels you set.
 | Reconstruction | The omit-map name, inside `r-iteration-01`, `r-iteration-02`, and so on | The omit-map figure name, in the same iteration directory |
 | 2mFo−DFc | `{id}_2fofc_{btag}_{low}-{high}_extended.ccp4` | `{id}_2fofc_{btag}_{site}_{chain}{resi}.png` |
 
-The resolution tag replaces the decimal point with `p`. The omit-map job also writes `{dark}_refined.pdb`, the external-restraint text, and, when requested, `{dark}_lib.cif`. A reconstruction iteration writes those same omit-map files, plus `reconstruction.log` and, when a peak was found, `density_sections.txt`. The output directory also receives `{dark}_working.pdb` and, at the end, `{dark}_reconstructed.pdb`. The web application adds `webapp_manifest.json` listing the figure, the extended map, the fragment, and the PyMOL script.
+The resolution tag replaces the decimal point with `p`. The omit-map job also writes `{dark}_refined.pdb`, the external-restraint text, and, when requested, `{dark}_lib.cif`. A reconstruction iteration writes those same omit-map files, plus `reconstruction.log` and, when a peak was found, `density_sections_stepNN.txt`. When an atom is added it also writes `{dark}_refined_added_{atom}_stepNN.pdb`, the refined coordinates with that atom at the peak, and the next iteration starts from that file. PDB, CCP4, map, PNG, and that density-section file in the iteration directory have `_stepNN` before the extension. The output directory also receives `{dark}_working.pdb` and, at the end, `{dark}_reconstructed_final.pdb`, a copy of the last iteration’s refined coordinates. The last iteration inserts no atom. The web application adds `webapp_manifest.json` listing the figure, the extended map, the fragment, and the PyMOL script.

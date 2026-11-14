@@ -80,6 +80,17 @@ def _harmonic_sigma(form) -> float:
     return sigma
 
 
+def _candidate_atoms(form) -> str:
+    """Which reference atoms may be placed on an omit-map peak."""
+    value = _text(form, "candidate_atoms") or "missing"
+    if value not in {"missing", "all"}:
+        raise FormError(
+            "Atoms eligible for placement must be the heavy atoms absent from the omit model, "
+            "or every heavy atom in the reference model."
+        )
+    return value
+
+
 def _odd_neighborhood(form) -> int:
     size = _int(form, "neighborhood_size", "Neighborhood size")
     if size < 1 or size % 2 == 0:
@@ -543,6 +554,7 @@ def parse_job(workflow: str, form, files, project: Path) -> dict:
                 "negative_levels": negative,
                 "n_atoms": n_atoms,
                 "n_check_map": n_check,
+                "candidate_atoms": _candidate_atoms(form),
                 "harmonic_added": _flag(form, "harmonic_added"),
                 "harmonic_sigma": _harmonic_sigma(form),
                 "neighborhood_size": _odd_neighborhood(form),
