@@ -148,6 +148,58 @@ def _refined_added_name(dark_id: str, atom_name: str, iteration: int) -> str:
     return f"{dark_id}_refined_added_{label}_step{iteration:02d}.pdb"
 
 
+def _line_identity(line: str) -> tuple | None:
+    """Chain, residue, insertion code, and atom name of one PDB record."""
+    if not line.startswith(("ATOM", "HETATM")) or len(line) < 27:
+        return None
+    try:
+        resseq = int(line[22:26])
+    except ValueError:
+        return None
+    icode = line[26] if len(line) > 26 else " "
+    return (line[21], resseq, icode, line[12:16].strip())
+
+
+def _identity_positions(pdb_text: str, identity: tuple) -> list[tuple[float, float, float]]:
+    """Cartesian coordinates of every record with this identity."""
+    found = []
+    for line in pdb_text.splitlines():
+        if _line_identity(line) != identity or len(line) < 54:
+            continue
+        try:
+            found.append((float(line[30:38]), float(line[38:46]), float(line[46:54])))
+        except ValueError:
+            continue
+    return found
+
+
+def _moved_record(distances: list[float]):
+    """One distance, or each distance when the removed records were not together."""
+    if not distances:
+        return None
+    if len({round(item, 2) for item in distances}) == 1:
+        return float(distances[0])
+    return [float(item) for item in distances]
+
+
+def _moved_text(moved) -> str:
+    if isinstance(moved, list):
+        return " and ".join(f"{item:.2f} Å" for item in moved)
+    return f"{moved:.2f} Å"
+
+
+def remove_atom_identity(pdb_text: str, identity: tuple) -> str:
+    """Remove every ATOM and HETATM record with this identity. Altloc is ignored."""
+    kept = [line for line in pdb_text.splitlines() if _line_identity(line) != identity]
+    return "\n".join(kept) + ("\n" if kept else "")
+
+
+def _identity_label(atom: PdbAtom) -> str:
+    """Chain, residue, and atom name. Altloc is not part of the identity."""
+    icode = atom.icode.strip()
+    return f"{atom.name} chain {atom.chain} residue {atom.resseq}{icode}"
+
+
 def insert_atom_record(pdb_text: str, record: str) -> str:
     """Insert one PDB atom, with a fresh serial, beside its residue or before END."""
     record = record.rstrip("\n")
@@ -211,10 +263,15 @@ def locate_peak(map_path: Path, neighborhood_size: int, spline_seed: bool, splin
         )
     xyz = np.asarray(density_map.to_cart(point), dtype=float).reshape(3)
     grid_index = tuple(int(value) for value in np.asarray(index).reshape(3))
+    voxel_xyz = np.asarray(
+        density_map.to_cart(np.asarray(grid_index, dtype=float)),
+        dtype=float,
+    ).reshape(3)
     return {
         "index": grid_index,
         "point": tuple(float(value) for value in point.reshape(3)),
         "xyz": tuple(float(value) for value in xyz),
+        "voxel_xyz": tuple(float(value) for value in voxel_xyz),
         "density": float(density),
         "map": density_map,
     }
@@ -402,6 +459,28 @@ def _atom_table_label(atom: PdbAtom) -> str:
     return label
 
 
+def _residue_label(atom: PdbAtom) -> str:
+    """Residue named beside the voxel marker in the 3D viewer."""
+    icode = atom.icode.strip()
+    label = f"{atom.resname} {atom.chain}{atom.resseq}{icode}"
+    alt = atom.alt.strip()
+    if alt:
+        label += f" alt {alt}"
+    return label
+
+
+def _viewer_voxel(peak, atom: PdbAtom | None, distance: float | None) -> dict | None:
+    """Marker for the strongest voxel, plus the nearest reference atom when one exists."""
+    if peak is None:
+        return None
+    marker = {"xyz": [float(value) for value in peak["voxel_xyz"]]}
+    if atom is not None and distance is not None:
+        marker["atom"] = atom.name
+        marker["residue"] = _residue_label(atom)
+        marker["distance"] = float(distance)
+    return marker
+
+
 def _refmac_log(directory: Path, cfg: dict) -> Path:
     cycles = int(cfg.get("refmac_ncyc") or 0)
     return directory / f"{cfg['dark_id']}_vs_{cfg['light_id']}_refmac{cycles}.log"
@@ -456,6 +535,7 @@ def _step_row(
     coordinates=None,
     distance: float | None = None,
     density: float | None = None,
+    moved=None,
     note: str = "",
 ) -> dict:
     return {
@@ -466,6 +546,7 @@ def _step_row(
         "coordinates": None if coordinates is None else [float(value) for value in coordinates],
         "distance": None if distance is None else float(distance),
         "density": None if density is None else float(density),
+        "moved": moved,
         "note": note,
     }
 
@@ -622,33 +703,49 @@ def run_reconstruct(cfg: dict, emit, pause=None, omit_runner=None, report_step=N
             raise FileNotFoundError(f"The omit-map clip was not written: {fragment}")
         r_factor, r_free = read_refmac_rfactors(_refmac_log(iter_dir, cfg))
 
-        if n_check and iteration % n_check == 0:
-            if pause is None:
-                log("A map check was requested, but this run cannot pause, so the search continues.")
-            else:
-                log("Pausing so the current residual map and omit model can be inspected.")
-                caption = (
-                    f"Iteration {iteration}. Inspect the residual map and the current omit model, "
-                    f"then continue. {len(added)} of {n_atoms} atoms added. {result['caption']}"
-                )
-                pause(
-                    _present(
-                        result,
-                        view_id=f"checkpoint-{iteration}",
-                        iteration=iteration,
-                        checkpoint=True,
-                        caption=caption,
-                        extras=extras,
-                    )
-                )
-                log("Continuing.")
-
         peak = locate_peak(
             fragment,
             int(cfg["neighborhood_size"]),
             bool(cfg["spline_seed"]),
             int(cfg["spline_order"]),
         )
+        if n_check and iteration % n_check == 0:
+            if pause is None:
+                log("A map check was requested, but this run cannot pause, so the search continues.")
+            else:
+                log("Pausing so the current residual map and refined omit model can be inspected.")
+                marker = None
+                if peak is not None:
+                    preview_atoms = missing_atoms(
+                        reference,
+                        read_pdb_atoms(working),
+                        excluded,
+                        include_present=include_present,
+                    )
+                    preview_atom, preview_distance = closest_atom(preview_atoms, peak["voxel_xyz"])
+                    marker = _viewer_voxel(peak, preview_atom, preview_distance)
+                    if preview_atom is not None and preview_distance is not None:
+                        log(
+                            f"The closest reference atom ({preview_atom.name}, {_residue_label(preview_atom)}) "
+                            f"is {preview_distance:.2f} Å from the voxel."
+                        )
+                caption = (
+                    f"Iteration {iteration}. Inspect the residual map and the current omit model, "
+                    f"then continue. {len(added)} of {n_atoms} atoms added. {result['caption']}"
+                )
+                shown = _present(
+                    result,
+                    view_id=f"checkpoint-{iteration}",
+                    iteration=iteration,
+                    checkpoint=True,
+                    caption=caption,
+                    extras=extras,
+                )
+                if marker is not None and isinstance(shown.get("viewer"), dict):
+                    shown["viewer"] = {**shown["viewer"], "voxel": marker}
+                pause(shown)
+                log("Continuing.")
+
         if peak is None:
             stop_reason = "The clipped difference map has no finite density peak."
             log(f"Stopping: {stop_reason}")
@@ -682,6 +779,7 @@ def run_reconstruct(cfg: dict, emit, pause=None, omit_runner=None, report_step=N
         placed_atom = ""
         placed_xyz = None
         placed_distance = None
+        placed_moved = None
         placed_note = ""
         if atom is None or distance is None:
             if include_present:
@@ -720,10 +818,23 @@ def run_reconstruct(cfg: dict, emit, pause=None, omit_runner=None, report_step=N
                         "so the atom cannot be inserted into the refined model."
                     )
                 placed = place_record_at(atom.line, xyz)
-                added_text = insert_atom_record(
-                    refined_path.read_text(encoding="utf-8", errors="replace"),
-                    placed,
+                refined_text = refined_path.read_text(encoding="utf-8", errors="replace")
+                working_atoms = read_pdb_atoms(working)
+                already_present = include_present and any(
+                    item.identity == atom.identity for item in working_atoms
                 )
+                moved = None
+                if already_present:
+                    previous = _identity_positions(refined_text, atom.identity)
+                    if not previous:
+                        previous = [item.xyz for item in working_atoms if item.identity == atom.identity]
+                    moved = _moved_record([math.dist(position, xyz) for position in previous])
+                source_text = (
+                    remove_atom_identity(refined_text, atom.identity)
+                    if already_present
+                    else refined_text
+                )
+                added_text = insert_atom_record(source_text, placed)
                 added_path = iter_dir / _refined_added_name(cfg["dark_id"], atom.name, iteration)
                 added_path.write_text(added_text, encoding="utf-8")
                 working.write_text(added_text, encoding="utf-8")
@@ -743,18 +854,36 @@ def run_reconstruct(cfg: dict, emit, pause=None, omit_runner=None, report_step=N
                     }
                 )
                 action = "added"
-                header.append("# action added")
-                log(
-                    f"Added {describe_atom(atom)} at the peak coordinates {_xyz_text(xyz)} Å "
-                    f"in the refined model. Next omit model: {added_path.name}."
-                )
+                if already_present:
+                    identity = _identity_label(atom)
+                    moved_text = _moved_text(moved) if moved is not None else "an unknown distance"
+                    header.append(
+                        f"# action position of an existing atom {identity} has been adjusted"
+                    )
+                    log(
+                        f"The identity {identity} is already in the working model. "
+                        f"That atom was moved {moved_text} to the peak coordinates {_xyz_text(xyz)} Å. "
+                        f"Next omit model: {added_path.name}."
+                    )
+                else:
+                    header.append("# action added")
+                    log(
+                        f"Added {describe_atom(atom)} at the peak coordinates {_xyz_text(xyz)} Å "
+                        f"in the refined model. Next omit model: {added_path.name}."
+                    )
                 extras.append(
                     (f"Iteration {iteration} refined model with {atom.name.strip()}", added_path)
                 )
                 placed_atom = _atom_table_label(atom)
                 placed_xyz = xyz
                 placed_distance = distance
+                placed_moved = moved
                 notes = []
+                if already_present:
+                    moved_text = _moved_text(moved) if moved is not None else "an unknown distance"
+                    notes.append(
+                        f"Position of an existing atom {_identity_label(atom)} has been adjusted by {moved_text}."
+                    )
                 if distance > WARN_DISTANCE_A:
                     notes.append(f"Farther than {WARN_DISTANCE_A:.0f} Å from the reference atom.")
                 if cfg["spline_seed"]:
@@ -773,6 +902,7 @@ def run_reconstruct(cfg: dict, emit, pause=None, omit_runner=None, report_step=N
                 coordinates=placed_xyz,
                 distance=placed_distance,
                 density=peak["density"],
+                moved=placed_moved,
                 note=placed_note,
             )
         )

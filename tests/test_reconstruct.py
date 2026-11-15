@@ -20,6 +20,7 @@ from xfel_web.reconstruction import (
     describe_atom,
     insert_atom_record,
     place_record_at,
+    remove_atom_identity,
     locate_peak,
     missing_atoms,
     read_pdb_atoms,
@@ -182,6 +183,19 @@ class AtomTests(unittest.TestCase):
         self.assertIn("   1.500", lines[1])
         self.assertTrue(added.strip().endswith("END"))
 
+    def test_removing_an_identity_drops_every_altloc_and_keeps_other_atoms(self):
+        text = "\n".join(
+            [
+                _pdb_line(1, "MN1", 0, 0, 0, "MN"),
+                _pdb_line(2, "O1", 1, 0, 0, "O", alt="A"),
+                _pdb_line(3, "O1", 2, 0, 0, "O", alt="B"),
+                _pdb_line(4, "O5", 3, 0, 0, "O"),
+                "END",
+            ]
+        )
+        kept = read_pdb_atoms_from(remove_atom_identity(text, ("A", 416, " ", "O1")).splitlines())
+        self.assertEqual([atom.name for atom in kept], ["MN1", "O5"])
+
     def test_a_placed_record_uses_the_peak_coordinates(self):
         source = _pdb_line(7, "O5", 1.5, 2.5, 3.5, "O")
         placed = place_record_at(source, (8.25, -0.5, 12))
@@ -215,8 +229,16 @@ class PeakTests(unittest.TestCase):
             self.assertEqual(len(center), 14)
             for value in center[1:]:
                 self.assertAlmostEqual(float(value), 5.0, places=4)
+            voxel = np.asarray(peak["map"].to_cart(np.asarray(peak["index"], dtype=float)), dtype=float).reshape(3)
+            np.testing.assert_allclose(peak["voxel_xyz"], voxel, atol=1e-5)
+            np.testing.assert_allclose(peak["xyz"], peak["voxel_xyz"], atol=1e-5)
             refined = locate_peak(path, 3, True, 3)
             self.assertAlmostEqual(refined["density"], 5.0, places=4)
+            refined_voxel = np.asarray(
+                refined["map"].to_cart(np.asarray(refined["index"], dtype=float)),
+                dtype=float,
+            ).reshape(3)
+            np.testing.assert_allclose(refined["voxel_xyz"], refined_voxel, atol=1e-5)
             self.assertTrue(np.all(np.isfinite(refined["xyz"])))
 
     def test_diagonal_offsets_are_distances_in_angstroms(self):
@@ -373,6 +395,7 @@ class LoopTests(unittest.TestCase):
             self.assertFalse((root / "out" / "r-iteration-02" / "omit_refined_added_O5_step02.pdb").is_file())
             self.assertEqual(result["view_id"], "final-2")
             self.assertFalse(result["checkpoint"])
+            self.assertNotIn("voxel", result["viewer"])
             self.assertIn("O5", (root / "out" / "omit_reconstructed_final.pdb").read_text())
             self.assertTrue((root / "out" / "r-iteration-01" / "density_sections_step01.txt").is_file())
             self.assertFalse((root / "out" / "r-iteration-01" / "density_sections.txt").is_file())
@@ -391,10 +414,15 @@ class LoopTests(unittest.TestCase):
             self.assertAlmostEqual(result["steps"][0]["r_factor"], 0.1631)
             self.assertAlmostEqual(result["steps"][0]["r_free"], 0.2185)
             self.assertAlmostEqual(result["steps"][0]["distance"], 0.0, places=2)
+            self.assertIsNone(result["steps"][0]["moved"])
+            self.assertIsNone(result["steps"][1]["moved"])
             self.assertEqual(len(result["steps"][0]["coordinates"]), 3)
             self.assertEqual(result["steps"][1]["atom"], "")
             self.assertIn("Residual map", result["steps"][1]["note"])
             self.assertTrue(any("Added" in line and "O5" in line for line in logs))
+            sections = (root / "out" / "r-iteration-01" / "density_sections_step01.txt").read_text()
+            self.assertIn("# action added", sections)
+            self.assertNotIn("has been adjusted", sections)
             self.assertIn("omit caption", result["caption"])
 
     def test_an_atom_farther_than_3_angstroms_stops_the_search(self):
@@ -473,11 +501,39 @@ class LoopTests(unittest.TestCase):
                 pauses.append(partial)
                 self.assertNotIn("O5", (root / "out" / "omit_working.pdb").read_text())
 
-            _result, calls, _logs = self._run(root, peak["xyz"], [], n_check=1, pause=pause)
+            result, calls, logs = self._run(root, peak["xyz"], [], n_check=1, pause=pause)
             self.assertEqual([item["view_id"] for item in pauses], ["checkpoint-1"])
             self.assertTrue(pauses[0]["checkpoint"])
+            voxel = pauses[0]["viewer"]["voxel"]
+            self.assertEqual(voxel["atom"], "O5")
+            self.assertEqual(voxel["residue"], "OEX A416")
+            self.assertAlmostEqual(voxel["distance"], 0.0, places=2)
+            np.testing.assert_allclose(voxel["xyz"], peak["voxel_xyz"], atol=1e-4)
+            self.assertNotIn("voxel", result["viewer"])
+            self.assertTrue(any("closest reference atom (O5, OEX A416)" in line for line in logs))
             self.assertEqual(len(calls), 2)
             self.assertIn("O5", (root / "out" / "omit_reconstructed_final.pdb").read_text())
+
+    def test_a_map_check_reports_the_distance_from_the_voxel(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "spike.ccp4"
+            _spike_map(source)
+            peak = locate_peak(source, 3, False, 3)
+            shifted = (peak["xyz"][0] + 1.5, peak["xyz"][1], peak["xyz"][2])
+            pauses = []
+
+            def pause(partial):
+                pauses.append(partial)
+                self.assertNotIn("O5", (root / "out" / "omit_working.pdb").read_text())
+
+            result, _calls, _logs = self._run(root, shifted, [], n_check=1, pause=pause)
+            voxel = pauses[0]["viewer"]["voxel"]
+            self.assertEqual(voxel["atom"], "O5")
+            self.assertEqual(voxel["residue"], "OEX A416")
+            self.assertAlmostEqual(voxel["distance"], 1.5, places=2)
+            np.testing.assert_allclose(voxel["xyz"], peak["voxel_xyz"], atol=1e-4)
+            self.assertNotIn("voxel", result["viewer"])
 
     def test_atoms_added_earlier_are_sent_as_harmonic_restraints(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -500,7 +556,7 @@ class LoopTests(unittest.TestCase):
             water = _pdb_line(3, "O", *peak["xyz"], "O", resname="HOH", resi=814)
             shifted = _pdb_line(3, "O", peak["xyz"][0] + 5, peak["xyz"][1], peak["xyz"][2], "O", resname="HOH", resi=814)
             far = (peak["xyz"][0] + 4.0, peak["xyz"][1], peak["xyz"][2])
-            _result, _calls, logs = self._run(
+            result, _calls, logs = self._run(
                 root,
                 far,
                 [water],
@@ -509,10 +565,29 @@ class LoopTests(unittest.TestCase):
             )
             rebuilt = read_pdb_atoms(root / "out" / "omit_reconstructed_final.pdb")
             waters = [atom for atom in rebuilt if atom.resname == "HOH"]
-            self.assertEqual(len(waters), 2)
-            placed = [atom for atom in waters if abs(atom.xyz[0] - peak["xyz"][0]) < 0.01]
-            self.assertEqual(len(placed), 1)
+            self.assertEqual(len(waters), 1)
+            self.assertAlmostEqual(waters[0].xyz[0], peak["xyz"][0], places=3)
+            self.assertAlmostEqual(waters[0].xyz[1], peak["xyz"][1], places=3)
+            self.assertAlmostEqual(waters[0].xyz[2], peak["xyz"][2], places=3)
+            manganese = next(atom for atom in rebuilt if atom.name == "MN1")
+            self.assertAlmostEqual(manganese.xyz[0], 0.0, places=3)
+            self.assertTrue(any("already in the working model" in line and "O chain A residue 814" in line for line in logs))
+            logged = (root / "out" / "r-iteration-01" / "reconstruction.log").read_text()
+            self.assertIn(
+                "The identity O chain A residue 814 is already in the working model. That atom was moved 5.00 Å",
+                logged,
+            )
+            self.assertAlmostEqual(result["steps"][0]["distance"], 0.0, places=2)
+            self.assertAlmostEqual(result["steps"][0]["moved"], 5.0, places=2)
+            self.assertIsNone(result["steps"][1]["moved"])
             self.assertTrue(any("Closest reference atom" in line and "HOH" in line for line in logs))
+            sections = (root / "out" / "r-iteration-01" / "density_sections_step01.txt").read_text()
+            self.assertIn(
+                "# action position of an existing atom O chain A residue 814 has been adjusted",
+                sections,
+            )
+            self.assertNotIn("# action added", sections)
+            self.assertIn("has been adjusted by 5.00 Å", result["steps"][0]["note"])
             self.assertNotIn("O5", (root / "out" / "omit_reconstructed_final.pdb").read_text())
 
     def test_an_atom_already_in_the_omit_model_stays_ineligible_by_default(self):

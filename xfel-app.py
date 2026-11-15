@@ -134,7 +134,7 @@ WORKFLOWS = {
         "title": "Reconstruct the model from the omit mFo−DFc maps",
         "kicker": "Omit-map reconstruction",
         "card": "Add missing atoms one at a time by placing each one on the highest peak of the omit-model difference map.",
-        "how": "Each iteration refines the omit model and calculates the omit mFo−DFc map. The highest peak is matched to the nearest eligible heavy atom in the reference model, and that atom is inserted into the refined coordinates. The next iteration starts from that model. By default the atom must be absent from the omit model. The form can instead make every heavy atom eligible. The viewer can pause every few iterations.",
+        "how": "Each iteration refines the omit model and calculates the omit mFo−DFc map. The highest peak is matched to the nearest eligible heavy atom in the reference model, and that atom is inserted into the refined coordinates. The next iteration starts from that model. By default the atom must be absent from the omit model. The form can instead make every heavy atom eligible. An atom that is already present is then moved to the peak: its old record is removed and the reference record is written at the peak. The viewer can pause every few iterations.",
         "scan_key": "dark_pdb",
         "scan_label": "starting omit-model coordinates",
         "files": [

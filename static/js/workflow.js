@@ -79,6 +79,8 @@
   const SigmaColor = window.XFELSigma;
   let distanceComponent = null;
   let markerComponent = null;
+  let voxelComponent = null;
+  const voxelNote = document.getElementById("viewer-voxel-note");
   let distancePairs = [];
   let lightDistancePairs = [];
   let labeledAtoms = [];
@@ -442,6 +444,9 @@
     figure.src = `${data.figure_url}?t=${Date.now()}`;
     caption.textContent = data.caption;
     showReconstructionSteps(data.steps);
+    if (data.viewer && data.viewer.voxel && data.iteration != null) {
+      data.viewer.voxel.step = data.iteration;
+    }
     loadViewer(data.viewer);
     fileList.replaceChildren();
     const rows = [
@@ -1021,6 +1026,72 @@
     markerComponent = null;
   }
 
+  function clearVoxelMarker() {
+    if (voxelComponent && stage) stage.removeComponent(voxelComponent);
+    voxelComponent = null;
+    if (voxelNote) {
+      voxelNote.hidden = true;
+      voxelNote.textContent = "";
+    }
+  }
+
+  function addOctahedron(shape, center, radius, color) {
+    const [x, y, z] = center;
+    const vertices = [
+      [x + radius, y, z],
+      [x - radius, y, z],
+      [x, y + radius, z],
+      [x, y - radius, z],
+      [x, y, z + radius],
+      [x, y, z - radius],
+    ];
+    const position = [];
+    const colors = [];
+    vertices.forEach((vertex) => {
+      position.push(vertex[0], vertex[1], vertex[2]);
+      colors.push(color[0], color[1], color[2]);
+    });
+    const index = [
+      0, 2, 4,
+      0, 4, 3,
+      0, 3, 5,
+      0, 5, 2,
+      1, 4, 2,
+      1, 2, 5,
+      1, 5, 3,
+      1, 3, 4,
+    ];
+    shape.addMesh(position, colors, index, undefined, "voxel-octahedron");
+    const edge = [0.35, 0.02, 0.22];
+    const edgeRadius = radius * 0.06;
+    [
+      [0, 2], [0, 3], [0, 4], [0, 5],
+      [1, 2], [1, 3], [1, 4], [1, 5],
+      [2, 4], [4, 3], [3, 5], [5, 2],
+    ].forEach(([left, right]) => {
+      shape.addCylinder(vertices[left], vertices[right], edge, edgeRadius, "voxel-edge");
+    });
+  }
+
+  function showVoxelMarker(voxel) {
+    clearVoxelMarker();
+    if (!stage || !voxel) return;
+    const xyz = voxel.xyz;
+    if (!Array.isArray(xyz) || xyz.length !== 3) return;
+    const center = xyz.map(Number);
+    if (center.some((value) => !Number.isFinite(value))) return;
+    const shape = new NGL.Shape("voxel-marker");
+    addOctahedron(shape, center, 0.25, [0.93, 0.08, 0.55]);
+    voxelComponent = stage.addComponentFromObject(shape);
+    voxelComponent.addRepresentation("buffer");
+    const distance = Number(voxel.distance);
+    const step = Number(voxel.step);
+    if (!voxelNote || !voxel.atom || !voxel.residue || !Number.isFinite(distance)) return;
+    const prefix = Number.isInteger(step) && step >= 1 ? `Step ${step}: ` : "";
+    voxelNote.textContent = `${prefix}The closest reference atom (${voxel.atom}, ${voxel.residue}) is ${distance.toFixed(2)} Å from the voxel`;
+    voxelNote.hidden = false;
+  }
+
   function lightDistanceSlot(left, right) {
     const [first, second] = pairKey(left, right);
     return lightDistancePairs.findIndex((pair) => pair[0] === first && pair[1] === second);
@@ -1121,6 +1192,7 @@
     showDistanceLabels = false;
     distanceComponent = null;
     markerComponent = null;
+    voxelComponent = null;
     structureComponent = null;
     volumeComponent = null;
     [editBond, editDistance, editDelete, editLabel, editDistanceLabels, surfaceSolid, surfaceMesh].forEach((button) => {
@@ -1302,8 +1374,30 @@
   }
 
   function neighbourButtonLabel(residue) {
-    const same = neighbourResidues.filter((item) => item.label === residue.label).length;
-    return same > 1 ? `${residue.label} ${residue.chain}${residue.resi}` : residue.label;
+    const resname = residue.resname || residue.label || "";
+    return [resname, residue.chain, residue.resi].filter((part) => part !== "" && part != null).join(" ");
+  }
+
+  function residueNameIn(structure, residue) {
+    if (!structure) return "";
+    const indices = structure.getAtomIndices(new NGL.Selection(residueSele(residue)));
+    if (!indices || !indices.length) return "";
+    const atom = structure.getAtomProxy();
+    atom.index = indices[0];
+    return String(atom.resname || "").trim();
+  }
+
+  function assignNeighbourNames() {
+    let changed = false;
+    neighbourResidues.forEach((residue) => {
+      const name = residueNameIn(structureComponent && structureComponent.structure, residue)
+        || residueNameIn(lightComponent && lightComponent.structure, residue);
+      if (name && name !== residue.resname) {
+        residue.resname = name;
+        changed = true;
+      }
+    });
+    if (changed) syncNeighbourControls();
   }
 
   function syncNeighbourControls() {
@@ -1322,7 +1416,7 @@
       button.className = "pill";
       const name = neighbourButtonLabel(residue);
       button.textContent = name;
-      const describe = () => `${residue.shown ? "Hide" : "Show"} ${name}, chain ${residue.chain} residue ${residue.resi}`;
+      const describe = () => `${residue.shown ? "Hide" : "Show"} ${name}`;
       button.setAttribute("aria-pressed", residue.shown ? "true" : "false");
       button.setAttribute("aria-label", describe());
       button.addEventListener("click", () => {
@@ -1781,6 +1875,7 @@
     viewerToken += 1;
     window.clearTimeout(sigmaTimer);
     surfaceGeneration += 1;
+    clearVoxelMarker();
     resetEditControls();
     if (stage) stage.dispose();
     stage = null;
@@ -1831,12 +1926,15 @@
       siteResidue = scene.site
         ? { chain: String(scene.site.chain || "").trim(), resi: Number(scene.site.resi) }
         : null;
-      neighbourResidues = (scene.extra_residues || []).map((residue) => ({
-        chain: String(residue.chain || "").trim(),
-        resi: Number(residue.resi),
-        label: residue.label || `${residue.chain}${residue.resi}`,
-        shown: true,
-      }));
+      neighbourResidues = (scene.extra_residues || []).map((residue) => {
+        const chain = String(residue.chain || "").trim();
+        const resi = Number(residue.resi);
+        const label = residue.label || `${chain}${resi}`;
+        const tail = String(resi);
+        const head = label.endsWith(tail) ? label.slice(0, label.length - tail.length) : "";
+        const resname = /^[A-Za-z]+$/.test(head) ? head : "";
+        return { chain, resi, label, resname, shown: true };
+      });
       const shownSelection = structureSelection(true);
       syncNeighbourControls();
       const [structure, volume] = await Promise.all([
@@ -1857,6 +1955,7 @@
       colorScale = "signed";
       contourIsSigma = scene.contour_mode !== "absolute";
       applyScriptBonds(structure, scene);
+      assignNeighbourNames();
       modelStick = structure.addRepresentation("ball+stick", {
         sele: shownSelection,
         colorScheme: "element",
@@ -1897,9 +1996,11 @@
             visible: false,
           });
           syncLightControls(true);
+          assignNeighbourNames();
         }
       }
       collectScriptDistances(structure, scene);
+      showVoxelMarker(scene.voxel);
       stage.signals.clicked.add(onStageClick);
       const mounted = mountSigmaSurface();
       if (token !== viewerToken) return;

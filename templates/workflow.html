@@ -30,14 +30,14 @@
     <p>The light coordinates stay out of that calculation. In the interactive viewer, <strong>Light site</strong> draws the same site from that file as ball and stick. Yellow, green, blue, silver, and Name are the color choices. Name colors each atom by its element, the same scheme as the omit model.</p>
     {% elif spec.slug == 'reconstruct' %}
     <p class="equation">Δρ(r) ∝ Σ (m|F<sub>o</sub>| − D|F<sub>c</sub>|) exp(iφ<sub>c</sub>)</p>
-    <p>The starting omit model is rebuilt one heavy atom at a time. Each iteration refines the current omit model and calculates its mFo−DFc map. The highest peak of the clipped map is matched to the nearest eligible heavy atom in the reference model, and that atom’s PDB record is added to the refined coordinates at the Cartesian position of the peak. That structure is the omit model of the next iteration. By default an atom already in the omit model is not eligible. The form can include every heavy atom in the reference model instead. Hydrogens are not candidates.</p>
+    <p>The starting omit model is rebuilt one heavy atom at a time. Each iteration refines the current omit model and calculates its mFo−DFc map. The highest peak of the clipped map is matched to the nearest eligible heavy atom in the reference model, and that atom’s PDB record is added to the refined coordinates at the Cartesian position of the peak. That structure is the omit model of the next iteration. By default an atom already in the omit model is not eligible. The form can include every heavy atom in the reference model instead. When that choice selects an atom whose identity is already in the working model, the existing record is removed and the reference record is written at the peak, which moves that atom. Hydrogens are not candidates.</p>
     <h2>How it is calculated</h2>
     <ol>
       <li>The omit-map workflow refines the current omit model and calculates its clipped mFo−DFc map. REFMAC runs for the number of cycles on the form. Zero cycles leave the heavy atoms where they are. The refined coordinates are saved as the omit-model name followed by <code>_refined_stepNN.pdb</code>. A custom dictionary is read only when the cycle count is greater than zero. When external harmonic restraints are on, each atom added in an earlier iteration is held at the coordinates written into the omit model. The default sigma is 0.1 Å, and the restraints are used only when the cycle count is greater than zero.</li>
-      <li>When the map-check interval is a positive integer, the calculation pauses after that many iterations. The 3D viewer shows the current residual map and the refined model. <strong>Continue iterations</strong> resumes the search. An interval of 0 shows only the finished model and its residual map.</li>
+      <li>When the map-check interval is a positive integer, the calculation pauses after that many iterations. The 3D viewer shows the site from the refined omit model, named with <code>_refined_stepNN.pdb</code>, and that iteration’s difference map. When a highest-density voxel was found, a small magenta octahedron marks its coordinates. A note in the lower-left corner of the viewer gives the step, the closest reference atom, and its distance from that voxel. <strong>Continue iterations</strong> resumes the search. An interval of 0 shows only the finished model and its residual map.</li>
       <li>The peak is the strongest voxel that is a local maximum inside a cubic neighborhood of the map calculated after REFMAC. When the spline maximum is on, the point moves to the spline maximum inside that neighborhood. The default neighborhood is 3 and the default spline order is 3.</li>
       <li>Density profiles through that point, from −2 Å to +2 Å, are written in the iteration directory. The offset is the distance in Ångstroms along the line. The columns are the Cartesian x, y, and z axes, the six face diagonals of the cube, and the four body diagonals. The nearest eligible heavy atom in the reference model is identified. A distance beyond 1 Å is a warning. A distance beyond 3 Å stops the reconstruction without adding that atom.</li>
-      <li>The reference atom’s PDB record is inserted into the refined coordinates, at the peak. The atom name, residue, and chain stay those of the reference atom. The result is saved as the omit-model name followed by <code>_refined_added_</code>, the atom name, and <code>_stepNN.pdb</code>. The next iteration refines that file. The loop repeats until the requested number of atoms has been added, or until no atom can be added. The last iteration refines the model and does not insert an atom. The viewer shows those refined coordinates and the residual map. They are saved as the omit-model name followed by <code>_reconstructed_final.pdb</code>. A table under the viewer lists each step, the final REFMAC R-factor and R-free, the atom added at the peak, its coordinates, and its distance to the reference atom. Bonds are drawn wherever two displayed atoms are close enough to be bonded.</li>
+      <li>The reference atom’s PDB record is inserted into the refined coordinates, at the peak. The atom name, residue, and chain stay those of the reference atom. When every heavy atom is eligible and that identity is already in the working model, the existing record is removed first, so the atom moves to the peak. The density-section file then says that the position of that existing atom has been adjusted. The iteration log and the Note column record how far that atom moved. Distance to reference remains the distance from the peak to the reference coordinates. Otherwise the density-section file says the atom was added. The result is saved as the omit-model name followed by <code>_refined_added_</code>, the atom name, and <code>_stepNN.pdb</code>. The next iteration refines that file. The loop repeats until the requested number of atoms has been added, or until no atom can be added. The last iteration refines the model and does not insert an atom. The viewer shows those refined coordinates and the residual map. They are saved as the omit-model name followed by <code>_reconstructed_final.pdb</code>. A table under the viewer lists each step, the final REFMAC R-factor and R-free, the atom added at the peak, its coordinates, and its distance to the reference atom. Bonds are drawn wherever two displayed atoms are close enough to be bonded.</li>
     </ol>
     <p>Logs, maps, and the density profiles of each iteration are written in <code>r-iteration-01</code>, <code>r-iteration-02</code>, and so on, inside the output directory. PDB, CCP4, map, PNG, and density-section files in those directories end in <code>_step01</code>, <code>_step02</code>, and so on. <strong>Reference site</strong> in the viewer draws the reference model in ball and stick.</p>
     {% else %}
@@ -98,7 +98,7 @@
           <input type="radio" name="candidate_atoms" value="all">
           Every heavy atom in the reference model
         </label>
-        <p class="hint">The second choice turns off the exclusion of atoms that are already in the omit model. A selected atom is inserted at the peak even when that residue already has the same atom name. Hydrogens are not candidates in either choice.</p>
+        <p class="hint">The second choice turns off the exclusion of atoms that are already in the omit model. When the closest reference atom is already in the working model, that record is removed and the reference record is written at the peak, so the atom moves there. Hydrogens are not candidates in either choice.</p>
       </fieldset>
     </div>
     {% endif %}
@@ -257,7 +257,7 @@
       {% if spec.slug == 'reconstruct' %}
       <label>Map check interval
         <input name="n_check_map" type="number" min="0" step="1" value="{{ defaults.n_check_map }}">
-        <span class="hint">0 opens the 3D viewer only when the reconstruction finishes. A positive integer pauses after that many iterations and shows the current residual map and the current omit model. Continue iterations resumes the search.</span>
+        <span class="hint">0 opens the 3D viewer only when the reconstruction finishes. A positive integer pauses after that many iterations and shows the refined omit model with its difference map. A small octahedron marks the strongest voxel, and the corner of the viewer names the step, the closest reference atom, and its distance. Continue iterations resumes the search.</span>
       </label>
       {% endif %}
       {% if spec.slug != 'reconstruct' %}
@@ -355,7 +355,10 @@
         </div>
       </div>
       <div class="viewer-stage">
-        <div id="viewer" class="viewer" role="application" aria-label="Interactive molecular density viewer"></div>
+        <div class="viewer-frame">
+          <div id="viewer" class="viewer" role="application" aria-label="Interactive molecular density viewer"></div>
+          <p id="viewer-voxel-note" class="viewer-voxel-note" hidden></p>
+        </div>
         <div class="viewer-sigma" id="viewer-sigma">
           <div class="viewer-sigma-label" id="surface-sigma-label">Sigma</div>
           <div class="viewer-sigma-readout">
@@ -383,7 +386,7 @@
       <p id="viewer-status" class="viewer-status" aria-live="polite"></p>
       <figcaption id="caption"></figcaption>
       <div id="reconstruction-steps" class="reconstruction-steps" hidden>
-        <p class="hint">Each row is one iteration. The R-factor and R-free are the final values from that iteration’s REFMAC job. On a search step the atom is inserted after that job, at the coordinates of the peak. The last row of a finished run is the residual map, which adds no atom.</p>
+        <p class="hint">Each row is one iteration. The R-factor and R-free are the final values from that iteration’s REFMAC job. On a search step the atom is inserted after that job, at the coordinates of the peak. Distance to reference is the distance from the peak to that atom in the reference model, including when the atom was already in the working model. In that case the Note gives the distance from the atom’s previous coordinates to the peak. The last row of a finished run is the residual map, which adds no atom.</p>
         <div class="table-wrap" id="reconstruction-steps-table"></div>
       </div>
       <details class="static-figure">
@@ -418,5 +421,5 @@
 </script>
 <script src="{{ url_for('static', filename='vendor/ngl-2.5.0.js') }}?v=2"></script>
 <script src="{{ url_for('static', filename='js/sigma-color.js') }}?v=1"></script>
-<script src="{{ url_for('static', filename='js/workflow.js') }}?v=31"></script>
+<script src="{{ url_for('static', filename='js/workflow.js') }}?v=36"></script>
 {% endblock %}

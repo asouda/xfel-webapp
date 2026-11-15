@@ -33,7 +33,7 @@
 <section class="wrap" id="installation">
   <div class="glass install">
     <h2>Required installations</h2>
-    <p class="lede tight">The page is a local front end. The map is calculated by CCP4, clipped by Coot, and drawn by PyMOL. Python only needs Flask.</p>
+    <p class="lede tight">The page is a local front end. The map is calculated by CCP4, clipped by Coot, and drawn by PyMOL. Python dependencies are installed with uv.</p>
 
     <ol class="steps">
       <li>
@@ -52,12 +52,10 @@
       </li>
       <li>
         <h3>This application</h3>
-        <pre><code>cd web-application
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-python app.py</code></pre>
-        <p>Then open <a href="http://127.0.0.1:5050">http://127.0.0.1:5050</a>. Uploaded files and every intermediate — MTZ, logs, the extended map, the site fragment, and the PyMOL script — are saved in the output directory you enter.</p>
+        <p>Python dependencies are declared in <code>pyproject.toml</code> and locked in <code>uv.lock</code>. The project needs Python 3.9 or newer. <a href="https://docs.astral.sh/uv/" target="_blank" rel="noreferrer">uv</a> creates the virtual environment and installs them. From this directory:</p>
+        <pre><code>uv sync
+uv run python xfel-app.py</code></pre>
+        <p>Then open <a href="http://127.0.0.1:5050">http://127.0.0.1:5050</a>. You do not need to activate the environment before <code>uv run</code>. Uploaded files and every intermediate — MTZ, logs, the extended map, the site fragment, and the PyMOL script — are saved in the output directory you enter.</p>
       </li>
       <li>
         <h3>Input files</h3>
