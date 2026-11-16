@@ -17,6 +17,8 @@ from pathlib import Path
 import gemmi
 import numpy as np
 
+from xfel_web.interrupt import check as check_stopped
+
 # A 0.1 Å cube about 40 Å on a side. Larger than the default 20 Å clip.
 _MAX_CUBE_POINTS = 80_000_000
 # Dense coefficient box for a ~2 Å photosystem is about 10 million cells.
@@ -141,10 +143,13 @@ def synthesize_cube(
     volume[hkl[:, 0] - lowers[0], hkl[:, 1] - lowers[1], hkl[:, 2] - lowers[2]] += coeff
     # Last axis is l, then k, then h. The result is indexed (iz, iy, ix).
     volume = _partial_dft(volume, int(lowers[2]), nxyz[2], bounds[2][0], bounds[2][1])
+    check_stopped()
     volume = np.moveaxis(volume, 1, -1)
     volume = _partial_dft(volume, int(lowers[1]), nxyz[1], bounds[1][0], bounds[1][1])
+    check_stopped()
     volume = np.moveaxis(volume, 0, -1)
     volume = _partial_dft(volume, int(lowers[0]), nxyz[0], bounds[0][0], bounds[0][1])
+    check_stopped()
     return np.moveaxis(volume.real, (2, 1, 0), (0, 1, 2))
 
 

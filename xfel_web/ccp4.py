@@ -13,6 +13,8 @@ import threading
 import time
 from pathlib import Path
 
+from xfel_web.interrupt import CalculationStopped, check, current, terminate_process
+
 CCP4_PROGRAMS = (
     "cif2mtz",
     "refmac5",
@@ -1189,6 +1191,7 @@ def pad_map_around_model(
                 nxyz[fast],
             )
             for section in range(sections):
+                check()
                 crystal = out_start[slow] + section
                 src = (crystal - stored_start[slow]) % nxyz[slow]
                 plane = np.asarray(data[src])
@@ -1203,6 +1206,7 @@ def pad_map_around_model(
             col_crystal = np.arange(out_start[fast], out_start[fast] + out_count[fast], dtype=np.float64)
             row_grid, col_grid = np.meshgrid(row_crystal, col_crystal, indexing="ij")
             for section in range(sections):
+                check()
                 idx = np.empty(row_grid.shape + (3,), dtype=np.float64)
                 idx[..., medium] = row_grid
                 idx[..., fast] = col_grid
@@ -1264,8 +1268,12 @@ class Ccp4Session:
         self.ccp4_root = find_ccp4(ccp4_root)
         self.coot = find_coot(self.ccp4_root)
         self.pymol = find_pymol()
-        self.emit = emit
+        self._sink = getattr(emit, "unchecked", emit)
         self.output_dir.mkdir(parents=True, exist_ok=True)
+
+    def emit(self, message: str = "") -> None:
+        check()
+        self._sink(message)
 
     def announce(self, message: str) -> None:
         self.emit("")
@@ -1301,6 +1309,9 @@ class Ccp4Session:
         return text
 
     def _stream(self, args: list[str], cwd: Path, env: dict | None) -> list[str]:
+        interrupt = current()
+        if interrupt is not None:
+            interrupt.check()
         proc = subprocess.Popen(
             args,
             cwd=str(cwd),
@@ -1309,7 +1320,10 @@ class Ccp4Session:
             stderr=subprocess.STDOUT,
             text=True,
             bufsize=1,
+            start_new_session=True,
         )
+        if interrupt is not None:
+            interrupt.attach(proc)
         lines: list[str] = []
 
         def reader() -> None:
@@ -1317,19 +1331,35 @@ class Ccp4Session:
             for line in proc.stdout:
                 cleaned = line.rstrip("\n")
                 lines.append(cleaned)
-                self.emit(cleaned)
+                self._sink(cleaned)
 
         thread = threading.Thread(target=reader, daemon=True)
         thread.start()
         started = time.time()
         next_heartbeat = started + 20
-        while proc.poll() is None:
-            thread.join(timeout=2)
-            now = time.time()
-            if proc.poll() is None and now >= next_heartbeat:
-                self.emit(f"… still running ({int(now - started)} s)")
-                next_heartbeat = now + 20
-        thread.join()
+        stopped = False
+        try:
+            while proc.poll() is None:
+                if interrupt is not None and interrupt.event.is_set():
+                    stopped = True
+                    terminate_process(proc)
+                    break
+                thread.join(timeout=0.5)
+                now = time.time()
+                if proc.poll() is None and now >= next_heartbeat:
+                    self._sink(f"… still running ({int(now - started)} s)")
+                    next_heartbeat = now + 20
+            thread.join(timeout=5)
+        finally:
+            if interrupt is not None:
+                interrupt.detach(proc)
+            if proc.poll() is None:
+                terminate_process(proc)
+            thread.join(timeout=5)
+            if proc.stdout is not None:
+                proc.stdout.close()
+        if stopped or (interrupt is not None and interrupt.event.is_set()):
+            raise CalculationStopped("The calculation was stopped.")
         if proc.returncode != 0:
             raise CommandFailed(proc.returncode, lines)
         return lines

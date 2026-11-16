@@ -297,10 +297,12 @@ class LoopTests(unittest.TestCase):
         n_check=0,
         pause=None,
         report_step=None,
+        report_row=None,
         harmonic=False,
         candidate_atoms="missing",
         omit_lines=(),
         shift_refined=0.0,
+        calls=None,
     ):
         source = root / "spike.ccp4"
         _spike_map(source)
@@ -310,7 +312,8 @@ class LoopTests(unittest.TestCase):
         omit.write_text("\n".join([keeper, *omit_lines, "END"]) + "\n")
         reference_lines = [keeper, _pdb_line(2, "O5", *xyz, "O"), *extra_atoms, "END"]
         reference.write_text("\n".join(reference_lines) + "\n")
-        calls = []
+        if calls is None:
+            calls = []
 
         def omit_runner(cfg, emit):
             emit("omit map")
@@ -374,6 +377,7 @@ class LoopTests(unittest.TestCase):
             pause=pause,
             omit_runner=omit_runner,
             report_step=report_step,
+            report_row=report_row,
         )
         return result, calls, logs
 
@@ -424,6 +428,30 @@ class LoopTests(unittest.TestCase):
             self.assertIn("# action added", sections)
             self.assertNotIn("has been adjusted", sections)
             self.assertIn("omit caption", result["caption"])
+
+    def test_each_finished_iteration_is_reported_without_pausing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "spike.ccp4"
+            _spike_map(source)
+            peak = locate_peak(source, 3, False, 3)
+            reported = []
+            calls = []
+
+            def report_row(rows):
+                reported.append(([row["step"] for row in rows], len(calls)))
+
+            result, calls, _logs = self._run(
+                root,
+                peak["xyz"],
+                [],
+                report_row=report_row,
+                calls=calls,
+            )
+            self.assertEqual(reported, [([1], 1), ([1, 2], 2)])
+            self.assertEqual([row["step"] for row in result["steps"]], [1, 2])
+            self.assertIn("Residual map", result["steps"][1]["note"])
+            self.assertFalse(result["checkpoint"])
 
     def test_an_atom_farther_than_3_angstroms_stops_the_search(self):
         with tempfile.TemporaryDirectory() as tmp:

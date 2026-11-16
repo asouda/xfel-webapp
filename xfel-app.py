@@ -22,6 +22,7 @@ from xfel_web.ccp4 import (
     viewer_pymol_text,
 )
 from xfel_web.forms import FormError, decompress_gzip, parse_job
+from xfel_web.interrupt import CalculationStopped, Interrupt, activate, deactivate
 from xfel_web.pipelines import RUNNERS
 
 WEB_ROOT = Path(__file__).resolve().parent
@@ -246,7 +247,7 @@ def _load_jobs() -> None:
             data = json.loads(path.read_text())
         except (OSError, json.JSONDecodeError):
             continue
-        if data.get("status") in {"running", "paused"}:
+        if data.get("status") in {"running", "paused", "stopping"}:
             data["status"] = "failed"
             data["error"] = "The server stopped while this calculation was running. Files already written were left in the output directory."
             path.write_text(json.dumps(data, indent=2) + "\n")
@@ -275,57 +276,138 @@ def _note_step(job_id: str, step: int) -> None:
         _JOBS[job_id]["step"] = int(step)
 
 
+def _note_steps(job_id: str, steps: list) -> None:
+    """Remember reconstruction rows that have finished, while the job keeps running."""
+    with _JOBS_LOCK:
+        _JOBS[job_id]["steps"] = [dict(row) for row in steps]
+
+
+class _ReportingLog:
+    """Job log that notices a stop request on the calculation thread.
+
+    ``unchecked`` writes a line without that check. The reader thread for a
+    CCP4 program uses it, so a stop is raised on the calculation thread.
+    """
+
+    def __init__(self, log: _Log, interrupt: Interrupt):
+        self.unchecked = log
+        self._interrupt = interrupt
+
+    def __call__(self, message: str = "") -> None:
+        self._interrupt.check()
+        self.unchecked(message)
+
+
+def _mark_stopped(job: dict, log: _Log) -> None:
+    log("")
+    log("Stopped. The inputs were left as they are. Files already written were left in the output directory.")
+    with _JOBS_LOCK:
+        job["status"] = "stopped"
+        job["error"] = None
+        _save_job(job)
+
+
 def _pause_job(job_id: str, partial: dict) -> None:
     """Hold a reconstruction at a map check until the viewer asks to continue."""
     event = threading.Event()
     with _JOBS_LOCK:
         job = _JOBS[job_id]
-        job["status"] = "paused"
-        job["result"] = partial
-        job["resume"] = event
-        _save_job(job)
+        interrupt = job.get("interrupt")
+        if interrupt is not None and interrupt.event.is_set():
+            waiting = False
+        else:
+            job["status"] = "paused"
+            job["result"] = partial
+            job["resume"] = event
+            _save_job(job)
+            waiting = True
+    if not waiting:
+        if interrupt is not None:
+            interrupt.check()
+        return
     event.wait()
+    if interrupt is not None and interrupt.event.is_set():
+        with _JOBS_LOCK:
+            job = _JOBS[job_id]
+            job["resume"] = None
+        interrupt.check()
     with _JOBS_LOCK:
         job = _JOBS[job_id]
-        job["status"] = "running"
-        job["resume"] = None
-        _save_job(job)
+        if interrupt is not None and interrupt.event.is_set():
+            job["resume"] = None
+            _save_job(job)
+        else:
+            job["status"] = "running"
+            job["resume"] = None
+            _save_job(job)
+    if interrupt is not None:
+        interrupt.check()
 
 
 def _execute(job_id: str) -> None:
     with _JOBS_LOCK:
         job = _JOBS[job_id]
-        job["status"] = "running"
-        _save_job(job)
+        interrupt = job.get("interrupt")
+        if interrupt is None:
+            interrupt = Interrupt()
+            job["interrupt"] = interrupt
+        if not interrupt.event.is_set() and job.get("status") != "stopping":
+            job["status"] = "running"
+            _save_job(job)
         config = job["config"]
         workflow = job["workflow"]
-    emit = _Log(Path(job["log_path"]))
+    log = _Log(Path(job["log_path"]))
+    emit = _ReportingLog(log, interrupt)
+    token = activate(interrupt)
     try:
-        if workflow == "reconstruct":
-            result = RUNNERS[workflow](
-                config,
-                emit,
-                pause=lambda partial: _pause_job(job_id, partial),
-                report_step=lambda step: _note_step(job_id, step),
-            )
-        else:
-            result = RUNNERS[workflow](config, emit)
-        with _JOBS_LOCK:
-            job["result"] = result
-            job["status"] = "succeeded"
-            job["error"] = None
-            _save_job(job)
-        emit("")
-        emit("Finished.")
-        emit(result["caption"])
-    except Exception as exc:
-        emit("")
-        emit(f"Failed: {exc}")
-        emit(traceback.format_exc())
-        with _JOBS_LOCK:
-            job["status"] = "failed"
-            job["error"] = str(exc)
-            _save_job(job)
+        try:
+            interrupt.check()
+            if workflow == "reconstruct":
+                result = RUNNERS[workflow](
+                    config,
+                    emit,
+                    pause=lambda partial: _pause_job(job_id, partial),
+                    report_step=lambda step: _note_step(job_id, step),
+                    report_row=lambda rows: _note_steps(job_id, rows),
+                )
+            else:
+                result = RUNNERS[workflow](config, emit)
+            with _JOBS_LOCK:
+                job["result"] = result
+                if interrupt.event.is_set() or job.get("status") in {"stopping", "stopped"}:
+                    job["status"] = "stopped"
+                    job["error"] = None
+                    outcome = "stopped"
+                else:
+                    job["status"] = "succeeded"
+                    job["error"] = None
+                    outcome = "succeeded"
+                _save_job(job)
+            if outcome == "stopped":
+                log("")
+                log(
+                    "Stopped. The inputs were left as they are. "
+                    "Files already written were left in the output directory."
+                )
+            else:
+                log("")
+                log("Finished.")
+                log(result["caption"])
+        except CalculationStopped:
+            _mark_stopped(job, log)
+        except Exception as exc:
+            if interrupt.event.is_set():
+                _mark_stopped(job, log)
+            else:
+                log("")
+                log(f"Failed: {exc}")
+                log(traceback.format_exc())
+                with _JOBS_LOCK:
+                    job["status"] = "failed"
+                    job["error"] = str(exc)
+                    _save_job(job)
+    finally:
+        deactivate(token)
 
 
 def _software(ccp4_root: str) -> dict:
@@ -442,6 +524,7 @@ def start_job(slug: str):
         "log_path": str(log_path),
         "config": config,
         "result": None,
+        "interrupt": Interrupt(),
     }
     with _JOBS_LOCK:
         _JOBS[job_id] = job
@@ -538,6 +621,9 @@ def job_status(job_id: str):
             public_result["view_id"] = result["view_id"]
             public_result["checkpoint"] = bool(result.get("checkpoint"))
             public_result["iteration"] = result.get("iteration")
+    live_steps = job.get("steps") or []
+    result_steps = (public_result or {}).get("steps") or []
+    steps = result_steps if len(result_steps) >= len(live_steps) else live_steps
     return jsonify(
         {
             "id": job_id,
@@ -547,6 +633,7 @@ def job_status(job_id: str):
             "log": chunk,
             "offset": next_offset,
             "result": public_result,
+            "steps": steps or None,
         }
     )
 
@@ -565,6 +652,26 @@ def job_continue(job_id: str):
         job["resume"] = None
         _save_job(job)
     event.set()
+    return jsonify({"ok": True})
+
+
+@app.post("/api/jobs/<job_id>/stop")
+def job_stop(job_id: str):
+    """Interrupt a running calculation and leave its form values untouched."""
+    job = _get_job(job_id)
+    with _JOBS_LOCK:
+        status = job.get("status")
+        if status not in {"queued", "running", "paused", "stopping"}:
+            return jsonify({"ok": True, "status": status})
+        if status != "stopping":
+            job["status"] = "stopping"
+            _save_job(job)
+        interrupt = job.get("interrupt")
+        resume = job.get("resume")
+    if interrupt is not None:
+        interrupt.request()
+    if resume is not None:
+        resume.set()
     return jsonify({"ok": True})
 
 

@@ -279,7 +279,7 @@
 
     <div class="actions">
       <button type="submit" class="pill solid" id="run-btn">{% if spec.slug == 'reconstruct' %}Reconstruct and draw{% else %}Calculate and draw{% endif %}</button>
-      <p class="hint" id="runtime-note">{% if spec.slug == 'reconstruct' %}Each iteration calculates an omit mFo−DFc map, so a photosystem II site can take a long time. A map-check interval above zero pauses and waits until you continue.{% else %}A photosystem II map can take many minutes. REFMAC with more than zero cycles takes longer. The log updates while the job runs.{% endif %}</p>
+      <p class="hint" id="runtime-note">{% if spec.slug == 'reconstruct' %}Each iteration calculates an omit mFo−DFc map, so a photosystem II site can take a long time. A map-check interval above zero pauses and waits until you continue. Stop calculation interrupts the job and leaves these inputs as they are.{% else %}A photosystem II map can take many minutes. REFMAC with more than zero cycles takes longer. The log updates while the job runs. Stop calculation interrupts the job and leaves these inputs as they are.{% endif %}</p>
     </div>
     <p class="error" id="form-error" hidden></p>
   </form>
@@ -298,7 +298,10 @@
   <section id="run-panel" class="glass run-panel" hidden>
     <div class="run-head">
       <h2 id="run-title">Calculation</h2>
-      <p id="run-state" class="state">Queued</p>
+      <div class="run-actions">
+        <button type="button" class="pill stop" id="stop-btn" hidden title="Interrupt this calculation. Inputs stay as they are, and files already written stay in the output directory.">Stop calculation</button>
+        <p id="run-state" class="state">Queued</p>
+      </div>
     </div>
     <button type="button" class="pill solid" id="continue-btn" hidden>Continue iterations</button>
     <pre id="log" class="log"></pre>
@@ -385,10 +388,6 @@
       </div>
       <p id="viewer-status" class="viewer-status" aria-live="polite"></p>
       <figcaption id="caption"></figcaption>
-      <div id="reconstruction-steps" class="reconstruction-steps" hidden>
-        <p class="hint">Each row is one iteration. The R-factor and R-free are the final values from that iteration’s REFMAC job. On a search step the atom is inserted after that job, at the coordinates of the peak. Distance to reference is the distance from the peak to that atom in the reference model, including when the atom was already in the working model. In that case the Note gives the distance from the atom’s previous coordinates to the peak. The last row of a finished run is the residual map, which adds no atom.</p>
-        <div class="table-wrap" id="reconstruction-steps-table"></div>
-      </div>
       <details class="static-figure">
         <summary>Show saved PNG</summary>
         <p class="hint">This figure is the PyMOL rendering at the PNG sigma levels. The slider does not change it.</p>
@@ -413,6 +412,12 @@
       <dl id="file-list" class="files"></dl>
     </figure>
   </section>
+
+  <section id="reconstruction-steps" class="glass reconstruction-steps" hidden>
+    <h2>Reconstruction steps</h2>
+    <p class="hint">Each completed iteration is added here while the calculation continues. The R-factor and R-free are the final values from that iteration’s REFMAC job. On a search step the atom is inserted after that job, at the coordinates of the peak. Distance to reference is the distance from the peak to that atom in the reference model, including when the atom was already in the working model. In that case the Note gives the distance from the atom’s previous coordinates to the peak. The last row of a finished run is the residual map, which adds no atom.</p>
+    <div class="table-wrap" id="reconstruction-steps-table"></div>
+  </section>
 </section>
 {% endblock %}
 {% block scripts %}
@@ -421,5 +426,5 @@
 </script>
 <script src="{{ url_for('static', filename='vendor/ngl-2.5.0.js') }}?v=2"></script>
 <script src="{{ url_for('static', filename='js/sigma-color.js') }}?v=1"></script>
-<script src="{{ url_for('static', filename='js/workflow.js') }}?v=36"></script>
+<script src="{{ url_for('static', filename='js/workflow.js') }}?v=39"></script>
 {% endblock %}

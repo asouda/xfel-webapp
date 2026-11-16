@@ -246,7 +246,7 @@ pre {
 
 .workflow { max-width: 980px; }
 .back { display: inline-block; margin-bottom: 14px; color: var(--muted); }
-.intro, .form, .run-panel, .scan-panel { padding: 32px 34px; margin-bottom: 18px; }
+.intro, .form, .run-panel, .scan-panel, .reconstruction-steps { padding: 32px 34px; margin-bottom: 18px; }
 .intro ol { margin: 0; padding-left: 20px; color: var(--muted); }
 .intro li { margin: 0 0 8px; }
 .equation {
@@ -314,7 +314,10 @@ input:focus, select:focus, textarea:focus {
   border-radius: 14px;
   padding: 12px 14px;
 }
-.run-head { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; flex-wrap: wrap; }
+.run-head { display: flex; justify-content: space-between; gap: 12px; align-items: center; flex-wrap: wrap; }
+.run-actions { display: flex; align-items: center; justify-content: flex-end; gap: 12px; flex-wrap: wrap; }
+.pill.stop { color: var(--bad); border-color: var(--bad); }
+.pill.stop:hover { background: var(--error-bg); }
 #continue-btn { margin: 4px 0 12px; }
 .state { margin: 0; color: var(--blue); font-size: 14px; text-align: right; }
 .log {
@@ -505,7 +508,7 @@ label.viewer-sigma-exact { flex-direction: row; align-items: center; gap: 4px; c
 .static-figure summary { cursor: pointer; }
 .static-figure img { margin-top: 10px; }
 figcaption { margin-top: 12px; color: var(--muted); }
-.reconstruction-steps { margin-top: 14px; }
+.reconstruction-steps h2 { margin: 0 0 8px; font-size: 22px; }
 .reconstruction-steps .hint { margin: 0 0 8px; }
 .reconstruction-steps tbody tr,
 .reconstruction-steps tbody tr:hover { cursor: default; background: transparent; }
@@ -525,7 +528,7 @@ tbody tr:hover { background: var(--hover); }
 
 @media (max-width: 900px) {
   .cards, .file-grid, .fields, .status { grid-template-columns: 1fr; }
-  .hero-card, .install, .intro, .form, .run-panel, .scan-panel { padding: 24px 18px; }
+  .hero-card, .install, .intro, .form, .run-panel, .scan-panel, .reconstruction-steps { padding: 24px 18px; }
   .nav { padding: 16px 18px; }
   main, .site-footer { padding-left: 18px; padding-right: 18px; }
   .actions { flex-direction: column; align-items: stretch; }

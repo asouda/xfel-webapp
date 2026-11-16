@@ -1037,10 +1037,17 @@ def _result(caption, png_path, extended_map, fragment, pml_path, output_dir, ext
     }
 
 
-def run_reconstruct(cfg: dict, emit, pause=None, report_step=None) -> dict:
+def run_reconstruct(cfg: dict, emit, pause=None, report_step=None, report_row=None) -> dict:
     from xfel_web.reconstruction import run_reconstruct as _run
 
-    return _run(cfg, emit, pause=pause, omit_runner=run_refinement, report_step=report_step)
+    return _run(
+        cfg,
+        emit,
+        pause=pause,
+        omit_runner=run_refinement,
+        report_step=report_step,
+        report_row=report_row,
+    )
 
 
 RUNNERS = {

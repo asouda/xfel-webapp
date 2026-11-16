@@ -14,6 +14,7 @@ import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
+from xfel_web.interrupt import check as check_stopped
 from xfel_web.peaks import DensityMap, choose_peak, spline_maximum_index
 
 WARN_DISTANCE_A = 1.0
@@ -526,6 +527,13 @@ def read_refmac_rfactors(log_path: Path) -> tuple[float | None, float | None]:
     return float(r_factor), float(r_free)
 
 
+def _publish_steps(steps: list[dict], report_row) -> None:
+    """Hand the completed rows to the caller without pausing the search."""
+    if report_row is None:
+        return
+    report_row([dict(row) for row in steps])
+
+
 def _step_row(
     step: int,
     r_factor: float | None,
@@ -618,7 +626,7 @@ def _stamp_iteration_outputs(directory: Path, iteration: int, result: dict) -> d
     return _retarget_paths(result, replacements)
 
 
-def run_reconstruct(cfg: dict, emit, pause=None, omit_runner=None, report_step=None) -> dict:
+def run_reconstruct(cfg: dict, emit, pause=None, omit_runner=None, report_step=None, report_row=None) -> dict:
     """Add reference atoms onto omit-map peaks, one atom per iteration."""
     if omit_runner is None:
         from xfel_web.pipelines import run_refinement
@@ -685,6 +693,7 @@ def run_reconstruct(cfg: dict, emit, pause=None, omit_runner=None, report_step=N
     stop_reason = ""
 
     while len(added) < n_atoms:
+        check_stopped()
         iteration += 1
         if report_step is not None:
             report_step(iteration)
@@ -750,6 +759,7 @@ def run_reconstruct(cfg: dict, emit, pause=None, omit_runner=None, report_step=N
             stop_reason = "The clipped difference map has no finite density peak."
             log(f"Stopping: {stop_reason}")
             steps.append(_step_row(iteration, r_factor, r_free, note=stop_reason))
+            _publish_steps(steps, report_row)
             break
 
         xyz = peak["xyz"]
@@ -906,6 +916,7 @@ def run_reconstruct(cfg: dict, emit, pause=None, omit_runner=None, report_step=N
                 note=placed_note,
             )
         )
+        _publish_steps(steps, report_row)
         del peak
         if action != "added":
             break
@@ -914,6 +925,7 @@ def run_reconstruct(cfg: dict, emit, pause=None, omit_runner=None, report_step=N
         raise RuntimeError("The reconstruction did not calculate a map.")
 
     if len(added) == n_atoms:
+        check_stopped()
         iteration += 1
         if report_step is not None:
             report_step(iteration)
@@ -936,6 +948,7 @@ def run_reconstruct(cfg: dict, emit, pause=None, omit_runner=None, report_step=N
                 note="Residual map of the finished model.",
             )
         )
+        _publish_steps(steps, report_row)
         stop_reason = f"Added all {n_atoms} requested atoms."
 
     refined = iter_dir / f"{cfg['dark_id']}_refined{_step_tag(iteration)}.pdb"

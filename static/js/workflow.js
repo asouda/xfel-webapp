@@ -43,6 +43,7 @@
   const caption = document.getElementById("caption");
   const fileList = document.getElementById("file-list");
   const runButton = document.getElementById("run-btn");
+  const stopButton = document.getElementById("stop-btn");
   const continueButton = document.getElementById("continue-btn");
   const lightHint = document.getElementById("light-hint");
   const lightHintDefault = lightHint ? lightHint.textContent : "";
@@ -52,6 +53,8 @@
   const scanSummary = document.getElementById("scan-summary");
   let stage = null;
   let jobId = null;
+  let pollGeneration = 0;
+  let stopRequested = false;
   let viewerToken = 0;
   let resultShown = false;
   let shownView = null;
@@ -242,8 +245,29 @@
     }
   });
 
+  function syncStopButton(status) {
+    if (!stopButton) return;
+    const active = status === "queued" || status === "running" || status === "paused" || status === "stopping";
+    stopButton.hidden = !active;
+    if (!active) {
+      stopRequested = false;
+      stopButton.disabled = false;
+      stopButton.textContent = "Stop calculation";
+      return;
+    }
+    if (status === "stopping" || stopRequested) {
+      stopButton.disabled = true;
+      stopButton.textContent = "Stopping";
+      return;
+    }
+    stopButton.disabled = false;
+    stopButton.textContent = "Stop calculation";
+  }
+
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
+    const generation = ++pollGeneration;
+    stopRequested = false;
     errorBox.hidden = true;
     result.hidden = true;
     jobId = null;
@@ -251,7 +275,9 @@
     shownView = null;
     setViewerTitle(null);
     if (continueButton) continueButton.hidden = true;
+    if (stopButton) stopButton.hidden = true;
     disposeViewer();
+    showReconstructionSteps([]);
     logBox.textContent = "";
     runPanel.hidden = false;
     runState.textContent = "Starting";
@@ -260,6 +286,7 @@
     try {
       const response = await fetch(form.action, { method: "POST", body: new FormData(form) });
       const payload = await response.json();
+      if (generation !== pollGeneration) return;
       if (!response.ok) {
         runState.textContent = "Not started";
         showError(payload.error || "The form could not be submitted.");
@@ -267,8 +294,10 @@
         return;
       }
       jobId = payload.id;
-      poll(payload.id, 0);
+      syncStopButton("queued");
+      poll(payload.id, 0, generation);
     } catch (err) {
+      if (generation !== pollGeneration) return;
       runState.textContent = "Not started";
       showError("Could not reach the calculation service.");
       runButton.disabled = false;
@@ -293,31 +322,63 @@
     });
   }
 
-  async function poll(id, offset) {
+  if (stopButton) {
+    stopButton.addEventListener("click", async () => {
+      if (!jobId || stopButton.disabled) return;
+      stopRequested = true;
+      stopButton.disabled = true;
+      stopButton.textContent = "Stopping";
+      if (continueButton) continueButton.hidden = true;
+      try {
+        const response = await fetch(`/api/jobs/${jobId}/stop`, { method: "POST" });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          stopRequested = false;
+          showError(payload.error || "The calculation could not be stopped.");
+          stopButton.disabled = false;
+          stopButton.textContent = "Stop calculation";
+        }
+      } catch (err) {
+        stopRequested = false;
+        showError("Could not reach the calculation service.");
+        stopButton.disabled = false;
+        stopButton.textContent = "Stop calculation";
+      }
+    });
+  }
+
+  async function poll(id, offset, generation) {
     let response;
     try {
       response = await fetch(`/api/jobs/${id}?offset=${offset}`);
     } catch (err) {
+      if (generation !== pollGeneration) return;
       runState.textContent = "Lost contact with the job";
       runButton.disabled = false;
       return;
     }
+    if (generation !== pollGeneration) return;
     if (!response.ok) {
       runState.textContent = "Lost contact with the job";
       runButton.disabled = false;
       return;
     }
     const payload = await response.json();
+    if (generation !== pollGeneration) return;
     if (payload.log) {
       const nearBottom = logBox.scrollHeight - logBox.scrollTop - logBox.clientHeight < 40;
       logBox.textContent += payload.log;
       if (nearBottom) logBox.scrollTop = logBox.scrollHeight;
     }
     runState.textContent = statusLabel(payload);
+    syncStopButton(payload.status);
     if (continueButton) {
       const waiting = payload.status === "paused";
       continueButton.hidden = !waiting;
       continueButton.disabled = !waiting;
+    }
+    if (Array.isArray(payload.steps) && payload.steps.length) {
+      showReconstructionSteps(payload.steps);
     }
     const viewId = payload.result && payload.result.view_id;
     if (payload.result && viewId && viewId !== shownView) {
@@ -326,7 +387,8 @@
       showResult(payload.result);
       if (payload.result.checkpoint) result.scrollIntoView({ behavior: "smooth", block: "start" });
     }
-    if (payload.status === "succeeded" || payload.status === "failed") {
+    const finished = payload.status === "succeeded" || payload.status === "failed" || payload.status === "stopped";
+    if (finished) {
       runButton.disabled = false;
       if (payload.status === "failed") showError(payload.error || "The calculation failed. The log above has the last CCP4 or PyMOL output.");
       if (payload.result && !resultShown) {
@@ -334,11 +396,11 @@
         showResult(payload.result);
       }
       if (payload.log && payload.log.length >= 120000) {
-        poll(id, payload.offset);
+        poll(id, payload.offset, generation);
       }
       return;
     }
-    window.setTimeout(() => poll(id, payload.offset), 1500);
+    window.setTimeout(() => poll(id, payload.offset, generation), 1500);
   }
 
   function statusLabel(payload) {
@@ -346,10 +408,14 @@
     const numbered = Number.isInteger(step) && step >= 1;
     if (payload.status === "running" && numbered) return `Running step ${step}`;
     if (payload.status === "paused" && numbered) return `Paused for inspection after step ${step}`;
+    if (payload.status === "stopping" && numbered) return `Stopping during step ${step}`;
+    if (payload.status === "stopped" && numbered) return `Stopped during step ${step}`;
     const labels = {
       queued: "Queued",
       running: "Running",
       paused: "Paused for inspection",
+      stopping: "Stopping",
+      stopped: "Stopped",
       succeeded: "Finished",
       failed: "Failed",
     };
@@ -374,15 +440,21 @@
       : viewerTitleDefault;
   }
 
+  let shownStepCount = 0;
+
   function showReconstructionSteps(steps) {
     const box = document.getElementById("reconstruction-steps");
     const host = document.getElementById("reconstruction-steps-table");
     if (!box || !host) return;
-    host.replaceChildren();
     if (!Array.isArray(steps) || !steps.length) {
+      shownStepCount = 0;
       box.hidden = true;
+      host.replaceChildren();
       return;
     }
+    if (steps.length === shownStepCount && host.childElementCount) return;
+    shownStepCount = steps.length;
+    host.replaceChildren();
     const dash = "—";
     const fixed = (value, digits) => (
       typeof value === "number" && Number.isFinite(value) ? value.toFixed(digits) : dash
@@ -443,7 +515,7 @@
     setViewerTitle(data);
     figure.src = `${data.figure_url}?t=${Date.now()}`;
     caption.textContent = data.caption;
-    showReconstructionSteps(data.steps);
+    if (Array.isArray(data.steps) && data.steps.length) showReconstructionSteps(data.steps);
     if (data.viewer && data.viewer.voxel && data.iteration != null) {
       data.viewer.voxel.step = data.iteration;
     }
