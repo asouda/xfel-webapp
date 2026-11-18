@@ -5,9 +5,11 @@ The summary directory receives the light reference PDB, each iteration's
 refined model with the newly placed atom, the extended omit-map fragment, and
 the reconstructed final PDB. PDB files keep only the residues named with
 ``--resid``. Iteration files are stored with ``step##`` at the start of the
-name, so the viewers list them as step01, step02, step03, and so on. VMD,
-ChimeraX, and Maestro scripts in that directory load the reference, then each
-added model and its map, and the reconstructed final model last.
+name, so the viewers list them as step01, step02, step03, and so on. VMD and ChimeraX scripts in that directory load the reference, then each
+added model and its map, and the reconstructed final model last. The atom
+placed in an iteration is bright green. The final model is not: nothing was
+added in that file. A Maestro project archive has one entry per step, with
+that step's PDB and map.
 
 Example::
 
@@ -19,10 +21,15 @@ Example::
 from __future__ import annotations
 
 import argparse
+import math
+import os
+import pickle
 import re
 import shutil
 import struct
+import subprocess
 import sys
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -31,10 +38,6 @@ ADDED_RE = re.compile(r"_refined_added_.+_step(\d+)\.pdb$")
 MAP_RE = re.compile(r"_extended_.+_10A_step(\d+)\.map$")
 ITERATION_RE = re.compile(r"^r-iteration-(\d+)$")
 RESIDUE_RE = re.compile(r"^([A-Za-z0-9])(\d+)$")
-
-# PyMOL figures for this workflow contour the omit map at 7 sigma.
-DEFAULT_MAP_SIGMA = 7.0
-
 
 @dataclass(frozen=True)
 class Residue:
@@ -76,6 +79,8 @@ class MapCopy:
     path: Path
     stdev: float
     level: float
+    # Contour in units of ``stdev``: one below the highest density in the map.
+    sigma: float
 
 
 @dataclass
@@ -157,50 +162,70 @@ def _is_newer(candidate: AtomRecord, current: AtomRecord) -> bool:
     return candidate_serial >= current_serial
 
 
-def filter_pdb(source: Path, dest: Path, residues: list[Residue]) -> FilteredPdb:
-    """Write ``dest`` with only ATOM/HETATM records for ``residues``.
+def filter_pdb(
+    source: Path,
+    dest: Path,
+    residues: list[Residue],
+    *,
+    keep_newest: bool = False,
+) -> FilteredPdb:
+    """Write ``dest`` with ATOM/HETATM records for ``residues``.
 
     Records stay in source order. The highlight is the kept atom with the
-    highest PDB serial: that is the atom this iteration placed, when its
-    residue is retained.
+    highest PDB serial. For a refined_added model, ``keep_newest`` also
+    retains that atom when its residue is not in ``residues``: it is the
+    atom this iteration inserted, and it is the one drawn in bright green.
     """
     wanted = {(residue.chain, residue.resseq) for residue in residues}
+    raw_lines = source.read_text(encoding="utf-8", errors="replace").splitlines()
+    newest_source: AtomRecord | None = None
+    newest_index: int | None = None
+    for index, line in enumerate(raw_lines):
+        record = _atom_record(line)
+        if record is None:
+            continue
+        if newest_source is None or _is_newer(record, newest_source):
+            newest_source = record
+            newest_index = index
+
     header: list[str] = []
     body: list[str] = []
-    newest_source: AtomRecord | None = None
     highlight: AtomRecord | None = None
     highlight_index: int | None = None
     kept_index = 0
     keep_aniso = False
-
-    with source.open(encoding="utf-8", errors="replace") as handle:
-        for raw in handle:
-            line = raw.rstrip("\n\r")
-            if line.startswith(("CRYST1", "ORIGX", "SCALE", "MTRIX")):
-                header.append(line)
-                keep_aniso = False
-                continue
-            record = _atom_record(line)
-            if record is not None:
-                if newest_source is None or _is_newer(record, newest_source):
-                    newest_source = record
-                keep_aniso = (record.chain, record.resseq) in wanted
-                if keep_aniso:
-                    if highlight is None or _is_newer(record, highlight):
-                        highlight = record
-                        highlight_index = kept_index
-                    kept_index += 1
-                    body.append(line)
-                continue
-            if keep_aniso and line.startswith("ANISOU"):
-                body.append(line)
+    for index, line in enumerate(raw_lines):
+        if line.startswith(("CRYST1", "ORIGX", "SCALE", "MTRIX")):
+            header.append(line)
             keep_aniso = False
+            continue
+        record = _atom_record(line)
+        if record is not None:
+            forced = keep_newest and index == newest_index
+            keep_aniso = forced or (record.chain, record.resseq) in wanted
+            if keep_aniso:
+                if highlight is None or _is_newer(record, highlight):
+                    highlight = record
+                    highlight_index = kept_index
+                kept_index += 1
+                body.append(line)
+            continue
+        if keep_aniso and line.startswith("ANISOU"):
+            body.append(line)
+        keep_aniso = False
 
+    newest_outside = (
+        keep_newest
+        and newest_source is not None
+        and (newest_source.chain, newest_source.resseq) not in wanted
+    )
     dest.parent.mkdir(parents=True, exist_ok=True)
     previous_chain: str | None = None
     with dest.open("w", encoding="utf-8", newline="\n") as handle:
         for line in _remark_block(residues, source.name):
             handle.write(line + "\n")
+        if newest_outside and newest_source is not None:
+            handle.write(f"REMARK   4 ALSO: {newest_source.describe()}"[:80] + "\n")
         for line in header:
             handle.write(line + "\n")
         for line in body:
@@ -215,9 +240,8 @@ def filter_pdb(source: Path, dest: Path, residues: list[Residue]) -> FilteredPdb
         handle.write("END\n")
 
     newest_source_kept = newest_source is not None and (
-        newest_source.chain,
-        newest_source.resseq,
-    ) in wanted
+        (newest_source.chain, newest_source.resseq) in wanted or newest_outside
+    )
     return FilteredPdb(
         path=dest,
         natoms=kept_index,
@@ -247,19 +271,109 @@ def _ccp4_voxels(raw: bytes):
     raise ValueError("Not a mode-2 CCP4 map, or the grid does not fit the file")
 
 
-def map_stdev(raw: bytes) -> float:
-    """Population standard deviation of a CCP4 map, in map units."""
+def choose_contour(stdev: float, peak: float) -> tuple[float, float]:
+    """Return the contour in sigma and in map units.
+
+    The contour is one standard deviation below the highest density.
+    ``peak`` is the maximum voxel value, so the level is ``(peak / stdev) - 1``
+    in sigma units.
+    """
+    if stdev <= 0:
+        return 0.0, peak
+    used = peak / stdev - 1.0
+    return used, used * stdev
+
+
+def chimerax_map_origin(path: Path) -> tuple[float, float, float] | None:
+    """Return a map origin that ChimeraX would otherwise discard.
+
+    A cut-out CCP4 map keeps the original grid index in ``ncstart``,
+    ``nrstart``, and ``nsstart``, while ``mx``, ``my``, and ``mz`` describe
+    only the cut-out. ChimeraX treats a start index larger than ten times
+    that grid as uninitialized and places the map at the coordinate origin,
+    away from the model. The returned point is the position of grid index
+    0, 0, 0 in angstroms. ``None`` means ChimeraX already keeps the origin.
+    """
+    raw = path.read_bytes()[:1024]
+    for endian in ("<", ">"):
+        nc, nr, ns, mode = struct.unpack_from(endian + "4i", raw, 0)
+        if mode != 2 or min(nc, nr, ns) <= 0 or max(nc, nr, ns) > 20000:
+            continue
+        ncstart, nrstart, nsstart = struct.unpack_from(endian + "3i", raw, 16)
+        mx, my, mz = struct.unpack_from(endian + "3i", raw, 28)
+        xlen, ylen, zlen, alpha, beta, gamma = struct.unpack_from(
+            endian + "6f", raw, 40
+        )
+        mapc, mapr, maps = struct.unpack_from(endian + "3i", raw, 64)
+        break
+    else:
+        return None
+    if mx <= 0 or my <= 0 or mz <= 0 or min(xlen, ylen, zlen) <= 0:
+        return None
+    step = (xlen / mx, ylen / my, zlen / mz)
+    if {mapc, mapr, maps} == {1, 2, 3}:
+        crs_to_ijk = (mapc - 1, mapr - 1, maps - 1)
+        ijk_to_crs = [0, 0, 0]
+        for axis, crs in enumerate(crs_to_ijk):
+            ijk_to_crs[crs] = axis
+    else:
+        ijk_to_crs = (0, 1, 2)
+    crs_size = (nc, nr, ns)
+    crs_start = (ncstart, nrstart, nsstart)
+    ijk_start = [crs_start[axis] for axis in ijk_to_crs]
+    data_size = [crs_size[axis] for axis in ijk_to_crs]
+    limit = 10 * max(mx, my, mz, max(data_size))
+    if all(abs(start) <= limit for start in ijk_start):
+        return None
+    origin = _skew_origin(ijk_start, step, (alpha, beta, gamma))
+    if not all(
+        math.isfinite(value) and (spacing <= 0 or value + spacing != value)
+        for value, spacing in zip(origin, step)
+    ):
+        return None
+    return origin
+
+
+def _skew_origin(
+    ijk: list[int],
+    step: tuple[float, float, float],
+    angles: tuple[float, float, float],
+) -> tuple[float, float, float]:
+    """Map a grid index to Cartesian angstroms, matching ChimeraX."""
+    if tuple(angles) == (90.0, 90.0, 90.0):
+        cosine_gamma = cosine_beta = cosine_1 = 0.0
+        sine_gamma = cosine_2 = 1.0
+    else:
+        alpha, beta, gamma = (math.radians(angle) for angle in angles)
+        cosine_gamma = math.cos(gamma)
+        sine_gamma = math.sin(gamma)
+        cosine_beta = math.cos(beta)
+        cosine_alpha = math.cos(alpha)
+        cosine_1 = (cosine_alpha - cosine_beta * cosine_gamma) / sine_gamma
+        cosine_2 = math.sqrt(max(0.0, 1 - cosine_beta ** 2 - cosine_1 ** 2))
+    scaled = [spacing * index for spacing, index in zip(step, ijk)]
+    return (
+        scaled[0] + cosine_gamma * scaled[1] + cosine_beta * scaled[2],
+        sine_gamma * scaled[1] + cosine_1 * scaled[2],
+        cosine_2 * scaled[2],
+    )
+
+
+def map_contour(raw: bytes) -> tuple[float, float, float]:
+    """Return standard deviation, contour in sigma, and absolute level."""
     voxels = _ccp4_voxels(raw)
     stdev = float(voxels.std())
-    return stdev
+    peak = float(voxels.max())
+    used, level = choose_contour(stdev, peak)
+    return stdev, used, level
 
 
-def copy_map(source: Path, dest: Path, sigma: float) -> MapCopy:
+def copy_map(source: Path, dest: Path) -> MapCopy:
     raw = source.read_bytes()
-    stdev = map_stdev(raw)
+    stdev, used, level = map_contour(raw)
     dest.parent.mkdir(parents=True, exist_ok=True)
     dest.write_bytes(raw)
-    return MapCopy(path=dest, stdev=stdev, level=sigma * stdev)
+    return MapCopy(path=dest, stdev=stdev, level=level, sigma=used)
 
 
 def summary_filename(source_name: str) -> str:
@@ -333,6 +447,16 @@ def collect_finals(run_dir: Path) -> list[Path]:
     )
 
 
+def _map_caption(step: int, item: MapCopy) -> str:
+    """One-line description of the contour used for a summary map."""
+    maximum = item.sigma + 1.0
+    return (
+        f"# step {step:02d} map: {item.sigma:.4g} sigma "
+        f"(1 below the maximum {maximum:.4g}), "
+        f"sd={item.stdev:.6g}, level={item.level:.6g}"
+    )
+
+
 def _data_name(path: Path) -> str:
     """File name inside the summary directory."""
     return path.name
@@ -353,14 +477,13 @@ def write_vmd(
     references: list[FilteredPdb],
     steps: list[IterationSummary],
     finals: list[FilteredPdb],
-    sigma: float,
 ) -> None:
     lines = [
-        "# loadVMD",
+        "# loadVMD.cmd",
         "# Generated by prepare_reconstruction_summary.py",
         "#",
         "# From this directory:",
-        "#   vmd -e loadVMD",
+        "#   vmd -e loadVMD.cmd",
         "#",
         "# PDB and map paths are relative to this directory. vmd -e does not",
         "# record the script location, so start VMD from this directory. Sourcing",
@@ -370,8 +493,11 @@ def write_vmd(
         "# Each refined_added model is ball-and-stick colored by atom name.",
         "# The atom placed in that iteration, the one with the highest PDB",
         "# serial, is bright green.",
-        "# The reconstructed final model is loaded last, in that same representation.",
-        f"# Each map is a white wireframe at {sigma:g} sigma, with no boundary box.",
+        "# The reconstructed final model is loaded last, colored by atom name,",
+        "# with no bright-green atom.",
+        "# Each map is a white wireframe at one sigma below the highest",
+        "# density in that map.",
+        "# No boundary box.",
         "# Only the light reference is drawn. The other molecules are loaded",
         "# with Drawn off.",
         "# Edit BALL_SCALE and BOND_RADIUS to change the ball-and-stick size.",
@@ -440,6 +566,22 @@ def write_vmd(
         "    return $molid",
         "}",
         "",
+        "proc load_colored {filepath} {",
+        "    set molid [mol new $filepath type pdb waitfor all]",
+        "    clear_reps $molid",
+        "    set natoms [molinfo $molid get numatoms]",
+        "    if {$natoms > 0} {",
+        "        mol representation CPK $::BALL_SCALE $::BOND_RADIUS 16 16",
+        "        mol color Name",
+        "        mol selection all",
+        "        mol material Opaque",
+        "        mol addrep $molid",
+        "    }",
+        "    mol rename $molid [file tail $filepath]",
+        "    molinfo $molid set drawn 0",
+        "    return $molid",
+        "}",
+        "",
         "# Isosurface arguments: isovalue volid show draw step size",
         "# show 0 draws the surface without the boundary box.",
         "# draw 1 is wireframe.",
@@ -464,7 +606,11 @@ def write_vmd(
         "",
     ]
 
-    def load_structure(pdb: FilteredPdb, comment: str) -> None:
+    def load_structure(pdb: FilteredPdb, comment: str, *, highlight: bool) -> None:
+        if not highlight:
+            lines.append(f"# {comment}")
+            lines.append(f"load_colored {_tcl_quote(_data_name(pdb.path))}")
+            return
         placed = pdb.highlight
         note = placed.describe() if placed else "none"
         index = 0 if pdb.highlight_index is None else pdb.highlight_index
@@ -475,18 +621,21 @@ def write_vmd(
         lines.append(f"load_reference {_tcl_quote(_data_name(reference.path))}")
     for step in steps:
         if step.added is not None:
-            load_structure(step.added, f"step {step.step:02d} placed atom")
-        if step.map_file is not None:
-            lines.append(
-                f"# step {step.step:02d} map: {sigma:g} sigma, "
-                f"sd={step.map_file.stdev:.6g}, level={step.map_file.level:.6g}"
+            load_structure(
+                step.added, f"step {step.step:02d} placed atom", highlight=True
             )
+        if step.map_file is not None:
+            lines.append(_map_caption(step.step, step.map_file))
             lines.append(
                 f"load_map {_tcl_quote(_data_name(step.map_file.path))} "
                 f"{step.map_file.level:.8f}"
             )
     for final in finals:
-        load_structure(final, "reconstructed final, highest PDB serial")
+        load_structure(
+            final,
+            "reconstructed final, colored by atom name, no highlight",
+            highlight=False,
+        )
     lines.extend([
         "",
         "display resetview",
@@ -505,7 +654,7 @@ def _cx_model_lines(
     spec = f"#{model_id}"
     lines = [
         f"style {spec} ball",
-        f"size {spec} ballScale 0.35 stickRadius 0.15",
+        f"size {spec} ballScale 0.175 stickRadius 0.075",
         f"hide {spec} cartoons",
         f"hide {spec} pseudobonds",
         f"show {spec} atoms",
@@ -525,7 +674,6 @@ def write_chimerax(
     references: list[FilteredPdb],
     steps: list[IterationSummary],
     finals: list[FilteredPdb],
-    sigma: float,
 ) -> None:
     """Write a ChimeraX command script.
 
@@ -533,14 +681,14 @@ def write_chimerax(
     file keeps the requested name, so it is opened with an explicit format.
     """
     lines = [
-        "# loadChimeraX",
+        "# loadChimeraX.cmd",
         "# Generated by prepare_reconstruction_summary.py",
         "#",
         "# ChimeraX command script. From this directory:",
-        "#   chimerax --cmd 'open loadChimeraX format \"cmd\"'",
+        "#   chimerax --cmd 'open loadChimeraX.cmd format \"cmd\"'",
         "#",
         "# Or, in the ChimeraX command line:",
-        '#   open loadChimeraX format cmd',
+        '#   open loadChimeraX.cmd format cmd',
         "#",
         "# PDB and map paths are relative to this script. ChimeraX runs the",
         "# script from the directory that contains it.",
@@ -550,8 +698,11 @@ def write_chimerax(
         "# (ChimeraX has no PDB atom-name scheme; element is the matching one).",
         "# The atom placed in that iteration, the one with the highest PDB",
         "# serial, is lime (#00ff00).",
-        "# The reconstructed final model is loaded last, in that same representation.",
-        f"# Each map is a white mesh at {sigma:g} sigma, with no outline box.",
+        "# The reconstructed final model is loaded last, colored by element,",
+        "# with no lime atom.",
+        "# Each map is a white mesh at one sigma below the highest",
+        "# density in that map.",
+        "# No outline box.",
         "# The background is black so the white mesh stays visible.",
         "",
         "set bgColor black",
@@ -574,23 +725,28 @@ def write_chimerax(
             lines.append("")
             model_id += 1
         if step.map_file is not None:
-            lines.append(
-                f"# step {step.step:02d} map: {sigma:g} sigma, "
-                f"sd={step.map_file.stdev:.6g}, level={step.map_file.level:.6g}"
-            )
+            lines.append(_map_caption(step.step, step.map_file))
             lines.append(f"open {_cx_quote(_data_name(step.map_file.path))}")
+            origin = chimerax_map_origin(step.map_file.path)
+            # meshLighting false keeps the wireframe white. Lit mesh lines
+            # shade toward black and disappear on the black background.
+            # The origin puts a cut-out map back on the model. ChimeraX
+            # drops that grid index when it is large compared with the
+            # cut-out size.
+            placed = ""
+            if origin is not None:
+                placed = " origin " + ",".join(f"{value:.6f}" for value in origin)
             lines.append(
                 f"volume #{model_id} style mesh color white step 1 "
-                f"level {step.map_file.level:.8f} showOutlineBox false"
+                f"level {step.map_file.level:.8f} showOutlineBox false "
+                f"meshLighting false{placed}"
             )
             lines.append("")
             model_id += 1
     for final in finals:
-        placed = final.highlight
-        note = placed.describe() if placed else "no atoms"
-        lines.append(f"# reconstructed final, highest PDB serial: {note}")
+        lines.append("# reconstructed final, colored by element, no highlight")
         lines.append(f"open {_cx_quote(_data_name(final.path))}")
-        lines.extend(_cx_model_lines(model_id, color="byelement", last=placed))
+        lines.extend(_cx_model_lines(model_id, color="byelement"))
         lines.append("")
         model_id += 1
     lines.append("hide pseudobonds")
@@ -599,266 +755,233 @@ def write_chimerax(
     path.write_text("\n".join(lines), encoding="utf-8")
 
 
-MAESTRO_SCRIPT = """\
-# loadMaestro
-# Generated by prepare_reconstruction_summary.py
-#
-# Run inside Schrödinger Maestro from this directory, in the command area:
-#
-#   pythoneval exec(open("loadMaestro", encoding="utf-8").read())
-#
-# PDB and map paths are relative to this script's directory.
-#
-# The light reference is ball-and-stick in silver (RGB 192,192,192).
-# Each refined_added model is ball-and-stick with the Element scheme
-# (Maestro has no PDB atom-name scheme). The atom placed in that
-# iteration, the one with the highest PDB serial, is bright green
-# (RGB 0,255,0).
-# The reconstructed final model is loaded last, in that same representation.
-# Each map is a white mesh at __SIGMA__ sigma, with no volume box.
-# A white mesh is difficult to see on a white workspace. Set
-# Preferences > Workspace > Background to black before or after loading.
-
-from pathlib import Path
-
-from schrodinger import maestro
-from schrodinger.structutils.color import Color
-from schrodinger.surface import Style
+# VMD Name coloring, as RGB 0-255. Carbon is cyan, as in VMD.
+_NAME_RGB = {
+    1: (255, 255, 255),
+    6: (0, 255, 255),
+    7: (0, 0, 255),
+    8: (255, 0, 0),
+    15: (255, 128, 0),
+    16: (255, 255, 0),
+    20: (144, 144, 160),
+    25: (178, 102, 255),
+}
+_SILVER = (192, 192, 192)
+_BRIGHT_GREEN = (0, 255, 0)
 
 
-def summary_dir():
-    try:
-        return Path(__file__).resolve().parent
-    except NameError:
-        return Path.cwd()
+def _schrodinger_run() -> Path | None:
+    """Return the Schrödinger ``run`` launcher, if one is installed."""
+    candidates: list[Path] = []
+    env = os.environ.get("SCHRODINGER")
+    if env:
+        candidates.append(Path(env) / "run")
+    opt = Path("/opt/schrodinger")
+    if opt.is_dir():
+        candidates.extend(sorted(opt.glob("suites*/run")))
+    apps = Path("/Applications")
+    if apps.is_dir():
+        for folder in sorted(apps.glob("SchrodingerSuites*")):
+            candidates.append(folder / "run")
+            candidates.append(folder / "Contents/MacOS/run")
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    return None
 
 
-def data_file(name):
-    # Resolve a summary-relative PDB or map name.
-    path = summary_dir() / name
-    if not path.is_file():
-        raise FileNotFoundError("Missing summary file: %s" % path)
-    return str(path)
-
-MAP_SIGMA = __SIGMA_REPR__
-REFERENCES = __REFERENCES__
-STEPS = __STEPS__
-FINALS = __FINALS__
-
-
-def maestro_option(name):
-    return maestro.get_command_option("entryimport", name)
-
-
-def restore_entryimport(saved):
-    maestro.command(
-        "entryimport format={format} wsreplace={wsreplace} "
-        "wsinclude={wsinclude} all={all} creategroups={creategroups}".format(
-            **saved
-        )
-    )
-
-
-def import_structure(filepath):
-    project = maestro.project_table_get()
-    before = {row.entry_id for row in project.all_rows}
-    title = filepath.rsplit("/", 1)[-1]
-    maestro.command(
-        'entryimport entry_title="{0}" "{1}"'.format(title, filepath)
-    )
-    project = maestro.project_table_get()
-    new_rows = [row for row in project.all_rows if row.entry_id not in before]
-    if not new_rows:
-        raise RuntimeError("Maestro did not import %s" % filepath)
-    row = new_rows[-1]
-    maestro.command("entrywsinclude entry %s" % row.entry_id)
-    return row
-
-
-def show_ballnstick(entry_id):
-    asl = "entry.id %s" % entry_id
-    maestro.command("displayatom %s" % asl)
-    maestro.command("ribbon style=none %s" % asl)
-    maestro.command("repatom rep=ballnstick %s" % asl)
-    maestro.command("repbond rep=ballnstick")
-    maestro.command("repatombonds %s" % asl)
-
-
-def paint(entry_id, red, green, blue, extra_asl=""):
-    asl = "entry.id %s" % entry_id
-    if extra_asl:
-        asl = "(%s AND %s)" % (asl, extra_asl)
-    maestro.command(
-        "coloratomrgb red=%d green=%d blue=%d %s" % (red, green, blue, asl)
-    )
-
-
-def paint_last_atom(row, chain, resseq, atom_name, fallback_index):
-    structure = row.getStructure()
-    chosen = None
-    for atom in structure.atom:
-        if (
-            atom.chain.strip() == chain
-            and int(atom.resnum) == int(resseq)
-            and atom.pdbname.strip() == atom_name
-        ):
-            chosen = atom.index
-    if chosen is None:
-        chosen = fallback_index
-    paint(row.entry_id, 0, 255, 0, "atom.entrynum %s" % chosen)
-
-
-def style_map(row, map_path, level):
-    before = set(row.surface)
-    maestro.command('visimport entry="%s" "%s"' % (row.entry_id, map_path))
-    project = maestro.project_table_get()
-    row = project.getRow(row.entry_id)
-    names = [name for name in row.surface if name not in before]
-    if not names:
-        surface = row.surface.addFromFile(
-            map_path, name=map_path.rsplit("/", 1)[-1]
-        )
-        names = [surface.name]
-        row = project.getRow(row.entry_id)
-    surfaces = [row.surface[name] for name in names]
-    positives = [surface for surface in surfaces if surface.isovalue >= 0]
-    shown = positives or surfaces[:1]
-    for surface in surfaces:
-        if surface not in shown:
-            surface.visible = False
-    for surface in shown:
-        surface.style = Style.mesh
-        surface.setColoring(Color("white"))
-        surface.isovalue = float(level)
-        surface.visible = True
-        maestro.command(
-            'surfacedisplay entry=%s display=true "%s"'
-            % (row.entry_id, surface.name)
-        )
-        try:
-            maestro.command(
-                'surfacesetviewasl entry=%s surface="%s" use=false'
-                % (row.entry_id, surface.name)
-            )
-        except Exception as exc:
-            print("surfacesetviewasl skipped: %s" % exc)
-        volume_name = surface.volume_name
-        if volume_name:
-            maestro.command(
-                'volumedisplay entry=%s display=false bounding_box=false "%s"'
-                % (row.entry_id, volume_name)
-            )
-    return row
-
-
-def load_summary():
-    saved = {
-        "format": maestro_option("format"),
-        "wsreplace": maestro_option("wsreplace"),
-        "wsinclude": maestro_option("wsinclude"),
-        "all": maestro_option("all"),
-        "creategroups": maestro_option("creategroups"),
-    }
-    try:
-        maestro.command("entryimport wsreplace=false")
-        maestro.command("entryimport wsinclude=true")
-        maestro.command("entryimport all=true")
-        reference_row = None
-        for filepath in REFERENCES:
-            reference_row = import_structure(data_file(filepath))
-            show_ballnstick(reference_row.entry_id)
-            paint(reference_row.entry_id, 192, 192, 192)
-        for step in STEPS:
-            added = step["added"]
-            row = reference_row
-            if added is not None:
-                row = import_structure(data_file(added["path"]))
-                show_ballnstick(row.entry_id)
-                maestro.command(
-                    'colorscheme scheme="Element" entry.id %s' % row.entry_id
-                )
-                if added["atom"]:
-                    paint_last_atom(
-                        row,
-                        added["chain"],
-                        added["resseq"],
-                        added["atom"],
-                        added["fallback_index"],
-                    )
-            map_info = step["map"]
-            if map_info is not None and row is not None:
-                style_map(row, data_file(map_info["path"]), map_info["level"])
-        for final in FINALS:
-            row = import_structure(data_file(final["path"]))
-            show_ballnstick(row.entry_id)
-            maestro.command(
-                'colorscheme scheme="Element" entry.id %s' % row.entry_id
-            )
-            if final["atom"]:
-                paint_last_atom(
-                    row,
-                    final["chain"],
-                    final["resseq"],
-                    final["atom"],
-                    final["fallback_index"],
-                )
-        maestro.command("fit all")
-    finally:
-        restore_entryimport(saved)
-
-
-load_summary()
-"""
-
-
-def _entry_payload(pdb: FilteredPdb) -> dict:
-    if pdb.highlight is not None:
-        return {
-            "path": _data_name(pdb.path),
-            "chain": pdb.highlight.chain,
-            "resseq": pdb.highlight.resseq,
-            "atom": pdb.highlight.name,
-            "fallback_index": (pdb.highlight_index or 0) + 1,
-        }
-    return {
-        "path": _data_name(pdb.path),
-        "chain": "",
-        "resseq": 0,
-        "atom": "",
-        "fallback_index": pdb.natoms,
-    }
-
-
-def write_maestro(
+def write_maestro_project(
     path: Path,
     references: list[FilteredPdb],
     steps: list[IterationSummary],
     finals: list[FilteredPdb],
-    sigma: float,
 ) -> None:
-    """Write a Python script that must be executed inside Maestro."""
-    payload_steps = []
-    for step in steps:
-        added = _entry_payload(step.added) if step.added is not None else None
-        map_info = None
-        if step.map_file is not None:
-            map_info = {
-                "path": _data_name(step.map_file.path),
-                "level": step.map_file.level,
-            }
-        payload_steps.append({"step": step.step, "added": added, "map": map_info})
-    script = MAESTRO_SCRIPT
-    script = script.replace("__SIGMA_REPR__", repr(sigma))
-    script = script.replace("__SIGMA__", format(sigma, "g"))
-    script = script.replace(
-        "__REFERENCES__", repr([_data_name(item.path) for item in references])
+    """Write a Maestro project archive with one entry per reconstruction step."""
+    try:
+        import schrodinger.infra.mmproj  # noqa: F401
+    except ImportError:
+        _write_maestro_project_via_schrodinger(path, references, steps, finals)
+        return
+    _write_maestro_project(path, references, steps, finals)
+
+
+def _write_maestro_project_via_schrodinger(
+    path: Path,
+    references: list[FilteredPdb],
+    steps: list[IterationSummary],
+    finals: list[FilteredPdb],
+) -> None:
+    runner = _schrodinger_run()
+    if runner is None:
+        raise SystemExit(
+            "Schrödinger Maestro is required to write the project archive, "
+            "and the run launcher was not found."
+        )
+    with tempfile.NamedTemporaryFile(suffix=".pkl", delete=False) as handle:
+        pickle.dump((str(path), references, steps, finals), handle)
+        payload = handle.name
+    code = (
+        "import os, pickle, sys\n"
+        "from pathlib import Path\n"
+        f"sys.path.insert(0, {str(Path(__file__).resolve().parent)!r})\n"
+        "import prepare_reconstruction_summary as tool\n"
+        "archive, references, steps, finals = pickle.load("
+        "open(os.environ['XFEL_MAESTRO_PICKLE'], 'rb'))\n"
+        "tool._write_maestro_project("
+        "Path(archive), references, steps, finals)\n"
     )
-    script = script.replace("__STEPS__", repr(payload_steps))
-    script = script.replace("__FINALS__", repr([_entry_payload(item) for item in finals]))
-    path.write_text(script, encoding="utf-8")
+    env = os.environ.copy()
+    env["XFEL_MAESTRO_PICKLE"] = payload
+    try:
+        subprocess.check_call([str(runner), "python3", "-c", code], env=env)
+    finally:
+        os.unlink(payload)
 
 
-def prepare(run_dir: Path, residues: list[Residue], sigma: float) -> Path:
+def _style_structure(
+    st, pdb: FilteredPdb, *, silver: bool, highlight: bool
+) -> None:
+    """Ball-and-stick. Silver for the reference, VMD Name colors otherwise."""
+    from schrodinger import structure
+    from schrodinger.infra import mm
+
+    st.applyStyle(structure.ATOM_BALLNSTICK, structure.BOND_BALLNSTICK)
+    for atom in st.atom:
+        mm.mmctg_atom_set_ribbon_style(
+            st.handle, atom.index, mm.MMCT_RIBBON_STYLE_NONE
+        )
+        if silver:
+            atom.color = _SILVER
+        else:
+            atom.color = _NAME_RGB.get(atom.atomic_number, (200, 200, 200))
+    if silver or not highlight or pdb.highlight is None:
+        return
+    chosen = None
+    serial = pdb.highlight.serial
+    if serial is not None:
+        for atom in st.atom:
+            if atom.property.get("i_pdb_PDB_serial") == serial:
+                chosen = atom
+                break
+    if chosen is None:
+        index = (pdb.highlight_index or 0) + 1
+        if 1 <= index <= st.atom_total:
+            chosen = st.atom[index]
+    if chosen is not None:
+        chosen.color = _BRIGHT_GREEN
+
+
+def _add_map(proj, row, item: MapCopy, label: str) -> int:
+    """Attach a white mesh of ``item`` to a project row. Return vertex count."""
+    from schrodinger.infra import mmproj, mmsurf
+
+    ivol, center, _kind, _comment = mmsurf.mmvisio_read_ccp4(str(item.path))
+    entry_index = mmproj.mmproj_project_entry_id_to_index(
+        proj.handle, int(row.entry_id)
+    )
+    mmproj.mmproj_index_entry_add_volume(proj.handle, entry_index, ivol)
+    level = float(item.level)
+    mmsurf.mmsurf_set_gen_isolines(True)
+    surface = mmsurf.mmsurf_new_isosurface(
+        ivol,
+        level,
+        False,
+        0.0,
+        float(center[0]),
+        float(center[1]),
+        float(center[2]),
+        0,
+    )
+    mmsurf.mmsurf_generate_molecular_isolines(ivol, surface)
+    mmsurf.mmsurf_set_name(surface, label)
+    mmsurf.mmsurf_set_rgb_color(surface, (255, 255, 255))
+    mmsurf.mmsurf_set_style(surface, mmsurf.MMSURF_STYLE_MESH)
+    mmsurf.mmsurf_set_transparency(surface, 0)
+    mmsurf.mmsurf_set_visibility(surface, True)
+    volume_name = mmsurf.mmvol_get_name(ivol)
+    mmsurf.mmsurf_set_volume_name(surface, volume_name)
+    mmsurf.mmsurf_set_scheme_volume_name(surface, volume_name)
+    mmsurf.mmvol_set_visible(ivol, False)
+    mmproj.mmproj_index_entry_add_surface(proj.handle, entry_index, surface, None)
+    return int(mmsurf.mmsurf_get_num_vertices(surface))
+
+
+def _import_entry(
+    proj, pdb: FilteredPdb, title: str, *, silver: bool, highlight: bool
+):
+    from schrodinger import structure
+
+    model = structure.Structure.read(str(pdb.path))
+    _style_structure(model, pdb, silver=silver, highlight=highlight)
+    return proj.importStructure(model, name=title)
+
+
+def _write_maestro_project(
+    path: Path,
+    references: list[FilteredPdb],
+    steps: list[IterationSummary],
+    finals: list[FilteredPdb],
+) -> None:
+    from schrodinger import project
+    from schrodinger.infra import mm, mmproj, mmsurf
+
+    path = path.expanduser().resolve()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    mmsurf.mmvisio_initialize(mm.MMERR_DEFAULT_HANDLER)
+    work = Path(tempfile.mkdtemp(prefix="xfel-maestro-"))
+    project_dir = work / "loadMaestro.prj"
+    try:
+        handle = mmproj.mmproj_project_new(str(project_dir))
+        opened = project.Project(project_handle=handle)
+        reference_row = None
+        for reference in references:
+            reference_row = _import_entry(
+                opened, reference, "reference", silver=True, highlight=False
+            )
+            print(f"maestro: reference ({reference.path.name})")
+        final_used = False
+        for step in steps:
+            model = step.added
+            highlight = True
+            if model is None and step.map_file is not None and finals:
+                model = finals[-1]
+                highlight = False
+                final_used = True
+            if model is None:
+                continue
+            title = f"step{step.step:02d}"
+            row = _import_entry(
+                opened, model, title, silver=False, highlight=highlight
+            )
+            vertices = 0
+            if step.map_file is not None:
+                vertices = _add_map(opened, row, step.map_file, f"{title} map")
+            note = "" if highlight else ", no highlight"
+            print(
+                f"maestro: {title} ({model.path.name}{note}, "
+                f"mesh vertices {vertices})"
+            )
+        if not final_used:
+            for final in finals:
+                _import_entry(
+                    opened, final, "final", silver=False, highlight=False
+                )
+                print(f"maestro: final ({final.path.name}, no highlight)")
+        if reference_row is not None:
+            reference_row.includeOnly()
+        opened.close()
+        if path.exists():
+            path.unlink()
+        written = Path(project.zip_project(str(project_dir), str(path.parent)))
+        if written.resolve() != path.resolve():
+            written.replace(path)
+        print(f"maestro: {path}")
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+
+
+
+def prepare(run_dir: Path, residues: list[Residue]) -> Path:
     run_dir = run_dir.expanduser().resolve()
     if not run_dir.is_dir():
         raise SystemExit(f"Run directory not found: {run_dir}")
@@ -896,7 +1019,7 @@ def prepare(run_dir: Path, residues: list[Residue], sigma: float) -> Path:
         if "added" in slot:
             source = slot["added"]
             dest = summary / summary_filename(source.name)
-            item.added = filter_pdb(source, dest, residues)
+            item.added = filter_pdb(source, dest, residues, keep_newest=True)
             placed = (
                 item.added.highlight.describe()
                 if item.added.highlight
@@ -906,23 +1029,24 @@ def prepare(run_dir: Path, residues: list[Residue], sigma: float) -> Path:
                 f"step {step:02d} added:   {dest.name} "
                 f"({item.added.natoms} atoms, green {placed})"
             )
-            if item.added.newest_source is not None and not item.added.newest_source_kept:
+            outside = (
+                item.added.newest_source is not None
+                and (item.added.newest_source.chain, item.added.newest_source.resseq)
+                not in {(residue.chain, residue.resseq) for residue in residues}
+            )
+            if outside:
                 print(
-                    "warning: the atom placed in "
+                    "note: the atom placed in "
                     f"{source.name} is {item.added.newest_source.describe()}, "
-                    "which is outside --resid. The bright-green atom is the "
-                    f"newest kept atom ({placed}).",
+                    "which is outside --resid. It is kept and highlighted.",
                     file=sys.stderr,
                 )
         if "map" in slot:
             source = slot["map"]
             dest = summary / summary_filename(source.name)
             print(f"step {step:02d} map:     {dest.name}")
-            item.map_file = copy_map(source, dest, sigma)
-            print(
-                f"         sd={item.map_file.stdev:.6g}  "
-                f"{sigma:g} sigma -> {item.map_file.level:.6g}"
-            )
+            item.map_file = copy_map(source, dest)
+            print(f"         {_map_caption(step, item.map_file)[2:]}")
         if item.added is None and item.map_file is None:
             continue
         steps.append(item)
@@ -932,25 +1056,23 @@ def prepare(run_dir: Path, residues: list[Residue], sigma: float) -> Path:
         dest = summary / summary_filename(source.name)
         filtered = filter_pdb(source, dest, residues)
         finals.append(filtered)
-        placed = (
-            filtered.highlight.describe() if filtered.highlight else "no atoms"
-        )
-        print(f"final: {dest.name} ({filtered.natoms} atoms, green {placed})")
+        print(f"final: {dest.name} ({filtered.natoms} atoms, no highlight)")
         if filtered.newest_source is not None and not filtered.newest_source_kept:
             print(
                 "warning: the newest atom in "
                 f"{source.name} is {filtered.newest_source.describe()}, "
-                "which is outside --resid. The bright-green atom is the "
-                f"newest kept atom ({placed}).",
+                "which is outside --resid and is omitted from the summary PDB.",
                 file=sys.stderr,
             )
 
-    write_vmd(summary / "loadVMD", references, steps, finals, sigma)
-    write_chimerax(summary / "loadChimeraX", references, steps, finals, sigma)
-    write_maestro(summary / "loadMaestro", references, steps, finals, sigma)
-    print(f"wrote {summary / 'loadVMD'}")
-    print(f"wrote {summary / 'loadChimeraX'}")
-    print(f"wrote {summary / 'loadMaestro'}")
+    write_vmd(summary / "loadVMD.cmd", references, steps, finals)
+    write_chimerax(summary / "loadChimeraX.cmd", references, steps, finals)
+    write_maestro_project(
+        summary / "loadMaestro.prjzip", references, steps, finals
+    )
+    print(f"wrote {summary / 'loadVMD.cmd'}")
+    print(f"wrote {summary / 'loadChimeraX.cmd'}")
+    print(f"wrote {summary / 'loadMaestro.prjzip'}")
     return summary
 
 
@@ -974,21 +1096,9 @@ def main(argv: list[str] | None = None) -> None:
             "Example: A602,A170,A189,C354"
         ),
     )
-    parser.add_argument(
-        "--map-sigma",
-        type=float,
-        default=DEFAULT_MAP_SIGMA,
-        help=(
-            "Map mesh contour in units of the map standard deviation "
-            f"(default: {DEFAULT_MAP_SIGMA:g}, the contour used for the "
-            "reconstruction figures)"
-        ),
-    )
     args = parser.parse_args(argv)
-    if args.map_sigma == 0:
-        raise SystemExit("--map-sigma must be non-zero.")
     residues = parse_residues(args.resid)
-    prepare(args.run_dir, residues, args.map_sigma)
+    prepare(args.run_dir, residues)
 
 
 if __name__ == "__main__":
