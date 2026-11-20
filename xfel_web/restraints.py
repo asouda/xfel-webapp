@@ -1,18 +1,11 @@
-"""REFMAC external restraints and optional libcheck monomer libraries."""
+"""REFMAC external restraints."""
 
 from __future__ import annotations
 
 import math
-import shlex
 from pathlib import Path
 
-from xfel_web.ccp4 import (
-    coords_from_pdb_text,
-    extract_monomer_pdb,
-    residue_conformers,
-    residue_name,
-    scan_hetatm,
-)
+from xfel_web.ccp4 import residue_conformers
 
 
 def pair_distance(coords: dict[str, tuple[float, float, float]], atom_a: str, atom_b: str, where: str) -> float:
@@ -106,8 +99,12 @@ def external_distance_keywords(
 ) -> str:
     """REFMAC external distances for each residue in ``site_copies``.
 
-    REFMAC keeps the last restraint on an atom pair, so these lines replace
-    the dictionary bond for that pair. An empty spec list adds nothing.
+    A spec that includes a distance or a sigma uses those numbers. A missing
+    distance is taken from the coordinates, and a missing sigma is
+    ``default_sigma``. REFMAC keeps the last restraint on an atom pair, so
+    these lines replace the monomer-library bond, including a bond from a
+    custom dictionary read earlier in the same job. An empty spec list adds
+    nothing.
     """
     parsed = _normalize_distance_specs(specs, default_sigma)
     if not parsed:
@@ -163,6 +160,10 @@ def external_angle_keywords(
     """REFMAC external angles. The middle atom is the vertex.
 
     Target angles and sigmas are degrees. ``refmac5`` reads both in degrees.
+    A spec that includes an angle or a sigma uses those numbers. A missing
+    angle is taken from the coordinates, and a missing sigma is
+    ``default_sigma_deg``. These lines replace the monomer-library angle,
+    including an angle from a custom dictionary read earlier in the same job.
     """
     if not specs:
         return ""
@@ -235,283 +236,3 @@ def external_angle_keywords(
     if not lines:
         raise ValueError("Angle restraints produced no external restraints")
     return "\n".join(lines)
-
-
-def parse_distance_restraints(specs, default_sigma: float, coords: dict) -> list[dict]:
-    parsed = _normalize_distance_specs(specs, default_sigma)
-    restraints = []
-    for spec in parsed:
-        distance = spec["distance"]
-        if distance is None:
-            distance = pair_distance(coords, spec["atom1"], spec["atom2"], "the site residue")
-        else:
-            pair_distance(coords, spec["atom1"], spec["atom2"], "the site residue")
-        restraints.append(
-            {"atom1": spec["atom1"], "atom2": spec["atom2"], "distance": distance, "sigma": spec["sigma"]}
-        )
-    return restraints
-
-
-def library_monomer_names(pdb_path: Path, site_resname: str, requested: list[str] | None) -> list[str]:
-    if requested is None:
-        names: list[str] = []
-        seen: set[str] = set()
-        for rec in scan_hetatm(pdb_path):
-            if rec["resname"] not in seen:
-                seen.add(rec["resname"])
-                names.append(rec["resname"])
-    else:
-        names = [str(name).strip() for name in requested if str(name).strip()]
-    if site_resname not in names:
-        names.insert(0, site_resname)
-    else:
-        names = [site_resname] + [name for name in names if name != site_resname]
-    return names
-
-
-def _run_libcheck(session, work: Path, keywords: str, log_path: Path) -> None:
-    script = f"cd {shlex.quote(str(work))}\nlibcheck << 'EOF'\n{keywords.strip()}\n_END\nEOF\n"
-    try:
-        session.run_bash(script, log_path)
-    except RuntimeError as exc:
-        session.emit(f"  libcheck exited with an error. See {log_path.name}")
-        log_path.write_text(log_path.read_text() + "\n" + str(exc))
-
-
-def run_libcheck_monomer(session, pdb_text: str, resname: str, work: Path, required: bool = True) -> str | None:
-    """Monomer description from coordinates, or the CCP4 entry if that fails."""
-    work.mkdir(parents=True, exist_ok=True)
-    (work / f"{resname}.pdb").write_text(pdb_text)
-    has_h = any(
-        line.startswith(("ATOM", "HETATM")) and line[76:78].strip() == "H"
-        for line in pdb_text.splitlines()
-    )
-    hflag = "Y" if has_h else "N"
-    lib_path = work / f"{resname}.lib"
-    lib_path.unlink(missing_ok=True)
-    log_path = work / f"{resname}_libcheck.log"
-    session.emit(f"→ libcheck {resname}  ({log_path.name})")
-    _run_libcheck(
-        session,
-        work,
-        "\n".join(
-            [
-                "_DOC N",
-                f"_FILE_PDB {resname}.pdb",
-                f"_MON {resname}",
-                "_COOR Y",
-                "_REF N",
-                f"_HFLAG {hflag}",
-                "_SRCH 0",
-                f"_FILE_O {resname}",
-            ]
-        ),
-        log_path,
-    )
-    if not lib_path.is_file():
-        session.emit(
-            f"  {resname}: no dictionary from the coordinates "
-            f"(see {log_path.name}). Using the CCP4 monomer entry."
-        )
-        _run_libcheck(
-            session,
-            work,
-            "\n".join(["_DOC N", f"_MON {resname}", f"_FILE_O {resname}"]),
-            work / f"{resname}_libcheck_ccp4.log",
-        )
-    if not lib_path.is_file():
-        message = (
-            f"libcheck did not write {lib_path}. See {log_path}. "
-            "REFMAC will use its distributed dictionary for this residue."
-        )
-        if required:
-            raise FileNotFoundError(message)
-        session.emit(f"  {resname}: skipped. {message}")
-        return None
-    for junk in list(work.glob(f"{resname}*.ps")) + list(work.glob(f"{resname}*.odb")):
-        junk.unlink()
-    return lib_path.read_text()
-
-
-def _split_monomer_lib(lib_text: str) -> tuple[str, str, str]:
-    lines = lib_text.splitlines()
-    try:
-        list_at = next(i for i, line in enumerate(lines) if line.startswith("data_comp_list"))
-        block_at = next(
-            i for i, line in enumerate(lines)
-            if line.startswith("data_comp_") and not line.startswith("data_comp_list")
-        )
-    except StopIteration as exc:
-        raise ValueError("libcheck library is missing data_comp_list or a monomer block") from exc
-    summary = None
-    header_lines = lines[: list_at + 1]
-    for line in lines[list_at + 1 : block_at]:
-        if line.startswith(("loop_", "_")):
-            header_lines.append(line)
-        elif (
-            summary is None
-            and line.strip()
-            and not line.startswith("#")
-            and set(line.strip()) != {"-"}
-        ):
-            summary = line
-    if summary is None:
-        raise ValueError("libcheck library is missing the monomer summary line")
-    block = "\n".join(lines[block_at:]).strip() + "\n"
-    return "\n".join(header_lines).rstrip() + "\n", summary, block
-
-
-def _format_bond(comp_id: str, atom1: str, atom2: str, bond_type: str, distance: float, sigma: float) -> str:
-    return f" {comp_id:<6} {atom1:<6} {atom2:<6} {bond_type:<10} {distance:8.3f} {sigma:8.3f}"
-
-
-def loosen_distance_restraints(lib_text: str, comp_id: str, restraints: list[dict]) -> tuple[str, list[str]]:
-    """Set the chosen site distances and their ESDs in one monomer block."""
-    lines = lib_text.splitlines()
-    if not any(line.strip() == "_chem_comp_bond.value_dist_esd" for line in lines):
-        lines.extend(
-            [
-                "loop_",
-                "_chem_comp_bond.comp_id",
-                "_chem_comp_bond.atom_id_1",
-                "_chem_comp_bond.atom_id_2",
-                "_chem_comp_bond.type",
-                "_chem_comp_bond.value_dist",
-                "_chem_comp_bond.value_dist_esd",
-            ]
-        )
-    atom_ids: set[str] = set()
-    in_atoms = False
-    for line in lines:
-        if line.strip() == "_chem_comp_atom.z":
-            in_atoms = True
-            continue
-        if in_atoms and (line.startswith("loop_") or line.startswith("_") or line.startswith("#")):
-            break
-        if in_atoms:
-            parts = line.split()
-            if len(parts) >= 2 and parts[0] == comp_id:
-                atom_ids.add(parts[1])
-    missing = [
-        atom
-        for rec in restraints
-        for atom in (rec["atom1"], rec["atom2"])
-        if atom not in atom_ids
-    ]
-    if missing:
-        raise ValueError(
-            f"{comp_id} library has no atom(s) {', '.join(missing)}. "
-            f"Library atoms: {', '.join(sorted(atom_ids))}"
-        )
-
-    wanted = {frozenset((rec["atom1"], rec["atom2"])): rec for rec in restraints}
-    found: set[frozenset[str]] = set()
-    out: list[str] = []
-    in_bonds = False
-    report: list[str] = []
-
-    def _emit_missing() -> None:
-        for key, rec in wanted.items():
-            if key in found:
-                continue
-            out.append(_format_bond(comp_id, rec["atom1"], rec["atom2"], "single", rec["distance"], rec["sigma"]))
-            report.append(
-                f"{rec['atom1']}-{rec['atom2']}  {rec['distance']:.3f} A  "
-                f"sigma {rec['sigma']:.3f}  (added)"
-            )
-            found.add(key)
-
-    for line in lines:
-        if line.strip() == "_chem_comp_bond.value_dist_esd":
-            in_bonds = True
-            out.append(line)
-            continue
-        if in_bonds and (
-            line.startswith("loop_")
-            or line.startswith("_")
-            or line.startswith("#")
-            or line.startswith("data_")
-        ):
-            _emit_missing()
-            in_bonds = False
-            out.append(line)
-            continue
-        if in_bonds:
-            parts = line.split()
-            if len(parts) >= 6 and parts[0] == comp_id:
-                try:
-                    old_sigma = float(parts[5])
-                except ValueError:
-                    out.append(line)
-                    continue
-                key = frozenset((parts[1], parts[2]))
-                rec = wanted.get(key)
-                if rec is not None:
-                    out.append(_format_bond(comp_id, parts[1], parts[2], parts[3], rec["distance"], rec["sigma"]))
-                    report.append(
-                        f"{parts[1]}-{parts[2]}  {rec['distance']:.3f} A  "
-                        f"sigma {old_sigma:.3f} -> {rec['sigma']:.3f}"
-                    )
-                    found.add(key)
-                    continue
-        out.append(line)
-    if in_bonds:
-        _emit_missing()
-    if len(found) != len(wanted):
-        raise ValueError(f"Could not write every distance restraint for {comp_id}")
-    return "\n".join(out) + "\n", report
-
-
-def combine_monomer_libs(header: str, summaries: list[str], blocks: list[str]) -> str:
-    parts = [header.rstrip(), *summaries, "#", "# --- DESCRIPTION OF MONOMERS ---", "#", *blocks]
-    return "\n".join(part.rstrip("\n") for part in parts).rstrip() + "\n"
-
-
-def build_refinement_library(
-    session,
-    pdb_path: Path,
-    library_path: Path,
-    site_chain: str,
-    site_resi: int,
-    distance_specs,
-    distance_sigma: float,
-    monomer_names: list[str] | None,
-) -> Path:
-    """libcheck library for the site residue and the other hetero residues."""
-    site_resname = residue_name(pdb_path, site_chain, site_resi)
-    site_pdb = extract_monomer_pdb(pdb_path, site_resname, site_chain, site_resi)
-    site_coords = coords_from_pdb_text(site_pdb)
-    restraints = (
-        parse_distance_restraints(distance_specs, float(distance_sigma), site_coords)
-        if distance_specs
-        else []
-    )
-    names = library_monomer_names(pdb_path, site_resname, monomer_names)
-    work = session.output_dir / "libcheck"
-    header = None
-    summaries: list[str] = []
-    blocks: list[str] = []
-    skipped: list[str] = []
-    for name in names:
-        pdb_text = site_pdb if name == site_resname else extract_monomer_pdb(pdb_path, name)
-        lib_text = run_libcheck_monomer(session, pdb_text, name, work, required=(name == site_resname))
-        if lib_text is None:
-            skipped.append(name)
-            continue
-        if name == site_resname and restraints:
-            lib_text, report = loosen_distance_restraints(lib_text, name, restraints)
-            session.emit(f"Distance restraints for {name} {site_chain}/{site_resi}:")
-            for row in report:
-                session.emit(f"  {row}")
-        this_header, summary, block = _split_monomer_lib(lib_text)
-        if header is None:
-            header = this_header
-        summaries.append(summary)
-        blocks.append(block)
-    if header is None:
-        raise RuntimeError("libcheck produced no monomer descriptions")
-    library_path.write_text(combine_monomer_libs(header, summaries, blocks))
-    session.emit(f"Monomer library ({len(summaries)} residue types): {library_path}")
-    if skipped:
-        session.emit("Left to the CCP4 dictionary: " + ", ".join(skipped))
-    return library_path

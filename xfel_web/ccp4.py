@@ -23,7 +23,6 @@ CCP4_PROGRAMS = (
     "fft",
     "mtzdump",
     "ctruncate",
-    "libcheck",
 )
 
 OEC_PAIRS_WITH_O6 = [

@@ -24,7 +24,7 @@ With the default choice, every heavy atom that is in the reference and absent fr
 
 ## What one iteration does
 
-The programs inside each iteration are the omit-map programs: `cif2mtz` when the reflections are mmCIF, `mtzdump`, `ctruncate` when the file holds intensities, `cad`, `refmac5`, `fft`, then the map padding, Coot, and PyMOL. `libcheck` is added only when distance restraints are widened in a monomer library. The commands are the ones on the [omit-map page](omit-map.md). The reconstruction adds the steps below, and it repeats them.
+The programs inside each iteration are the omit-map programs: `cif2mtz` when the reflections are mmCIF, `mtzdump`, `ctruncate` when the file holds intensities, `cad`, `refmac5`, `fft`, then the map padding, Coot, and PyMOL. The commands are the ones on the [omit-map page](omit-map.md). The reconstruction adds the steps below, and it repeats them.
 
 The input omit file is copied to `{omit model name}_working.pdb` in the output directory and is not modified. Each iteration copies that working file to `r-iteration-01`, `r-iteration-02`, and so on, as `{omit model name}_omit.pdb`, and runs the omit map in that subdirectory. Coordinate, map, CCP4, PNG, and density-section files in the iteration directory then receive `_step01`, `_step02`, and so on, before the extension. Logs, MTZ files, and the PyMOL script keep their names. The paths inside those scripts and logs are updated to the new file names.
 

@@ -24,9 +24,9 @@ Positive density in the figure is density in the `6w1v` observations that this o
 
 ### How the Fig. 2 map is calculated
 
-The programs run in this order: `cif2mtz`, `mtzdump`, `ctruncate`, `cad`, `refmac5`, `fft`, Coot, and PyMOL. The map is then padded around the model in the app. `libcheck` is added only when distance restraints are widened in a monomer library.
+The programs run in this order: `cif2mtz`, `mtzdump`, `ctruncate`, `cad`, `refmac5`, `fft`, Coot, and PyMOL. The map is then padded around the model in the app.
 
-**1. Check the programs and the files.** The programs are `cif2mtz`, `ctruncate`, `cad`, `refmac5`, `fft`, and `mtzdump`, plus `libcheck` when that option is on. Coot comes from the CCP4 tree. PyMOL must be on `PATH`. The log prints the cycle count before REFMAC starts, so a zero-cycle job is visible in advance.
+**1. Check the programs and the files.** The programs are `cif2mtz`, `ctruncate`, `cad`, `refmac5`, `fft`, and `mtzdump`. Coot comes from the CCP4 tree. PyMOL must be on `PATH`. The log prints the cycle count before REFMAC starts, so a zero-cycle job is visible in advance.
 
 **2. Inspect the omit model and choose the site.** **List hetero residues** reads `6w1v_omitO6_single_confA.pdb`. Select `OEX` A415. The job checks that chain and residue, prints the atom names, and prints the centroid of the clip.
 
@@ -80,14 +80,35 @@ with phase \(\varphi_c = \arg(F_c)\). REFMAC stores that complex number as `DELF
 `NCYC 0` stops after that calculation. Atoms do not move. A larger cycle count repeats the shift of coordinates and \(B\) factors against the likelihood target plus the geometry restraints, and the figure is drawn on the shifted model. The keywords always include
 
 ```text
+MAKE -
+    HYDROGEN NO -
+    HOUT NO -
+    PEPTIDE NO -
+    CISPEPTIDE YES -
+    SSBRIDGE YES -
+    SYMMETRY YES -
+    SUGAR YES -
+    CONNECTIVITY NO -
+    LINK NO
+REFI -
+    TYPE REST -
+    RESI MLKF -
+    METH CGMAT -
+    BREF ANIS
+SCAL -
+    TYPE SIMP -
+    LSSC -
+    ANISO -
+    EXPE
+SOLVENT YES
+WEIGHT -
+    AUTO
 NCYC <cycles>
-MAKE HYDR Y
-MAKE HOUT Y
 ```
 
-`MAKE HYDR` / `MAKE HOUT` generate riding hydrogens and write them to the coordinate file. Zero cycles still produce a coordinate file.
+Riding hydrogens are not built and are not written to the coordinate file. Refinement is restrained maximum likelihood with the conjugate-gradient method and anisotropic atomic \(B\) factors. Scaling is simple, anisotropic, and experimental, bulk solvent is included, and the X-ray weight is automatic. A line that ends in `-` continues the same keyword. Zero cycles still produce a coordinate file.
 
-External restraints, when the lists on the form are non-empty, are written to a text file and placed in front of those keywords. The default distance pairs are Mn1–O5, Mn3–O5, Mn4–O5, and Ca1–O5, with a sigma of 0.50 Å. The default angles are the angles at O5 among Mn3, Mn4, and Ca, the O5–Ca–O1 angle, and the angles at Mn3 and Mn4 that include O5, with a sigma of 25°. With the library option off, the distances are external restraints and replace the dictionary bond for those atom pairs in the listed copies only. With the library option on, `libcheck` widens those distances in a monomer library that applies to every copy of that residue type, and the angles stay external. An empty distance or angle list adds no restraint of that kind. A custom dictionary, from `libcheck` or AceDRG, is a further `libin` and is read only when the cycle count is greater than zero. The widened library, when requested, is read after it.
+External restraints, when the lists on the form are non-empty, are written to a text file and placed after a custom dictionary and in front of the fixed keywords. The default distance pairs are Mn1–O5, Mn3–O5, Mn4–O5, and Ca1–O5, with a sigma of 0.50 Å. The default angles are the angles at O5 among Mn3, Mn4, and Ca, the O5–Ca–O1 angle, and the angles at Mn3 and Mn4 that include O5, with a sigma of 25°. A line such as `MN1 O5 2.40 0.50` uses that distance and that sigma. A line such as `MN3 O5` keeps the distance in the starting model and uses the Distance sigma field. Angles work the same way, in degrees. These external restraints replace the CCP4 monomer library for the same atoms, in the listed copies only. An empty distance or angle list adds no restraint of that kind. A custom dictionary is a `LIBIN` line and is read only when the cycle count is greater than zero. The external restraints follow that line, so they replace matching distances and angles in the dictionary.
 
 The MTZ is checked for `FP` (or `F`, `FOBS`), `FC_ALL` (or `FC`), `DELFWT`, and `PHDELWT`. The transform uses the weighted coefficient.
 
@@ -163,10 +184,9 @@ The omit model’s own structure-factor file is not an input. \(F_o\) comes from
 | Choice | Effect |
 | --- | --- |
 | REFMAC cycles | `0` leaves atoms fixed. A larger integer refines against the observed amplitudes |
-| Distance restraints and distance sigma | Which site distances are loose, and how loose |
-| Angle restraints and angle sigma | External angles, sigma in degrees |
-| Widen distances in a libcheck library | External distances on the listed copies, or a widened monomer library for every copy of that residue type |
-| Custom dictionary | Extra monomer library, used only when the cycle count is greater than zero |
+| Distance restraints and distance sigma | External distances. A sigma on a line replaces the field for that pair |
+| Angle restraints and angle sigma | External angles, sigma in degrees. A sigma on a line replaces the field for that angle |
+| Custom dictionary | Extra monomer library, used only when the cycle count is greater than zero. External restraints are read after it |
 | Resolution source and the two cutoffs | Shell of the `DELFWT` coefficients |
 | FFT grid resolution for a final map | Blank uses that shell. A smaller number samples the finer grid, with zero amplitude beyond the coefficients |
 | PNG sigma levels | The worked example uses a single \(3.5\sigma\) mesh |
@@ -174,7 +194,7 @@ The omit model’s own structure-factor file is not an input. \(F_o\) comes from
 
 ## Reading the figure
 
-The model in the figure is the REFMAC coordinate set. With zero cycles it is the omit model rewritten by REFMAC, hydrogens included, atoms unmoved. A positive peak where `6w1v` has an atom and the omit model does not is the expected \(mF_o-DF_c\) signal. Whether the 2F data support an inserted oxo or water at the O6 position is the question discussed by Wang, Armstrong, and Batista; this workflow reproduces the map they compare. The [reconstruction](reconstruction.md) repeats this calculation and places the missing reference atom closest to each peak.
+The model in the figure is the REFMAC coordinate set. With zero cycles it is the omit model rewritten by REFMAC, with the atoms unmoved and no riding hydrogens added. A positive peak where `6w1v` has an atom and the omit model does not is the expected \(mF_o-DF_c\) signal. Whether the 2F data support an inserted oxo or water at the O6 position is the question discussed by Wang, Armstrong, and Batista; this workflow reproduces the map they compare. The [reconstruction](reconstruction.md) repeats this calculation and places the missing reference atom closest to each peak.
 
 If the mesh is empty, lower the contour (try `3`). If the cage swallows the model, decrease the carve radius or raise the contour.
 
@@ -183,7 +203,7 @@ If the mesh is empty, lower the contour (try `3`). If the cage swallows the mode
 1. Provide the omit coordinates, the observed structure factors, and the light coordinates.
 2. Set the two labels. Leave the resolution source on the structure-factor file, or set the two cutoffs yourself.
 3. List hetero residues on the omit model, then set the chain, residue, and neighbours.
-4. Set the cycle count and the restraint lists. Leave the library option off to pass distances straight to REFMAC. Turn it on to widen them in a `libcheck` library.
+4. Set the cycle count and the restraint lists. A line with its own distance and sigma uses those values. A line with only the atom names uses the sigma fields.
 5. Recompute the map the first time, and again after any change of cycles, restraints, resolution, or FFT grid resolution for a final map. Leave recomputation off while you tune σ and the view.
 
 The extended map can be opened with the REFMAC coordinates:

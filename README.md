@@ -32,7 +32,7 @@ That writes `.venv` and installs the locked dependencies. You do not need to act
 
 The map programs are separate from the Python environment:
 
-1. **CCP4.** Install the [CCP4 suite](https://www.ccp4.ac.uk/download/). The default directory in the app is `/Applications/ccp4-9`. Point the CCP4 field at the suite prefix if yours is elsewhere; the app sources `bin/ccp4.setup-sh` and then calls `cif2mtz`, `refmac5`, `cad`, `scaleit`, `fft`, `mtzdump`, `ctruncate`, and `libcheck`.
+1. **CCP4.** Install the [CCP4 suite](https://www.ccp4.ac.uk/download/). The default directory in the app is `/Applications/ccp4-9`. Point the CCP4 field at the suite prefix if yours is elsewhere; the app sources `bin/ccp4.setup-sh` and then calls `cif2mtz`, `refmac5`, `cad`, `scaleit`, `fft`, `mtzdump`, and `ctruncate`.
 2. **Coot.** Use the binary shipped with CCP4, usually `$CCP4/bin/coot`. It runs without a window and writes a map fragment around the residue you choose.
 3. **PyMOL.** The `pymol` executable must be on `PATH`. The conda-forge package is enough:
   ```bash
@@ -88,7 +88,7 @@ Python package imported by `xfel-app.py`.
 - `pipelines.py` — Fo−Fo, omit-model mFo−DFc, and 2mFo−DFc. The reconstruction calls the omit-map calculation once per iteration.
 - `reconstruction.py` — the loop that places one missing reference atom on each omit-map peak.
 - `peaks.py` — the local-maximum search and the optional spline placement on the clipped map.
-- `restraints.py` — REFMAC external restraints, including harmonic restraints on atoms the reconstruction has added, and optional `libcheck` monomer libraries.
+- `restraints.py` — REFMAC external restraints, including harmonic restraints on atoms the reconstruction has added.
 
 
 

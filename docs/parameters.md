@@ -27,13 +27,11 @@ Shared crystallographic meaning is on the [background](concepts.md) page. Each w
 | Spline order | Reconstruction only. Integer from 0 through 5. Default 3 |
 | External harmonic restraints | Reconstruction only. Off by default. Holds atoms already added at the coordinates in the current omit model |
 | Harmonic sigma (Å) | Reconstruction only. Default 0.1. Used only when the cycle count is greater than zero |
-| Distance restraints | Omit map and reconstruction. One pair per line. Empty by default on the reconstruction form |
-| Distance sigma (Å) | Default 0.50 |
-| Angle restraints | Omit map and reconstruction. One angle per line. Sigma in degrees. Empty by default on the reconstruction form |
-| Angle sigma (degrees) | Default 25 |
-| Widen distances in a libcheck library | Omit map and reconstruction. Default off |
-| Monomer names for libcheck | Empty means the site residue plus other hetero residues |
-| Custom dictionary | Omit map and reconstruction. Optional `libcheck` or AceDRG CIF. Read only when REFMAC cycles is greater than zero. On the reconstruction form it is under Parameters |
+| Distance restraints | Omit map and reconstruction. One pair per line. A distance and sigma on the line replace the fields for that pair. Empty by default on the reconstruction form |
+| Distance sigma (Å) | Default 0.50. Used when a distance line does not give its own sigma |
+| Angle restraints | Omit map and reconstruction. One angle per line. An angle and sigma on the line, in degrees, replace the fields for that angle. Empty by default on the reconstruction form |
+| Angle sigma (degrees) | Default 25. Used when an angle line does not give its own sigma |
+| Custom dictionary | Omit map and reconstruction. Optional monomer CIF. Read only when REFMAC cycles is greater than zero, and read before the external restraints. On the reconstruction form it is under Parameters |
 | Chain, residue | Centre of the clip and of the figure |
 | Label | File-name tag such as `OEC` or `heme` |
 | Additional copies | Further chain and residue pairs. The form always includes the main site |
@@ -123,9 +121,9 @@ MN3 O5 CA1 90
 O5 CA1 O1 90 25
 ```
 
-A missing distance or angle keeps the value in the starting model. A missing sigma uses the form-wide sigma. External distances replace the dictionary bond for that atom pair in `SITE_COPIES` only. A `libcheck` library changes every copy of the residue type. Angles are external in both modes.
+A missing distance or angle keeps the value in the starting model. A missing sigma uses the form-wide sigma. A distance and sigma on the line, such as `MN1 O5 2.40 0.50`, replace the form-wide values for that pair. The same applies to an angle line. External restraints replace the CCP4 monomer library for those atoms in `SITE_COPIES` only.
 
-A custom dictionary is an extra `libin` file. It is passed only when the cycle count is greater than zero. Zero cycles keeps the CCP4 monomer library. When distance widening is also on, the widened library is the later `libin`, so it replaces the same residue type from the custom file.
+A custom dictionary is a `LIBIN` line. It is passed only when the cycle count is greater than zero. Zero cycles keeps the CCP4 monomer library. The external restraints are read after the dictionary, so they replace matching distances and angles in that file.
 
 The form defaults are the O5 distances to Mn1, Mn3, Mn4, and Ca, and these angles:
 
@@ -161,4 +159,4 @@ Every job writes logs beside the maps. The names follow the labels you set.
 | Reconstruction | The omit-map name, inside `r-iteration-01`, `r-iteration-02`, and so on | The omit-map figure name, in the same iteration directory |
 | 2mFo−DFc | `{id}_2fofc_{btag}_{low}-{high}_extended.ccp4` | `{id}_2fofc_{btag}_{site}_{chain}{resi}.png` |
 
-The resolution tag replaces the decimal point with `p`. The omit-map job also writes `{dark}_refined.pdb`, the external-restraint text, and, when requested, `{dark}_lib.cif`. A reconstruction iteration writes those same omit-map files, plus `reconstruction.log` and, when a peak was found, `density_sections_stepNN.txt`. When an atom is added it also writes `{dark}_refined_added_{atom}_stepNN.pdb`, the refined coordinates with that atom at the peak, and the next iteration starts from that file. PDB, CCP4, map, PNG, and that density-section file in the iteration directory have `_stepNN` before the extension. The output directory also receives `{dark}_working.pdb` and, at the end, `{dark}_reconstructed_final.pdb`, a copy of the last iteration’s refined coordinates. The last iteration inserts no atom. The web application adds `webapp_manifest.json` listing the figure, the extended map, the fragment, and the PyMOL script.
+The resolution tag replaces the decimal point with `p`. The omit-map job also writes `{dark}_refined.pdb` and the external-restraint text. A reconstruction iteration writes those same omit-map files, plus `reconstruction.log` and, when a peak was found, `density_sections_stepNN.txt`. When an atom is added it also writes `{dark}_refined_added_{atom}_stepNN.pdb`, the refined coordinates with that atom at the peak, and the next iteration starts from that file. PDB, CCP4, map, PNG, and that density-section file in the iteration directory have `_stepNN` before the extension. The output directory also receives `{dark}_working.pdb` and, at the end, `{dark}_reconstructed_final.pdb`, a copy of the last iteration’s refined coordinates. The last iteration inserts no atom. The web application adds `webapp_manifest.json` listing the figure, the extended map, the fragment, and the PyMOL script.

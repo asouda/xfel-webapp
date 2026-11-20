@@ -248,6 +248,19 @@
   function syncStopButton(status) {
     if (!stopButton) return;
     const active = status === "queued" || status === "running" || status === "paused" || status === "stopping";
+    if (status === "succeeded") {
+      stopRequested = false;
+      stopButton.hidden = false;
+      stopButton.disabled = true;
+      stopButton.classList.remove("stop");
+      stopButton.classList.add("finished");
+      stopButton.textContent = "Calculation Finished";
+      stopButton.title = "";
+      return;
+    }
+    stopButton.classList.add("stop");
+    stopButton.classList.remove("finished");
+    stopButton.title = "Interrupt this calculation. Inputs stay as they are, and files already written stay in the output directory.";
     stopButton.hidden = !active;
     if (!active) {
       stopRequested = false;

@@ -23,7 +23,7 @@
     <h2>How it is calculated</h2>
     <ol>
       <li>An observed mmCIF is converted to MTZ with <code>cif2mtz</code>. An MTZ entered for the reflections is used as that file. <code>ctruncate</code> turns intensities <code>I, SIGI</code> into amplitudes, and <code>cad</code> copies the <code>FREE</code> flag onto those amplitudes. An MTZ that already contains amplitudes skips <code>ctruncate</code>.</li>
-      <li><code>refmac5</code> refines the omit coordinates for the number of cycles you set. Zero cycles calculate the map without moving atoms. Loose site distances can be external restraints, or a widened <code>libcheck</code> monomer library. A custom dictionary is read only when the cycle count is greater than zero. Site angles are always external restraints, in degrees.</li>
+      <li><code>refmac5</code> refines the omit coordinates for the number of cycles you set. Zero cycles calculate the map without moving atoms. Distance and angle lines are external restraints and replace the CCP4 monomer library for those atoms. A value written on a line replaces the sigma field for that pair. A custom dictionary is read only when the cycle count is greater than zero, and the external restraints are read after it.</li>
       <li><code>fft</code> transforms <code>DELFWT</code> / <code>PHDELWT</code> between the resolution limits above. An optional finer grid resolution asks <code>fft</code> for the sampling of that higher resolution. Reciprocal-space points beyond the coefficients are absent from the MTZ and contribute zero amplitude, so the real-space grid is denser. The map is then padded around the refined model. When the whole-cell grid is too large for <code>fft</code>, that same sum is evaluated on a cube centered on the map center and wide enough for the clip radius. The sigma stays the full-cell value.</li>
       <li>Coot clips the site from that difference map. The clip is centered on the site residue, or on a Cartesian point when you set one. PyMOL draws the refined coordinates and the ±nσ surfaces, saves the PNG and the <code>.pml</code> script beside the map, and centers that image on the same point as the clipped map.</li>
     </ol>
@@ -72,7 +72,7 @@
       {% if spec.slug == 'refinement' %}
       <fieldset class="wide">
         <legend>Custom dictionary</legend>
-        <p class="hint">Optional monomer library from <code>libcheck</code> or AceDRG. REFMAC reads it only when the cycle count is greater than zero. With zero cycles this file is ignored. If distance widening is also on, the widened library is read after this file, so its site distances replace the matching residue in this dictionary.</p>
+        <p class="hint">Optional monomer library. REFMAC reads it only when the cycle count is greater than zero. With zero cycles this file is ignored. Distance and angle restraints on the form are read after this file, so they replace matching distances and angles in the dictionary.</p>
         <label class="file-btn">
           <input type="file" name="file_custom_dictionary" accept=".cif,.lib,.gz">
           <span>Choose file</span>
@@ -147,19 +147,21 @@
 
       {% if spec.slug in ['refinement', 'reconstruct'] %}
       <label>REFMAC cycles<input name="refmac_ncyc" type="number" min="0" step="1" value="{{ defaults.refmac_ncyc }}"></label>
-      <label>Distance sigma (Å)<input name="distance_sigma" type="number" step="any" value="{{ defaults.distance_sigma }}"></label>
-      <label>Angle sigma (degrees)<input name="angle_sigma" type="number" step="any" value="{{ defaults.angle_sigma }}"></label>
-      <label class="check"><input type="checkbox" name="use_libcheck"> Widen distances in a libcheck library instead of external distances</label>
-      <label class="wide">Monomer names for libcheck
-        <input name="lib_monomers" placeholder="blank = site residue plus every non-water hetero residue">
+      <label>Distance sigma (Å)
+        <input name="distance_sigma" type="number" step="any" value="{{ defaults.distance_sigma }}">
+        <span class="hint">Used when a distance line does not give its own sigma.</span>
+      </label>
+      <label>Angle sigma (degrees)
+        <input name="angle_sigma" type="number" step="any" value="{{ defaults.angle_sigma }}">
+        <span class="hint">Used when an angle line does not give its own sigma.</span>
       </label>
       <label class="wide">Distance restraints
         <textarea name="distance_restraints">{{ defaults.distance_restraints }}</textarea>
-        <span class="hint">One pair per line: <code>MN1 O5</code>, or <code>MN1 O5 2.40</code>, or <code>MN1 O5 2.40 0.50</code>. A missing distance keeps the distance in the starting model. Clear the box to add none.</span>
+        <span class="hint">One pair per line: <code>MN3 O5</code>, <code>MN1 O5 2.40</code>, or <code>MN1 O5 2.40 0.50</code>. A missing distance keeps the distance in the starting model. A missing sigma uses Distance sigma. A distance and sigma on the line replace those fields for that pair. REFMAC uses the line instead of the CCP4 monomer library for the same atoms. Clear the box to add none.</span>
       </label>
       <label class="wide">Angle restraints
         <textarea name="angle_restraints">{{ defaults.angle_restraints }}</textarea>
-        <span class="hint">The middle atom is the vertex: <code>MN3 O5 MN4</code>, optionally followed by the angle and sigma in degrees.</span>
+        <span class="hint">The middle atom is the vertex: <code>MN3 O5 MN4</code>, optionally followed by the angle and sigma in degrees. A missing angle keeps the angle in the starting model. A missing sigma uses Angle sigma. Values on the line replace those fields for that angle, and replace the monomer-library angle for the same atoms.</span>
       </label>
       {% if spec.slug == 'reconstruct' %}
       <label class="check"><input type="checkbox" name="harmonic_added" id="harmonic-added"> External harmonic restraints on added atoms</label>
@@ -169,7 +171,7 @@
       </label>
       <fieldset class="wide">
         <legend>Custom dictionary</legend>
-        <p class="hint">Optional monomer library from <code>libcheck</code> or AceDRG. REFMAC reads it only when the cycle count is greater than zero. With zero cycles this file is ignored. If distance widening is also on, the widened library is read after this file, so its site distances replace the matching residue in this dictionary.</p>
+        <p class="hint">Optional monomer library. REFMAC reads it only when the cycle count is greater than zero. With zero cycles this file is ignored. Distance and angle restraints on the form are read after this file, so they replace matching distances and angles in the dictionary.</p>
         <label class="file-btn">
           <input type="file" name="file_custom_dictionary" accept=".cif,.lib,.gz">
           <span>Choose file</span>
@@ -426,5 +428,5 @@
 </script>
 <script src="{{ url_for('static', filename='vendor/ngl-2.5.0.js') }}?v=2"></script>
 <script src="{{ url_for('static', filename='js/sigma-color.js') }}?v=1"></script>
-<script src="{{ url_for('static', filename='js/workflow.js') }}?v=39"></script>
+<script src="{{ url_for('static', filename='js/workflow.js') }}?v=40"></script>
 {% endblock %}

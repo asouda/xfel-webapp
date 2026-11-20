@@ -132,7 +132,6 @@ The edit buttons act on the model in the viewer. Add bond and Add distance each 
 | `cad` | Combine amplitude and phase columns (Fo−Fo), or copy `FREE` (omit map and reconstruction) |
 | `scaleit` | Scale light amplitudes onto the dark reference (Fo−Fo only) |
 | `ctruncate` | Intensities to amplitudes (omit map and reconstruction) |
-| `libcheck` | Optional monomer library when omit-map or reconstruction distances are widened in the dictionary |
 | `fft` | The Fourier transform, including sharpening for 2mFo−DFc |
 | Coot | Clip the site |
 | PyMOL | Contour and render |

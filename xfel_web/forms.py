@@ -254,11 +254,6 @@ def parse_angle_restraints(text: str) -> list[tuple]:
     return specs
 
 
-def parse_monomers(text: str) -> list[str] | None:
-    names = [part.strip().upper() for part in text.replace(",", " ").split() if part.strip()]
-    return names or None
-
-
 def resolve_output_dir(text: str, project: Path) -> Path:
     if not text.strip():
         raise FormError("Choose an output directory.")
@@ -490,8 +485,6 @@ def parse_job(workflow: str, form, files, project: Path) -> dict:
                 "distance_sigma": _float(form, "distance_sigma", "Distance sigma"),
                 "angle_restraints": angles,
                 "angle_sigma": _float(form, "angle_sigma", "Angle sigma"),
-                "use_libcheck": _flag(form, "use_libcheck"),
-                "lib_monomers": parse_monomers(_text(form, "lib_monomers")),
                 "custom_dictionary": custom_dictionary,
                 "positive_levels": positive,
                 "negative_levels": negative,
@@ -547,8 +540,6 @@ def parse_job(workflow: str, form, files, project: Path) -> dict:
                 "distance_sigma": _float(form, "distance_sigma", "Distance sigma"),
                 "angle_restraints": angles,
                 "angle_sigma": _float(form, "angle_sigma", "Angle sigma"),
-                "use_libcheck": _flag(form, "use_libcheck"),
-                "lib_monomers": parse_monomers(_text(form, "lib_monomers")),
                 "custom_dictionary": custom_dictionary,
                 "positive_levels": positive,
                 "negative_levels": negative,

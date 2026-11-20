@@ -25,11 +25,63 @@ from xfel_web.ccp4 import (
 )
 from xfel_web.direct_map import direct_site_cube, parse_fft_sampling, whole_cell_exceeds_fft
 from xfel_web.restraints import (
-    build_refinement_library,
     external_angle_keywords,
     external_distance_keywords,
     external_harmonic_keywords,
 )
+
+# Protocol sent on every refmac5 job. A trailing "-" continues the keyword.
+# A custom dictionary is a LIBIN line before any external restraints. NCYC is last.
+REFMAC_FIXED_KEYWORDS = """\
+MAKE -
+    HYDROGEN NO -
+    HOUT NO -
+    PEPTIDE NO -
+    CISPEPTIDE YES -
+    SSBRIDGE YES -
+    SYMMETRY YES -
+    SUGAR YES -
+    CONNECTIVITY NO -
+    LINK NO
+REFI -
+    TYPE REST -
+    RESI MLKF -
+    METH CGMAT -
+    BREF ANIS
+SCAL -
+    TYPE SIMP -
+    LSSC -
+    ANISO -
+    EXPE
+SOLVENT YES
+WEIGHT -
+    AUTO"""
+
+
+def _refmac_filename(path: Path) -> str:
+    """One REFMAC keyword token. A path with spaces is quoted."""
+    text = str(path)
+    if any(character.isspace() for character in text):
+        if "'" in text:
+            raise ValueError(f"Library path contains both a space and a quote: {text}")
+        return f"'{text}'"
+    return text
+
+
+def refmac_keywords(ncyc: int, leading: str = "", library: Path | None = None) -> str:
+    """REFMAC standard input.
+
+    ``library`` is a ``LIBIN`` line. External restraints follow it, so they
+    replace matching distances and angles from that file and from the CCP4
+    monomer library. The fixed protocol and ``NCYC`` come last.
+    """
+    parts: list[str] = []
+    if library is not None:
+        parts.append("LIBIN " + _refmac_filename(library))
+    if leading and leading.strip():
+        parts.append(leading.strip())
+    parts.append(REFMAC_FIXED_KEYWORDS.strip())
+    return "\n".join(parts) + f"\nNCYC {int(ncyc)}\nEND"
 
 
 def _cartesian_center(cfg: dict) -> tuple[float, float, float] | None:
@@ -282,7 +334,7 @@ def run_fofo(cfg: dict, emit) -> dict:
                     ("xyzin", pdb_file),
                     ("xyzout", out / f"{pdb_id}_checked.pdb"),
                 ],
-                "NCYC 0\nEND",
+                refmac_keywords(0),
                 out / f"{pdb_id}_refmac0.log",
             )
         light_fp = session.pick_label(session.mtz_labels(light_calc_mtz), ["FP", "F", "FOBS", "FOSC"], "LIGHT amplitude")
@@ -432,8 +484,6 @@ def run_refinement(cfg: dict, emit) -> dict:
     tools = "ctruncate cad refmac5 fft mtzdump"
     if not is_reflection_mtz(files["light_sf"]):
         tools = "cif2mtz " + tools
-    if cfg["use_libcheck"]:
-        tools += " libcheck"
     session.run_bash(f'echo "CCP4=$CCP4"; which {tools}')
 
     session.announce("2. Inspect the omit-model coordinates and the chosen site")
@@ -564,9 +614,13 @@ def run_refinement(cfg: dict, emit) -> dict:
             ("xyzout", refined_pdb),
         ]
         custom_dictionary = cfg.get("custom_dictionary")
+        refmac_library = None
         if custom_dictionary and int(cfg["refmac_ncyc"]) > 0:
-            refmac_files.append(("libin", custom_dictionary))
-            session.emit(f"Custom dictionary: {custom_dictionary}")
+            refmac_library = custom_dictionary
+            session.emit(
+                f"Custom dictionary: {custom_dictionary}. "
+                "External restraints are read after this file and replace matching distances and angles."
+            )
         elif custom_dictionary:
             session.emit(
                 "Custom dictionary was not used. REFMAC cycles is 0, "
@@ -583,37 +637,19 @@ def run_refinement(cfg: dict, emit) -> dict:
                 session.emit(f"{label} were not applied. {exc}")
                 return ""
 
+        distance_text = _restraints(
+            "Distance restraints",
+            lambda: external_distance_keywords(
+                files["dark_pdb"], cfg["site_copies"], cfg["distance_restraints"], cfg["distance_sigma"]
+            ),
+        )
         angle_text = _restraints(
             "Angle restraints",
             lambda: external_angle_keywords(
                 files["dark_pdb"], cfg["site_copies"], cfg["angle_restraints"], cfg["angle_sigma"]
             ),
         )
-        if cfg["use_libcheck"] and site_missing:
-            session.emit("The monomer library was not built because the site residue has no atoms.")
-            restraint_text = angle_text
-        elif cfg["use_libcheck"]:
-            library_cif = out / f"{dark_id}_lib.cif"
-            build_refinement_library(
-                session,
-                files["dark_pdb"],
-                library_cif,
-                cfg["site_chain"],
-                cfg["site_resi"],
-                cfg["distance_restraints"],
-                cfg["distance_sigma"],
-                cfg["lib_monomers"],
-            )
-            refmac_files.append(("libin", library_cif))
-            restraint_text = angle_text
-        else:
-            distance_text = _restraints(
-                "Distance restraints",
-                lambda: external_distance_keywords(
-                    files["dark_pdb"], cfg["site_copies"], cfg["distance_restraints"], cfg["distance_sigma"]
-                ),
-            )
-            restraint_text = "\n".join(part for part in (distance_text, angle_text) if part)
+        restraint_text = "\n".join(part for part in (distance_text, angle_text) if part)
         harmonic_atoms = list(cfg.get("harmonic_atoms") or [])
         if harmonic_atoms and int(cfg["refmac_ncyc"]) > 0:
             harmonic_sigma = float(cfg.get("harmonic_sigma", 0.1))
@@ -635,13 +671,7 @@ def run_refinement(cfg: dict, emit) -> dict:
         session.run_ccp4(
             "refmac5",
             refmac_files,
-            (
-                (restraint_text + "\n" if restraint_text else "")
-                + f"NCYC {int(cfg['refmac_ncyc'])}\n"
-                "MAKE HYDR Y\n"
-                "MAKE HOUT Y\n"
-                "END"
-            ),
+            refmac_keywords(int(cfg["refmac_ncyc"]), restraint_text, refmac_library),
             out / f"{dark_id}_vs_{light_id}_refmac{int(cfg['refmac_ncyc'])}.log",
         )
         omit_labels = session.mtz_labels(omit_mtz)

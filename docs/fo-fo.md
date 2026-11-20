@@ -33,9 +33,32 @@ The programs run in this order: `cif2mtz`, `refmac5` for zero cycles, `mtzdump`,
 
 **3. Convert reflections to MTZ.** `cif2mtz` reads each structure-factor mmCIF and each validation mmCIF and writes `{id}-sf.mtz` and `{id}_validation_2fo-fc_map_coef.mtz`. For `6w1o` and `6w1v` the structure-factor loop holds intensities (`intensity_meas`, `intensity_sigma`). `cif2mtz` stores them as `I` and `SIGI`. The validation loop holds `FWT`, `PHWT`, and `FOM`. Nothing is scaled or transformed yet; the MTZ is the same list of reflections in the binary layout the later programs read.
 
-**4. Place the amplitudes in a REFMAC MTZ, without moving atoms.** `refmac5` runs once on `6w1o` and once on `6w1v` with
+**4. Place the amplitudes in a REFMAC MTZ, without moving atoms.** `refmac5` runs once on `6w1o` and once on `6w1v` with the fixed protocol used by every REFMAC job in this app, then `NCYC 0`:
 
 ```text
+MAKE -
+    HYDROGEN NO -
+    HOUT NO -
+    PEPTIDE NO -
+    CISPEPTIDE YES -
+    SSBRIDGE YES -
+    SYMMETRY YES -
+    SUGAR YES -
+    CONNECTIVITY NO -
+    LINK NO
+REFI -
+    TYPE REST -
+    RESI MLKF -
+    METH CGMAT -
+    BREF ANIS
+SCAL -
+    TYPE SIMP -
+    LSSC -
+    ANISO -
+    EXPE
+SOLVENT YES
+WEIGHT -
+    AUTO
 NCYC 0
 ```
 
