@@ -45,6 +45,7 @@ from xfel_web.pipelines import (
     intensity_truncate_args,
     is_reflection_mtz,
     refmac_amplitude_cad_keywords,
+    refmac_keywords,
 )
 from xfel_web.restraints import external_angle_keywords, external_distance_keywords
 
@@ -330,9 +331,22 @@ class ParseTests(unittest.TestCase):
             text = external_distance_keywords(path, [("A", 416)], [("MN1", "O5")], 0.5)
             self.assertIn("exte dist first chain A resi 416 atom MN1", text)
             self.assertIn("value 1.000 sigma 0.500", text)
+            explicit = external_distance_keywords(
+                path,
+                [("A", 416)],
+                [("MN1", "O5", 2.4, 0.05), ("O5", "MN4")],
+                0.5,
+            )
+            self.assertIn("atom MN1 second chain A resi 416 atom O5 value 2.400 sigma 0.050", explicit)
+            self.assertIn("atom O5 second chain A resi 416 atom MN4 value 1.000 sigma 0.500", explicit)
             angle = external_angle_keywords(path, [("A", 416)], [("MN1", "O5", "MN4")], 25)
             self.assertIn("exte angle first chain A resi 416 atom MN1", angle)
             self.assertIn("value 90.000 sigma 25.000", angle)
+            explicit_angle = external_angle_keywords(
+                path, [("A", 416)], [("MN1", "O5", "MN4", 100.0, 5.0)], 25
+            )
+            self.assertIn("value 100.000 sigma 5.000", explicit_angle)
+            self.assertNotIn("sigma 25.000", explicit_angle)
             conformers = residue_conformers(path, "A", 416)
             self.assertIn("MN1", conformers[""])
         finally:
@@ -550,6 +564,28 @@ class TruncateColumnTests(unittest.TestCase):
             "LABIN FILE 2 E1=FREE\n"
             "END",
         )
+
+
+class RefmacKeywordTests(unittest.TestCase):
+    def test_fixed_protocol_follows_restraints_and_sets_the_cycle_count(self):
+        text = refmac_keywords(0, "exte dist first chain A resi 416 atom MN1 atom O5 sigma 0.50")
+        self.assertTrue(text.startswith("exte dist first chain A resi 416 atom MN1 atom O5 sigma 0.50\nMAKE -"))
+        self.assertIn("HYDROGEN NO -", text)
+        self.assertIn("HOUT NO -", text)
+        self.assertIn("BREF ANIS", text)
+        self.assertIn("SOLVENT YES", text)
+        self.assertTrue(text.endswith("WEIGHT -\n    AUTO\nNCYC 0\nEND"))
+
+    def test_cycle_count_is_the_only_change_when_there_are_no_restraints(self):
+        self.assertTrue(refmac_keywords(5).endswith("NCYC 5\nEND"))
+        self.assertNotIn("exte ", refmac_keywords(5))
+        self.assertNotIn("LIBIN", refmac_keywords(5))
+
+    def test_custom_dictionary_is_read_before_external_restraints(self):
+        text = refmac_keywords(2, "exte dist first chain A", Path("/tmp/ligand.cif"))
+        self.assertTrue(text.startswith("LIBIN /tmp/ligand.cif\nexte dist first chain A\nMAKE -"))
+        quoted = refmac_keywords(1, "exte angle", Path("/tmp/my lib/ligand.cif"))
+        self.assertTrue(quoted.startswith("LIBIN '/tmp/my lib/ligand.cif'\nexte angle\n"))
 
 
 def _write_map(path, values, *, nxyz, starts, axes, cell, symops, arms):
