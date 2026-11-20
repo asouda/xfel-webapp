@@ -4,8 +4,10 @@
 The summary directory receives the light reference PDB, each iteration's
 refined model with the newly placed atom, the extended omit-map fragment, and
 the reconstructed final PDB. PDB files keep only the residues named with
-``--resid``. Iteration files are stored with ``step##`` at the start of the
-name, so the viewers list them as step01, step02, step03, and so on. VMD and ChimeraX scripts in that directory load the reference, then each
+``--resid``, or, when that option is omitted, the residues selected in the
+PyMOL scripts under ``r-iteration-##``. Iteration files are stored with
+``step##`` at the start of the name, so the viewers list them as step01,
+step02, step03, and so on. VMD and ChimeraX scripts in that directory load the reference, then each
 added model and its map, and the reconstructed final model last. The atom
 placed in an iteration is bright green. The final model is not: nothing was
 added in that file. A Maestro project archive has one entry per step, with
@@ -21,9 +23,9 @@ Example::
 from __future__ import annotations
 
 import argparse
+import json
 import math
 import os
-import pickle
 import re
 import shutil
 import struct
@@ -38,6 +40,10 @@ ADDED_RE = re.compile(r"_refined_added_.+_step(\d+)\.pdb$")
 MAP_RE = re.compile(r"_extended_.+_10A_step(\d+)\.map$")
 ITERATION_RE = re.compile(r"^r-iteration-(\d+)$")
 RESIDUE_RE = re.compile(r"^([A-Za-z0-9])(\d+)$")
+# ``select site, xyz and chain A and resi 602`` is how the map app draws a residue.
+PML_RESIDUE_RE = re.compile(
+    r"^select\s+[A-Za-z0-9_]+\s*,\s*xyz and chain\s+(\S)\s+and resi\s+(\d+)\b"
+)
 
 @dataclass(frozen=True)
 class Residue:
@@ -115,6 +121,51 @@ def parse_residues(text: str) -> list[Residue]:
         residues.append(residue)
     if not residues:
         raise SystemExit("No residues were given to --resid.")
+    return residues
+
+
+def residues_from_pymol(run_dir: Path) -> list[Residue]:
+    """Residues drawn by the PyMOL scripts in ``r-iteration-##``.
+
+    Selections are read in iteration order. A residue is kept the first time
+    it appears, so later scripts that repeat the same site do not reorder it.
+    """
+    folders: list[tuple[int, Path]] = []
+    for folder in run_dir.iterdir():
+        match = ITERATION_RE.fullmatch(folder.name)
+        if match is not None and folder.is_dir():
+            folders.append((int(match.group(1)), folder))
+    scripts: list[Path] = []
+    for _step, folder in sorted(folders):
+        scripts.extend(sorted(path for path in folder.glob("*.pml") if path.is_file()))
+    if not scripts:
+        raise SystemExit(
+            "No PyMOL scripts in the r-iteration-## directories of "
+            f"{run_dir}. Pass --resid to name the residues to keep."
+        )
+    residues: list[Residue] = []
+    seen: set[tuple[str, int]] = set()
+    for script in scripts:
+        text = script.read_text(encoding="utf-8", errors="replace")
+        for raw in text.splitlines():
+            found = PML_RESIDUE_RE.match(raw.strip())
+            if found is None:
+                continue
+            chain = found.group(1)
+            if chain.isalpha():
+                chain = chain.upper()
+            residue = Residue(chain, int(found.group(2)))
+            key = (residue.chain, residue.resseq)
+            if key in seen:
+                continue
+            seen.add(key)
+            residues.append(residue)
+    if not residues:
+        names = ", ".join(script.name for script in scripts[:3])
+        raise SystemExit(
+            "The PyMOL scripts do not select any residues "
+            f"({names}). Pass --resid to name the residues to keep."
+        )
     return residues
 
 
@@ -805,6 +856,112 @@ def write_maestro_project(
     _write_maestro_project(path, references, steps, finals)
 
 
+def _atom_payload(record: AtomRecord | None) -> dict | None:
+    if record is None:
+        return None
+    return {
+        "chain": record.chain,
+        "resseq": record.resseq,
+        "resname": record.resname,
+        "name": record.name,
+        "serial": record.serial,
+    }
+
+
+def _pdb_payload(item: FilteredPdb) -> dict:
+    return {
+        "path": str(item.path),
+        "natoms": item.natoms,
+        "highlight": _atom_payload(item.highlight),
+        "highlight_index": item.highlight_index,
+        "newest_source": _atom_payload(item.newest_source),
+        "newest_source_kept": item.newest_source_kept,
+    }
+
+
+def _map_payload(item: MapCopy | None) -> dict | None:
+    if item is None:
+        return None
+    return {
+        "path": str(item.path),
+        "stdev": item.stdev,
+        "level": item.level,
+        "sigma": item.sigma,
+    }
+
+
+def _maestro_payload(
+    path: Path,
+    references: list[FilteredPdb],
+    steps: list[IterationSummary],
+    finals: list[FilteredPdb],
+) -> dict:
+    """Plain data the Schrödinger process can rebuild without pickle."""
+    return {
+        "archive": str(path),
+        "references": [_pdb_payload(item) for item in references],
+        "steps": [
+            {
+                "step": item.step,
+                "added": None if item.added is None else _pdb_payload(item.added),
+                "map_file": _map_payload(item.map_file),
+            }
+            for item in steps
+        ],
+        "finals": [_pdb_payload(item) for item in finals],
+    }
+
+
+def _atom_from_payload(data: dict | None) -> AtomRecord | None:
+    if data is None:
+        return None
+    return AtomRecord(
+        chain=data["chain"],
+        resseq=data["resseq"],
+        resname=data["resname"],
+        name=data["name"],
+        serial=data["serial"],
+    )
+
+
+def _pdb_from_payload(data: dict) -> FilteredPdb:
+    return FilteredPdb(
+        path=Path(data["path"]),
+        natoms=data["natoms"],
+        highlight=_atom_from_payload(data["highlight"]),
+        highlight_index=data["highlight_index"],
+        newest_source=_atom_from_payload(data["newest_source"]),
+        newest_source_kept=data["newest_source_kept"],
+    )
+
+
+def _map_from_payload(data: dict | None) -> MapCopy | None:
+    if data is None:
+        return None
+    return MapCopy(
+        path=Path(data["path"]),
+        stdev=data["stdev"],
+        level=data["level"],
+        sigma=data["sigma"],
+    )
+
+
+def _maestro_from_payload(
+    payload: dict,
+) -> tuple[Path, list[FilteredPdb], list[IterationSummary], list[FilteredPdb]]:
+    references = [_pdb_from_payload(item) for item in payload["references"]]
+    steps = [
+        IterationSummary(
+            step=item["step"],
+            added=None if item["added"] is None else _pdb_from_payload(item["added"]),
+            map_file=_map_from_payload(item["map_file"]),
+        )
+        for item in payload["steps"]
+    ]
+    finals = [_pdb_from_payload(item) for item in payload["finals"]]
+    return Path(payload["archive"]), references, steps, finals
+
+
 def _write_maestro_project_via_schrodinger(
     path: Path,
     references: list[FilteredPdb],
@@ -817,21 +974,25 @@ def _write_maestro_project_via_schrodinger(
             "Schrödinger Maestro is required to write the project archive, "
             "and the run launcher was not found."
         )
-    with tempfile.NamedTemporaryFile(suffix=".pkl", delete=False) as handle:
-        pickle.dump((str(path), references, steps, finals), handle)
+    # The script runs as __main__, so its dataclasses pickle as __main__.FilteredPdb.
+    # Schrödinger's python imports this file as a module and cannot resolve that.
+    with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as handle:
+        json.dump(
+            _maestro_payload(path, references, steps, finals),
+            handle,
+        )
         payload = handle.name
     code = (
-        "import os, pickle, sys\n"
-        "from pathlib import Path\n"
+        "import json, os, sys\n"
         f"sys.path.insert(0, {str(Path(__file__).resolve().parent)!r})\n"
         "import prepare_reconstruction_summary as tool\n"
-        "archive, references, steps, finals = pickle.load("
-        "open(os.environ['XFEL_MAESTRO_PICKLE'], 'rb'))\n"
-        "tool._write_maestro_project("
-        "Path(archive), references, steps, finals)\n"
+        "payload = json.load(open(os.environ['XFEL_MAESTRO_PAYLOAD']))\n"
+        "archive, references, steps, finals = "
+        "tool._maestro_from_payload(payload)\n"
+        "tool._write_maestro_project(archive, references, steps, finals)\n"
     )
     env = os.environ.copy()
-    env["XFEL_MAESTRO_PICKLE"] = payload
+    env["XFEL_MAESTRO_PAYLOAD"] = payload
     try:
         subprocess.check_call([str(runner), "python3", "-c", code], env=env)
     finally:
@@ -981,7 +1142,7 @@ def _write_maestro_project(
 
 
 
-def prepare(run_dir: Path, residues: list[Residue]) -> Path:
+def prepare(run_dir: Path, residues: list[Residue] | None = None) -> Path:
     run_dir = run_dir.expanduser().resolve()
     if not run_dir.is_dir():
         raise SystemExit(f"Run directory not found: {run_dir}")
@@ -995,6 +1156,9 @@ def prepare(run_dir: Path, residues: list[Residue]) -> Path:
     iterations = collect_iterations(run_dir)
     if not iterations:
         raise SystemExit(f"No r-iteration-## directories in {run_dir}")
+    if residues is None:
+        residues = residues_from_pymol(run_dir)
+        print("residues: " + ",".join(str(residue) for residue in residues))
     final_paths = collect_finals(run_dir)
     if not final_paths:
         raise SystemExit(f"No *_reconstructed_final.pdb file in {run_dir}")
@@ -1090,14 +1254,14 @@ def main(argv: list[str] | None = None) -> None:
     )
     parser.add_argument(
         "--resid",
-        required=True,
         help=(
             "Residues to keep, as chain id plus residue number, comma-separated. "
-            "Example: A602,A170,A189,C354"
+            "Example: A602,A170,A189,C354. When omitted, residues are taken from "
+            "the PyMOL scripts in the r-iteration-## directories."
         ),
     )
     args = parser.parse_args(argv)
-    residues = parse_residues(args.resid)
+    residues = parse_residues(args.resid) if args.resid else None
     prepare(args.run_dir, residues)
 
 
