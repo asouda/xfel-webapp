@@ -23,7 +23,7 @@
     <h2>How it is calculated</h2>
     <ol>
       <li>An observed mmCIF is converted to MTZ with <code>cif2mtz</code>. An MTZ entered for the reflections is used as that file. <code>ctruncate</code> turns intensities <code>I, SIGI</code> into amplitudes, and <code>cad</code> copies the <code>FREE</code> flag onto those amplitudes. An MTZ that already contains amplitudes skips <code>ctruncate</code>.</li>
-      <li><code>refmac5</code> refines the omit coordinates for the number of cycles you set. Zero cycles calculate the map without moving atoms. Distance and angle lines are external restraints and replace the CCP4 monomer library for those atoms. A value written on a line replaces the sigma field for that pair. A custom dictionary is read only when the cycle count is greater than zero, and the external restraints are read after it.</li>
+      <li>The REFMAC refinement section starts off, which runs zero cycles and does not move atoms. Turn it on to set the cycle count, <code>REFI BREF</code> (isotropic, anisotropic, mixed, or overall), and <code>REFI TYPE</code> (restrained or unrestrained). Distance, angle, and dihedral lines are external restraints. Each group is used only when its switch is on, and those lines replace the CCP4 monomer library for those atoms. A value written on a line replaces the sigma field for that restraint. A custom dictionary is used only when its switch is on and the cycle count is greater than zero, and the external restraints are read after it.</li>
       <li><code>fft</code> transforms <code>DELFWT</code> / <code>PHDELWT</code> between the resolution limits above. An optional finer grid resolution asks <code>fft</code> for the sampling of that higher resolution. Reciprocal-space points beyond the coefficients are absent from the MTZ and contribute zero amplitude, so the real-space grid is denser. The map is then padded around the refined model. When the whole-cell grid is too large for <code>fft</code>, that same sum is evaluated on a cube centered on the map center and wide enough for the clip radius. The sigma stays the full-cell value.</li>
       <li>Coot clips the site from that difference map. The clip is centered on the site residue, or on a Cartesian point when you set one. PyMOL draws the refined coordinates and the ±nσ surfaces, saves the PNG and the <code>.pml</code> script beside the map, and centers that image on the same point as the clipped map.</li>
     </ol>
@@ -33,13 +33,13 @@
     <p>The starting omit model is rebuilt one heavy atom at a time. Each iteration refines the current omit model and calculates its mFo−DFc map. The highest peak of the clipped map is matched to the nearest eligible heavy atom in the reference model, and that atom’s PDB record is added to the refined coordinates at the Cartesian position of the peak. That structure is the omit model of the next iteration. By default an atom already in the omit model is not eligible. The form can include every heavy atom in the reference model instead. When that choice selects an atom whose identity is already in the working model, the existing record is removed and the reference record is written at the peak, which moves that atom. Hydrogens are not candidates.</p>
     <h2>How it is calculated</h2>
     <ol>
-      <li>The omit-map workflow refines the current omit model and calculates its clipped mFo−DFc map. REFMAC runs for the number of cycles on the form. Zero cycles leave the heavy atoms where they are. The refined coordinates are saved as the omit-model name followed by <code>_refined_stepNN.pdb</code>. A custom dictionary is read only when the cycle count is greater than zero. When external harmonic restraints are on, each atom added in an earlier iteration is held at the coordinates written into the omit model. The default sigma is 0.1 Å, and the restraints are used only when the cycle count is greater than zero.</li>
-      <li>When the map-check interval is a positive integer, the calculation pauses after that many iterations. The 3D viewer shows the site from the refined omit model, named with <code>_refined_stepNN.pdb</code>, and that iteration’s difference map. When a highest-density voxel was found, a small magenta octahedron marks its coordinates. A note in the lower-left corner of the viewer gives the step, the closest reference atom, and its distance from that voxel. <strong>Continue iterations</strong> resumes the search. An interval of 0 shows only the finished model and its residual map.</li>
+      <li>The omit-map workflow refines the current omit model and calculates its clipped mFo−DFc map. The REFMAC refinement section starts off, which runs zero cycles and leaves the heavy atoms where they are. Turn it on to set the cycle count and the REFMAC protocol. The refined coordinates are saved as the omit-model name followed by <code>_refined_stepNN.pdb</code>. A custom dictionary is read only when its switch is on and the cycle count is greater than zero. When the harmonic switch is on, each atom added in an earlier iteration is held at the coordinates written into the omit model. The default sigma is 0.1 Å, and those restraints are used only when the cycle count is greater than zero.</li>
+      <li>When the map-check interval is a positive integer, the calculation pauses after that many iterations. The 3D viewer shows the site from the refined omit model, named with <code>_refined_stepNN.pdb</code>, and that iteration’s difference map. PyMOL writes a script in the iteration folder at every step, and it runs that script to save a PNG only for a step that pauses here. When a highest-density voxel was found, a small magenta octahedron marks its coordinates. A note in the lower-left corner of the viewer gives the step, the closest reference atom, and its distance from that voxel. <strong>Continue iterations</strong> resumes the search. An interval of 0 shows only the finished model and its residual map, and does not run PyMOL.</li>
       <li>The peak is the strongest voxel that is a local maximum inside a cubic neighborhood of the map calculated after REFMAC. When the spline maximum is on, the point moves to the spline maximum inside that neighborhood. The default neighborhood is 3 and the default spline order is 3.</li>
       <li>Density profiles through that point, from −2 Å to +2 Å, are written in the iteration directory. The offset is the distance in Ångstroms along the line. The columns are the Cartesian x, y, and z axes, the six face diagonals of the cube, and the four body diagonals. The nearest eligible heavy atom in the reference model is identified. A distance beyond 1 Å is a warning. A distance beyond 3 Å stops the reconstruction without adding that atom.</li>
       <li>The reference atom’s PDB record is inserted into the refined coordinates, at the peak. The atom name, residue, and chain stay those of the reference atom. When every heavy atom is eligible and that identity is already in the working model, the existing record is removed first, so the atom moves to the peak. The density-section file then says that the position of that existing atom has been adjusted. The iteration log and the Note column record how far that atom moved. Distance to reference remains the distance from the peak to the reference coordinates. Otherwise the density-section file says the atom was added. The result is saved as the omit-model name followed by <code>_refined_added_</code>, the atom name, and <code>_stepNN.pdb</code>. The next iteration refines that file. The loop repeats until the requested number of atoms has been added, or until no atom can be added. The last iteration refines the model and does not insert an atom. The viewer shows those refined coordinates and the residual map. They are saved as the omit-model name followed by <code>_reconstructed_final.pdb</code>. A table under the viewer lists each step, the final REFMAC R-factor and R-free, the atom added at the peak, its coordinates, and its distance to the reference atom. Bonds are drawn wherever two displayed atoms are close enough to be bonded.</li>
     </ol>
-    <p>Logs, maps, and the density profiles of each iteration are written in <code>r-iteration-01</code>, <code>r-iteration-02</code>, and so on, inside the output directory. PDB, CCP4, map, PNG, and density-section files in those directories end in <code>_step01</code>, <code>_step02</code>, and so on. <strong>Reference site</strong> in the viewer draws the reference model in ball and stick.</p>
+    <p>Logs, maps, and the density profiles of each iteration are written in <code>r-iteration-01</code>, <code>r-iteration-02</code>, and so on, inside the output directory. PDB, CCP4, map, and density-section files in those directories end in <code>_step01</code>, <code>_step02</code>, and so on. The PyMOL script is written for every iteration. A PNG with the same step suffix is written only when that iteration pauses for a map check. <strong>Reference site</strong> in the viewer draws the reference model in ball and stick.</p>
     {% else %}
     <p class="equation">ρ(r) ∝ Σ F<sub>WT</sub> exp(−ΔB (sinθ/λ)<sup>2</sup>) exp(iφ<sub>WT</sub>)</p>
     <p>This is not a difference map. <code>FWT</code> is already the weighted 2m|F<sub>o</sub>| − D|F<sub>c</sub>| amplitude from the wwPDB validation file, and <code>PHWT</code> is the model phase. Mesh that covers an atom is accounted-for density. A gap on an atom, or a blob with no atom, is the usual hint that the model and the data disagree. Levels of 1–2σ are the normal view; 3–5σ is for difference maps and will often leave this mesh empty.</p>
@@ -55,32 +55,26 @@
 
   <form id="job-form" class="glass form" action="{{ url_for('start_job', slug=spec.slug) }}" method="post" enctype="multipart/form-data">
     <h2>Input files</h2>
-    <p class="hint">Upload a file, or enter its full path on this computer. A path is better for the large mmCIF files. PDB and mmCIF files are used as they are. A file is decompressed with gunzip only when its name ends in <code>.gz</code>. The tutorial paths below are filled in when those files are already in <code>data/</code>.</p>
+    <p class="hint">Use <strong>Choose file</strong> or <strong>Specify full path</strong>. Only the one you picked is used. A path is better for the large mmCIF files. PDB and mmCIF files are used as they are. A file is decompressed with gunzip only when its name ends in <code>.gz</code>. A tutorial path is filled in when that file is already in <code>data/</code>.</p>
     <div class="file-grid">
       {% for key, label, hint in spec.files %}
       <fieldset>
         <legend>{{ label }}</legend>
         <p class="hint">{{ hint }}</p>
-        <label class="file-btn">
-          <input type="file" name="file_{{ key }}" accept="{% if key == 'light_sf' and spec.slug in ['refinement', 'reconstruct'] %}.cif,.mtz,.gz{% elif spec.slug == 'reconstruct' %}.pdb,.ent,.gz{% else %}.pdb,.cif,.ent,.gz{% endif %}">
-          <span>Choose file</span>
-        </label>
-        <label class="path-label" for="path_{{ key }}">or path</label>
-        <input id="path_{{ key }}" name="path_{{ key }}" value="{{ paths.get(key, '') }}" placeholder="/path/to/file" autocomplete="off">
+        {% set preset = paths.get(key, '') %}
+        <div class="file-actions">
+          <label class="file-btn" aria-pressed="false">
+            <input type="file" name="file_{{ key }}" accept="{% if key == 'light_sf' and spec.slug in ['refinement', 'reconstruct'] %}.cif,.mtz,.gz{% elif spec.slug == 'reconstruct' %}.pdb,.ent,.gz{% else %}.pdb,.cif,.ent,.gz{% endif %}">
+            <span>Choose file</span>
+          </label>
+          <button type="button" class="file-btn path-toggle" aria-pressed="{{ 'true' if preset else 'false' }}" aria-controls="path_{{ key }}">Specify full path</button>
+        </div>
+        <div class="path-entry" {% if not preset %}hidden{% endif %}>
+          <label class="path-label" for="path_{{ key }}">Full path</label>
+          <input id="path_{{ key }}" name="path_{{ key }}" value="{{ preset }}" placeholder="/path/to/file" autocomplete="off" {% if not preset %}disabled{% endif %}>
+        </div>
       </fieldset>
       {% endfor %}
-      {% if spec.slug == 'refinement' %}
-      <fieldset class="wide">
-        <legend>Custom dictionary</legend>
-        <p class="hint">Optional monomer library. REFMAC reads it only when the cycle count is greater than zero. With zero cycles this file is ignored. Distance and angle restraints on the form are read after this file, so they replace matching distances and angles in the dictionary.</p>
-        <label class="file-btn">
-          <input type="file" name="file_custom_dictionary" accept=".cif,.lib,.gz">
-          <span>Choose file</span>
-        </label>
-        <label class="path-label" for="path_custom_dictionary">or path</label>
-        <input id="path_custom_dictionary" name="path_custom_dictionary" value="" placeholder="/path/to/dictionary.cif" autocomplete="off">
-      </fieldset>
-      {% endif %}
     </div>
     {% if spec.slug == 'reconstruct' %}
     <div class="fields">
@@ -129,68 +123,190 @@
       {% endif %}
 
       <label>CCP4 directory<input name="ccp4_root" value="{{ defaults.ccp4_root }}" required></label>
-      <label>Resolution
-        <select name="resolution_source">
-          <option value="sf" selected>Common shell of the structure-factor MTZ</option>
-          <option value="explicit">Explicit cutoffs below</option>
-        </select>
-      </label>
-      <label>Low-resolution cutoff (Å)<input name="lowres" type="number" step="any" value="{{ defaults.lowres }}"></label>
-      <label>High-resolution cutoff (Å)<input name="dmin" type="number" step="any" value="{{ defaults.dmin }}"></label>
-      {% if spec.slug in ['refinement', 'reconstruct'] %}
-      <label class="wide">FFT grid resolution for a final map (Å)
-        <input name="fft_dmin" type="number" step="any" placeholder="blank = resolution limit above">
-        <span class="hint">Leave blank to sample the map at the high-resolution limit selected above. A smaller number extends reciprocal space to that resolution. The added points are not in the observed data, so they enter the transform with zero amplitude and the real-space grid becomes denser. A much smaller number produces a much larger map.</span>
-      </label>
-      {% endif %}
-      <label>Map border (Å)<input name="map_border" type="number" step="any" value="{{ defaults.map_border }}"></label>
-
-      {% if spec.slug in ['refinement', 'reconstruct'] %}
-      <label>REFMAC cycles<input name="refmac_ncyc" type="number" min="0" step="1" value="{{ defaults.refmac_ncyc }}"></label>
-      <label>Distance sigma (Å)
-        <input name="distance_sigma" type="number" step="any" value="{{ defaults.distance_sigma }}">
-        <span class="hint">Used when a distance line does not give its own sigma.</span>
-      </label>
-      <label>Angle sigma (degrees)
-        <input name="angle_sigma" type="number" step="any" value="{{ defaults.angle_sigma }}">
-        <span class="hint">Used when an angle line does not give its own sigma.</span>
-      </label>
-      <label class="wide">Distance restraints
-        <textarea name="distance_restraints">{{ defaults.distance_restraints }}</textarea>
-        <span class="hint">One pair per line: <code>MN3 O5</code>, <code>MN1 O5 2.40</code>, or <code>MN1 O5 2.40 0.50</code>. A missing distance keeps the distance in the starting model. A missing sigma uses Distance sigma. A distance and sigma on the line replace those fields for that pair. REFMAC uses the line instead of the CCP4 monomer library for the same atoms. Clear the box to add none.</span>
-      </label>
-      <label class="wide">Angle restraints
-        <textarea name="angle_restraints">{{ defaults.angle_restraints }}</textarea>
-        <span class="hint">The middle atom is the vertex: <code>MN3 O5 MN4</code>, optionally followed by the angle and sigma in degrees. A missing angle keeps the angle in the starting model. A missing sigma uses Angle sigma. Values on the line replace those fields for that angle, and replace the monomer-library angle for the same atoms.</span>
-      </label>
-      {% if spec.slug == 'reconstruct' %}
-      <label class="check"><input type="checkbox" name="harmonic_added" id="harmonic-added"> External harmonic restraints on added atoms</label>
-      <label>Harmonic sigma (Å)
-        <input name="harmonic_sigma" id="harmonic-sigma" type="number" step="any" min="0" value="{{ defaults.harmonic_sigma }}">
-        <span class="hint">REFMAC holds each atom added in an earlier iteration at the coordinates in the omit model. Used only when the cycle count is greater than zero. The default sigma is 0.1 Å.</span>
-      </label>
       <fieldset class="wide">
-        <legend>Custom dictionary</legend>
-        <p class="hint">Optional monomer library. REFMAC reads it only when the cycle count is greater than zero. With zero cycles this file is ignored. Distance and angle restraints on the form are read after this file, so they replace matching distances and angles in the dictionary.</p>
-        <label class="file-btn">
-          <input type="file" name="file_custom_dictionary" accept=".cif,.lib,.gz">
-          <span>Choose file</span>
-        </label>
-        <label class="path-label" for="path_custom_dictionary">or path</label>
-        <input id="path_custom_dictionary" name="path_custom_dictionary" value="" placeholder="/path/to/dictionary.cif" autocomplete="off">
+        <legend>Resolution</legend>
+        <div class="panel-fields">
+          <label>Resolution source
+            <select name="resolution_source" id="resolution-source">
+              <option value="sf" selected>Common shell of the structure-factor MTZ</option>
+              <option value="explicit">Explicit cutoffs</option>
+            </select>
+          </label>
+          <div id="explicit-cutoffs" class="panel-fields" hidden>
+            <label>Low-resolution cutoff (Å)
+              <input name="lowres" type="number" step="any" value="{{ defaults.lowres }}" disabled>
+            </label>
+            <label>High-resolution cutoff (Å)
+              <input name="dmin" type="number" step="any" value="{{ defaults.dmin }}" disabled>
+            </label>
+          </div>
+          <label class="check">
+            <input type="checkbox" name="use_fft_grid" class="panel-switch" aria-controls="fft-grid-fields">
+            Set a custom FFT grid resolution for the final map (Å)
+          </label>
+          <div id="fft-grid-fields" class="panel-fields" hidden>
+            <label>FFT grid resolution (Å)
+              <input name="fft_dmin" type="number" step="any" min="0.01" disabled>
+              <span class="hint">Smaller than the high-resolution limit of the coefficients. The added reciprocal-space points are absent from the data and contribute zero amplitude, so the real-space grid is denser. A much smaller number produces a much larger map.</span>
+            </label>
+          </div>
+          <label>Extended map border (Å)
+            <input name="map_border" type="number" step="any" value="{{ defaults.map_border }}">
+            <span class="hint">Padding around the coordinate model when the Fourier map is expanded. The default is 5 Å.</span>
+          </label>
+        </div>
       </fieldset>
-      <label>Neighborhood size
-        <input name="neighborhood_size" type="number" min="1" step="2" value="{{ defaults.neighborhood_size }}">
-        <span class="hint">Odd integer. The peak is the strongest voxel that is a maximum inside a cube of this side. The default is 3.</span>
-      </label>
-      <label class="check"><input type="checkbox" name="spline_seed"> Place the peak on a spline maximum</label>
-      <label>Spline order
-        <input name="spline_order" type="number" min="0" max="5" step="1" value="{{ defaults.spline_order }}">
-        <span class="hint">Used when the spline maximum is on. 3 is cubic. Orders run from 0 through 5.</span>
-      </label>
-      {% endif %}
+      {% if spec.slug == 'reconstruct' %}
+      <fieldset class="wide">
+        <legend>Density peak search</legend>
+        <div class="panel-fields">
+          <label>Neighborhood size
+            <input name="neighborhood_size" type="number" min="1" step="2" value="{{ defaults.neighborhood_size }}">
+            <span class="hint">Odd integer. The peak is the strongest voxel that is a maximum inside a cube of this side. The default is 3.</span>
+          </label>
+          <label class="check">
+            <input type="checkbox" name="spline_seed" class="panel-switch" aria-controls="spline-fields">
+            Place the peak on a spline maximum
+          </label>
+          <p class="hint">Turn this on to move the inserted coordinates to the spline maximum inside the neighborhood. Turn it off to keep the voxel centre.</p>
+          <div id="spline-fields" class="panel-fields" hidden>
+            <label>Spline order
+              <input name="spline_order" type="number" min="0" max="5" step="1" value="{{ defaults.spline_order }}" disabled>
+              <span class="hint">3 is cubic. Orders run from 0 through 5. Orders below 2 stay on the voxel.</span>
+            </label>
+          </div>
+        </div>
+      </fieldset>
       {% endif %}
     </div>
+
+    {% if spec.slug in ['refinement', 'reconstruct'] %}
+    {% set distance_on = (defaults.distance_restraints or '')|trim %}
+    {% set angle_on = (defaults.angle_restraints or '')|trim %}
+    {% set dihedral_on = (defaults.dihedral_restraints or '')|trim %}
+    <h2>REFMAC refinement</h2>
+    <div class="fields">
+      <label class="check">
+        <input type="checkbox" name="use_refmac" class="panel-switch" aria-controls="refmac-fields">
+        Refine the model with REFMAC
+      </label>
+      <p class="hint wide">Turn this on to set cycles, the B-factor model, the refinement type, external restraints, and a custom dictionary. Turn it off to calculate the map with zero cycles.</p>
+      <div id="refmac-fields" class="panel-fields wide" hidden>
+        <label>REFMAC cycles
+          <input name="refmac_ncyc" type="number" min="0" step="1" value="{{ defaults.refmac_ncyc }}" disabled>
+          <span class="hint">Zero cycles calculate the map without moving atoms.</span>
+        </label>
+        <label>B-factor refinement
+          <select name="refmac_bref" disabled>
+            <option value="ISOT" selected>ISOTropic</option>
+            <option value="ANIS">ANISotropic</option>
+            <option value="MIXE">MIXEd</option>
+            <option value="OVER">OVERall</option>
+          </select>
+          <span class="hint">REFMAC keyword <code>REFI BREF</code>. Isotropic is the default.</span>
+        </label>
+        <label>Refinement type
+          <select name="refmac_type" disabled>
+            <option value="REST" selected>RESTrained</option>
+            <option value="UNRE">UNREstrained</option>
+          </select>
+          <span class="hint">REFMAC keyword <code>REFI TYPE</code>. Restrained is the default. Unrestrained refinement ignores geometry.</span>
+        </label>
+        <fieldset>
+          <legend>Distance restraints</legend>
+          <label class="check">
+            <input type="checkbox" name="use_distance_restraints" class="panel-switch" aria-controls="distance-fields"{% if distance_on %} checked{% endif %} disabled>
+            Use distance restraints
+          </label>
+          <p class="hint">Turn this on to edit the distances. Turn it off to apply none.</p>
+          <div id="distance-fields" class="panel-fields" hidden>
+            <label>Distance sigma (Å)
+              <input name="distance_sigma" type="number" step="any" value="{{ defaults.distance_sigma }}" disabled>
+              <span class="hint">Used when a distance line does not give its own sigma.</span>
+            </label>
+            <label>Distance lines
+              <textarea name="distance_restraints" disabled>{{ defaults.distance_restraints }}</textarea>
+              <span class="hint">One pair per line: <code>MN3 O5</code>, <code>MN1 O5 2.40</code>, or <code>MN1 O5 2.40 0.50</code>. A missing distance keeps the distance in the starting model. A missing sigma uses Distance sigma. A distance and sigma on the line replace those fields for that pair. REFMAC uses the line instead of the CCP4 monomer library for the same atoms.</span>
+            </label>
+          </div>
+        </fieldset>
+        <fieldset>
+          <legend>Angle restraints</legend>
+          <label class="check">
+            <input type="checkbox" name="use_angle_restraints" class="panel-switch" aria-controls="angle-fields"{% if angle_on %} checked{% endif %} disabled>
+            Use angle restraints
+          </label>
+          <p class="hint">Turn this on to edit the angles. Turn it off to apply none.</p>
+          <div id="angle-fields" class="panel-fields" hidden>
+            <label>Angle sigma (degrees)
+              <input name="angle_sigma" type="number" step="any" value="{{ defaults.angle_sigma }}" disabled>
+              <span class="hint">Used when an angle line does not give its own sigma.</span>
+            </label>
+            <label>Angle lines
+              <textarea name="angle_restraints" disabled>{{ defaults.angle_restraints }}</textarea>
+              <span class="hint">The middle atom is the vertex: <code>MN3 O5 MN4</code>, optionally followed by the angle and sigma in degrees. A missing angle keeps the angle in the starting model. A missing sigma uses Angle sigma. Values on the line replace those fields for that angle, and replace the monomer-library angle for the same atoms.</span>
+            </label>
+          </div>
+        </fieldset>
+        <fieldset>
+          <legend>Dihedral restraints</legend>
+          <label class="check">
+            <input type="checkbox" name="use_dihedral_restraints" class="panel-switch" aria-controls="dihedral-fields"{% if dihedral_on %} checked{% endif %} disabled>
+            Use dihedral restraints
+          </label>
+          <p class="hint">Turn this on to edit the dihedrals. Turn it off to apply none.</p>
+          <div id="dihedral-fields" class="panel-fields" hidden>
+            <label>Dihedral sigma (degrees)
+              <input name="dihedral_sigma" type="number" step="any" value="{{ defaults.dihedral_sigma }}" disabled>
+              <span class="hint">Used when a dihedral line does not give its own sigma.</span>
+            </label>
+            <label>Dihedral lines
+              <textarea name="dihedral_restraints" disabled>{{ defaults.dihedral_restraints }}</textarea>
+              <span class="hint">Four atoms per line: <code>MN1 O5 MN4 CA1</code>, optionally followed by the angle and sigma in degrees. The torsion is the angle between the plane of the first three atoms and the plane of the last three. A missing angle keeps the angle in the starting model. A missing sigma uses Dihedral sigma. Values on the line replace those fields for that dihedral.</span>
+            </label>
+          </div>
+        </fieldset>
+        {% if spec.slug == 'reconstruct' %}
+        <fieldset>
+          <legend>Harmonic restraints</legend>
+          <label class="check">
+            <input type="checkbox" name="harmonic_added" id="harmonic-added" class="panel-switch" aria-controls="harmonic-fields" disabled>
+            Restrain atoms added in earlier iterations
+          </label>
+          <p class="hint">Turn this on to hold those atoms at the coordinates in the omit model. Turn it off to apply none. The restraint is used only when the cycle count is greater than zero.</p>
+          <div id="harmonic-fields" class="panel-fields" hidden>
+            <label>Harmonic sigma (Å)
+              <input name="harmonic_sigma" id="harmonic-sigma" type="number" step="any" min="0" value="{{ defaults.harmonic_sigma }}" disabled>
+              <span class="hint">REFMAC holds each atom added in an earlier iteration at the coordinates in the omit model. The default sigma is 0.1 Å.</span>
+            </label>
+          </div>
+        </fieldset>
+        {% endif %}
+        <fieldset>
+          <legend>Custom dictionary</legend>
+          <label class="check">
+            <input type="checkbox" name="use_custom_dictionary" class="panel-switch" aria-controls="custom-dictionary-fields" disabled>
+            Use a custom dictionary
+          </label>
+          <p class="hint">Turn this on to choose a monomer library. Turn it off to use none, including after a file was chosen.</p>
+          <div id="custom-dictionary-fields" class="panel-fields" hidden>
+            <p class="hint">REFMAC reads the file only when the cycle count is greater than zero. With zero cycles this file is ignored. Distance, angle, and dihedral restraints are read after this file, so they replace matching geometry in the dictionary.</p>
+            <div class="file-actions">
+              <label class="file-btn" aria-pressed="false">
+                <input type="file" name="file_custom_dictionary" accept=".cif,.lib,.gz" disabled>
+                <span>Choose file</span>
+              </label>
+              <button type="button" class="file-btn path-toggle" aria-pressed="false" aria-controls="path_custom_dictionary">Specify full path</button>
+            </div>
+            <div class="path-entry" hidden>
+              <label class="path-label" for="path_custom_dictionary">Full path</label>
+              <input id="path_custom_dictionary" name="path_custom_dictionary" value="" placeholder="/path/to/dictionary.cif" autocomplete="off" disabled>
+            </div>
+          </div>
+        </fieldset>
+      </div>
+    </div>
+    {% endif %}
 
     <h2>Site and figure</h2>
     <div class="fields">
@@ -276,7 +392,7 @@
     <h2>Output directory</h2>
     <label class="wide">Folder on this computer
       <input name="output_dir" value="{{ defaults.output_dir }}" required>
-      <span class="hint">{% if spec.slug == 'reconstruct' %}Each iteration writes its log, map, coordinates, and density profiles in a subdirectory named r-iteration-01, r-iteration-02, and so on. PDB, CCP4, map, PNG, and density-section files there end in _step01, _step02, and so on. When an atom is added, the refined model plus that atom is saved there as the omit-model name followed by _refined_added_, the atom name, and _stepNN.pdb, and the next iteration starts from it. The finished coordinates, after the last refinement, are saved beside those directories as the omit-model name followed by _reconstructed_final.pdb.{% else %}The extended map, the site fragment, CCP4 logs, MTZ files, the PNG, and the PyMOL script are all written here.{% endif %}</span>
+      <span class="hint">{% if spec.slug == 'reconstruct' %}Each iteration writes its log, map, coordinates, density profiles, and PyMOL script in a subdirectory named r-iteration-01, r-iteration-02, and so on. PDB, CCP4, map, and density-section files there end in _step01, _step02, and so on. A PNG with that suffix is written only when the iteration pauses for a map check. When an atom is added, the refined model plus that atom is saved there as the omit-model name followed by _refined_added_, the atom name, and _stepNN.pdb, and the next iteration starts from it. The finished coordinates, after the last refinement, are saved beside those directories as the omit-model name followed by _reconstructed_final.pdb.{% else %}The extended map, the site fragment, CCP4 logs, MTZ files, the PNG, and the PyMOL script are all written here.{% endif %}</span>
     </label>
 
     <div class="actions">
@@ -419,6 +535,18 @@
     <h2>Reconstruction steps</h2>
     <p class="hint">Each completed iteration is added here while the calculation continues. The R-factor and R-free are the final values from that iteration’s REFMAC job. On a search step the atom is inserted after that job, at the coordinates of the peak. Distance to reference is the distance from the peak to that atom in the reference model, including when the atom was already in the working model. In that case the Note gives the distance from the atom’s previous coordinates to the peak. The last row of a finished run is the residual map, which adds no atom.</p>
     <div class="table-wrap" id="reconstruction-steps-table"></div>
+    {% if spec.slug == 'reconstruct' %}
+    <div class="summary-actions" id="summary-actions" hidden>
+      <button type="button" class="pill solid" id="summary-btn">Prepare summary</button>
+      <label class="summary-resid" for="summary-resid">Residues
+        <input id="summary-resid" placeholder="A602,A170,A189,C354" autocomplete="off" spellcheck="false">
+        <span class="hint">Optional. Chain and residue number, comma-separated, as in <code>--resid</code>. Leave this blank to use the residues selected in the PyMOL scripts. A list here replaces that selection.</span>
+      </label>
+      <p class="hint">Writes <code>summary/</code> in the output directory. The coordinates and maps there are links to the iteration files. The Maestro project keeps its own copy of the shown residues and of the maps.</p>
+      <p class="error" id="summary-error" hidden></p>
+      <p class="hint" id="summary-result" hidden></p>
+    </div>
+    {% endif %}
   </section>
 </section>
 {% endblock %}
@@ -428,5 +556,5 @@
 </script>
 <script src="{{ url_for('static', filename='vendor/ngl-2.5.0.js') }}?v=2"></script>
 <script src="{{ url_for('static', filename='js/sigma-color.js') }}?v=1"></script>
-<script src="{{ url_for('static', filename='js/workflow.js') }}?v=40"></script>
+<script src="{{ url_for('static', filename='js/workflow.js') }}?v=45"></script>
 {% endblock %}

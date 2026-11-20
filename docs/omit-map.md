@@ -32,7 +32,7 @@ The programs run in this order: `cif2mtz`, `mtzdump`, `ctruncate`, `cad`, `refma
 
 **3. Convert the observed mmCIF, or use an MTZ.** `cif2mtz` writes `6w1v-sf.mtz`. The columns at this stage are still the deposited intensities. For this dataset those are `_refln.intensity_meas` and `_refln.intensity_sigma`, stored in the MTZ as `I` and `SIGI`. An MTZ supplied on the form is copied to that file and `cif2mtz` is not run. Intensities in it still follow the next steps. Amplitudes already named `F`/`SIGF`, `FP`/`SIGFP`, `FOBS`/`SIGFOBS`, or `FMEAN`/`SIGFMEAN` skip `ctruncate`. A `FREE` column is the free set; without one, every reflection is used.
 
-**4. Choose the resolution shell.** With the resolution source set to the structure-factor file, `mtzdump` sets the low- and high-resolution cutoffs from `6w1v-sf.mtz`. With an explicit shell, the two numbers on the form are used. The explicit pair stored for this workflow is 30.0–1.89 Å, which matches the high-resolution limit recorded for the `6w1v` intensities. That shell is the range of `DELFWT` coefficients. Leave FFT grid resolution for a final map blank to sample the map on the grid for this shell.
+**4. Choose the resolution shell.** The Resolution section starts on the structure-factor file. `mtzdump` then sets the low- and high-resolution cutoffs from `6w1v-sf.mtz`. Choose explicit cutoffs and the two fields appear. The explicit pair stored for this workflow is 30.0–1.89 Å, which matches the high-resolution limit recorded for the `6w1v` intensities. That shell is the range of `DELFWT` coefficients. The FFT-grid switch in the same section starts off, which samples the map on the grid for this shell. Extended map border, default 5 Å, is the padding used in step 9.
 
 **5. Turn intensities into amplitudes.** `ctruncate` reads `I` and `SIGI` and writes `6w1v-sf-truncate.mtz` with amplitudes `F` and `SIGF`:
 
@@ -94,7 +94,7 @@ REFI -
     TYPE REST -
     RESI MLKF -
     METH CGMAT -
-    BREF ANIS
+    BREF ISOT
 SCAL -
     TYPE SIMP -
     LSSC -
@@ -106,9 +106,9 @@ WEIGHT -
 NCYC <cycles>
 ```
 
-Riding hydrogens are not built and are not written to the coordinate file. Refinement is restrained maximum likelihood with the conjugate-gradient method and anisotropic atomic \(B\) factors. Scaling is simple, anisotropic, and experimental, bulk solvent is included, and the X-ray weight is automatic. A line that ends in `-` continues the same keyword. Zero cycles still produce a coordinate file.
+Riding hydrogens are not built and are not written to the coordinate file. The REFMAC refinement section starts off, which forces `NCYC 0`. Turn it on to set the cycle count. `REFI TYPE` is `REST` (restrained, the default) or `UNRE` (unrestrained). `REFI BREF` is `ISOT` (isotropic, the default), `ANIS`, `MIXE`, or `OVER`. The block above is that default. Scaling is simple, anisotropic, and experimental, bulk solvent is included, and the X-ray weight is automatic. A line that ends in `-` continues the same keyword. Zero cycles still produce a coordinate file. The residual is maximum likelihood (`RESI MLKF`) with the conjugate-gradient method (`METH CGMAT`).
 
-External restraints, when the lists on the form are non-empty, are written to a text file and placed after a custom dictionary and in front of the fixed keywords. The default distance pairs are Mn1–O5, Mn3–O5, Mn4–O5, and Ca1–O5, with a sigma of 0.50 Å. The default angles are the angles at O5 among Mn3, Mn4, and Ca, the O5–Ca–O1 angle, and the angles at Mn3 and Mn4 that include O5, with a sigma of 25°. A line such as `MN1 O5 2.40 0.50` uses that distance and that sigma. A line such as `MN3 O5` keeps the distance in the starting model and uses the Distance sigma field. Angles work the same way, in degrees. These external restraints replace the CCP4 monomer library for the same atoms, in the listed copies only. An empty distance or angle list adds no restraint of that kind. A custom dictionary is a `LIBIN` line and is read only when the cycle count is greater than zero. The external restraints follow that line, so they replace matching distances and angles in the dictionary.
+While REFMAC refinement is on, external restraints are written to a text file and placed after a custom dictionary and in front of the fixed keywords. Each group is used only while its switch is on. The distance and angle switches start on. The dihedral switch starts off. The default distance pairs are Mn1–O5, Mn3–O5, Mn4–O5, and Ca1–O5, with a sigma of 0.50 Å. The default angles are the angles at O5 among Mn3, Mn4, and Ca, the O5–Ca–O1 angle, and the angles at Mn3 and Mn4 that include O5, with a sigma of 25°. A dihedral line names four atoms, and its default sigma is 10°. A line such as `MN1 O5 2.40 0.50` uses that distance and that sigma. A line such as `MN3 O5` keeps the distance in the starting model and uses the Distance sigma field. Angles and dihedrals work the same way, in degrees. These external restraints replace the CCP4 monomer library for the same atoms, in the listed copies only. A switch that is off adds no restraint of that kind. A custom dictionary is a `LIBIN` line. Its file fields are shown only while REFMAC refinement is on and its own switch is on, and it is read only when that switch is on and the cycle count is greater than zero. The external restraints follow that line, so they replace matching distances, angles, and dihedrals in the dictionary.
 
 The MTZ is checked for `FP` (or `F`, `FOBS`), `FC_ALL` (or `FC`), `DELFWT`, and `PHDELWT`. The transform uses the weighted coefficient.
 
@@ -119,7 +119,7 @@ RESOLUTION <low> <grid>
 LABIN F1=DELFWT PHI=PHDELWT
 ```
 
-`<grid>` is the high-resolution cutoff when FFT grid resolution for a final map is blank. A smaller number on that field replaces `<grid>` only. `fft` takes the maximum Miller indices from `<grid>` and the cell, then samples the asymmetric unit at about one third of that spacing. Indices inside the extended box that are not in the MTZ are omitted from the sum, so their amplitude is zero. The coefficients that were measured are unchanged. The map file name keeps the coefficient shell and adds `_grid{limit}` when the grid is finer, for example `30p00-1p89_grid1p20`.
+`<grid>` is the high-resolution cutoff when the FFT-grid switch is off. Turn the switch on and a smaller number replaces `<grid>` only. `fft` takes the maximum Miller indices from `<grid>` and the cell, then samples the asymmetric unit at about one third of that spacing. Indices inside the extended box that are not in the MTZ are omitted from the sum, so their amplitude is zero. The coefficients that were measured are unchanged. When the grid is finer, the map name gains `_grid` and that limit, for example `_grid1p20`.
 
 This is the sum
 
@@ -131,7 +131,7 @@ Positive density is present in the `6w1v` observations and absent from the omit 
 
 When the whole-cell grid is too large for `fft` (the three sampling intervals no longer fit in its 32-bit allocator, so the program stops with `CCPALC: length <=0` or a segmentation fault), the app evaluates this sum only on a cube centered on the site. The cube is wide enough for the clip radius. Reflections beyond the measured coefficients still contribute nothing. The file is a P1 map of that cube: the cell edges are scaled with the grid so the crystallographic grid indices still fall on the model coordinates. The sigma stored on that cube is the full-cell root-mean-square of the coefficients.
 
-**9. Cover the REFMAC model.** The app pads the map by the map border (default 5 Å) around the refined coordinate file and writes the extended CCP4 map. The sigma on that file stays the value from `fft`. A grid that `fft` cannot allocate skips this pad: the site cube is already the map Coot reads.
+**9. Cover the REFMAC model.** The app pads the map by the extended map border (default 5 Å) around the refined coordinate file and writes the extended CCP4 map. The sigma on that file stays the value from `fft`. A grid that `fft` cannot allocate skips this pad: the site cube is already the map Coot reads.
 
 **10. Export the site fragment.** Coot loads the extended map as a difference map and the REFMAC coordinates, centres on `OEX` A415, and writes a clip of the chosen radius (default 10 Å). The Coot contour does not change the exported voxels.
 
@@ -183,12 +183,17 @@ The omit model’s own structure-factor file is not an input. \(F_o\) comes from
 
 | Choice | Effect |
 | --- | --- |
-| REFMAC cycles | `0` leaves atoms fixed. A larger integer refines against the observed amplitudes |
-| Distance restraints and distance sigma | External distances. A sigma on a line replaces the field for that pair |
-| Angle restraints and angle sigma | External angles, sigma in degrees. A sigma on a line replaces the field for that angle |
-| Custom dictionary | Extra monomer library, used only when the cycle count is greater than zero. External restraints are read after it |
-| Resolution source and the two cutoffs | Shell of the `DELFWT` coefficients |
-| FFT grid resolution for a final map | Blank uses that shell. A smaller number samples the finer grid, with zero amplitude beyond the coefficients |
+| REFMAC refinement | Starts off, which forces zero cycles. On shows cycles, B-factor refinement, refinement type, the restraints, and the custom dictionary |
+| B-factor refinement | `REFI BREF`. ISOTropic (default), ANISotropic, MIXEd, or OVERall |
+| Refinement type | `REFI TYPE`. RESTrained (default) or UNREstrained |
+| REFMAC cycles | Shown while the section is on. `0` leaves atoms fixed. A larger integer refines against the observed amplitudes |
+| Distance restraints and distance sigma | Inside the section. Switch starts on. External distances. A sigma on a line replaces the field for that pair |
+| Angle restraints and angle sigma | Inside the section. Switch starts on. External angles, sigma in degrees. A sigma on a line replaces the field for that angle |
+| Dihedral restraints and dihedral sigma | Inside the section. Switch starts off. External torsions, four atoms, sigma in degrees. The default sigma is 10 |
+| Custom dictionary | Inside the section. Switch starts off. Extra monomer library, used only when the switch is on and the cycle count is greater than zero. External restraints are read after it |
+| Resolution source | Shell of the `DELFWT` coefficients. Explicit cutoffs show the two fields |
+| Custom FFT grid for the final map | Off uses that shell. On, a smaller number samples the finer grid, with zero amplitude beyond the coefficients |
+| Extended map border | Padding around the refined model. Default 5 Å |
 | PNG sigma levels | The worked example uses a single \(3.5\sigma\) mesh |
 | Viewer sigma minimum and maximum | Range of the one browser isosurface |
 
@@ -201,10 +206,10 @@ If the mesh is empty, lower the contour (try `3`). If the cage swallows the mode
 ## Adapting it
 
 1. Provide the omit coordinates, the observed structure factors, and the light coordinates.
-2. Set the two labels. Leave the resolution source on the structure-factor file, or set the two cutoffs yourself.
+2. Set the two labels. Leave the resolution source on the structure-factor file, or switch to explicit cutoffs and set the two fields. Leave the FFT-grid switch off unless the final map should be sampled more finely than the coefficients.
 3. List hetero residues on the omit model, then set the chain, residue, and neighbours.
-4. Set the cycle count and the restraint lists. A line with its own distance and sigma uses those values. A line with only the atom names uses the sigma fields.
-5. Recompute the map the first time, and again after any change of cycles, restraints, resolution, or FFT grid resolution for a final map. Leave recomputation off while you tune σ and the view.
+4. Leave REFMAC refinement off for zero cycles. Turn it on to set the cycle count, `REFI BREF`, `REFI TYPE`, and the restraint lists. A line with its own distance and sigma uses those values. A line with only the atom names uses the sigma fields.
+5. Recompute the map the first time, and again after any change of cycles, restraints, B-factor model, refinement type, resolution, or FFT grid. Leave recomputation off while you tune σ and the view.
 
 The extended map can be opened with the REFMAC coordinates:
 

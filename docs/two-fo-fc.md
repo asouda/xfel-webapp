@@ -31,7 +31,7 @@ The programs run in this order: `cif2mtz`, `mtzdump`, `fft` with `SCALE F1` set 
 
 **3. Convert both reflection files.** `cif2mtz` writes `9z35-sf.mtz` from the structure-factor mmCIF and `9z35_validation_2fo-fc_map_coef.mtz` from the coefficient mmCIF. The structure-factor conversion is repeated even when an extended map is reused, so the resolution range can still be reported. The coefficient MTZ contains `FWT`, `PHWT`, and `FOM`. `FWT` is already the weighted amplitude \(2m|F_o|-D|F_c|\). `PHWT` is the model phase. `FOM` is the figure of merit that was used to build `FWT`; the transform leaves it unread.
 
-**4. Read the shell and the coefficient labels.** `mtzdump` supplies the resolution range of `9z35-sf.mtz`. With the resolution source set to that file, the range becomes the low- and high-resolution cutoffs. The explicit pair stored for this workflow is 30.0–2.09 Å. The validation MTZ is checked for `FWT` and `PHWT`, and its own resolution limits are printed.
+**4. Read the shell and the coefficient labels.** The Resolution section starts on the structure-factor file. `mtzdump` then supplies the range of `9z35-sf.mtz`, and that range is the Fourier shell. Choose explicit cutoffs and the two fields appear. The explicit pair stored for this workflow is 30.0–2.09 Å. The FFT-grid switch starts off. Extended map border, default 5 Å, is the padding used in step 6. The validation MTZ is checked for `FWT` and `PHWT`, and its own resolution limits are printed.
 
 If the high-resolution cutoff is finer than the `FWT` limit, the extra shells are not in the coefficient file and the log says so. The cutoff should be no finer than the `FWT` limit the map step prints. For `9z35` the structure was determined at 1.93 Å; follow the limit printed for the coefficient file you loaded.
 
@@ -51,18 +51,18 @@ Because \((\sin\theta/\lambda)^2 = 1/(4d^2)\), the multiplier at the high-resolu
 \rho(\mathbf{r}) \propto \sum_{hkl} F_{\mathrm{used}}(hkl)\, e^{i\, \mathrm{PHWT}(hkl)}\, e^{-2\pi i\, \mathbf{h}\cdot\mathbf{r}}
 \]
 
-and writes `9z35_2fofc_{btag}_{tag}.ccp4`:
+and writes `9z35_2fofc_{btag}.ccp4`:
 
 ```text
 TITLE 9z35 weighted 2mFo-DFc sharpened by dB=<ΔB>
-RESOLUTION <low> <high>
+RESOLUTION <low> <grid>
 LABIN F1=FWT PHI=PHWT
 SCALE F1 1.0 <ΔB>
 ```
 
-`SCALE F1 1.0 ΔB` is scale 1 and temperature factor \(\Delta B\).
+`<grid>` is the high-resolution cutoff while the FFT-grid switch is off. Turn the switch on and a smaller number replaces `<grid>` only. Points beyond `FWT` contribute zero amplitude, and the map name gains `_grid` and that limit. `SCALE F1 1.0 ΔB` is scale 1 and temperature factor \(\Delta B\).
 
-**6. Cover the model.** The app pads the map by the map border (default 5 Å) around `9z35.pdb` and writes the extended CCP4 file. The sigma stays the value from `fft`.
+**6. Cover the model.** The app pads the map by the extended map border (default 5 Å) around `9z35.pdb` and writes the extended CCP4 file. The sigma stays the value from `fft`.
 
 **7. Export the site fragment.** Coot loads the extended map as a regular map. The difference-map flag is 0. It centres on `OEY` A601 and writes a clip of the chosen radius (default 10 Å). The Coot contour does not change the exported voxels.
 
@@ -84,7 +84,7 @@ Outputs:
 | `pymol_9z35_2fofc_{btag}_{site}.pml` | The scene |
 | `9z35_2fofc_{btag}_{tag}_extended.ccp4` | The map |
 
-`btag` encodes \(\Delta B\), so \(-40\) Å² and \(0\) Å² never overwrite each other. The output name also includes the resolution tag. `RECOMPUTE_MAP` must still be on the first time you ask for that file.
+`btag` encodes \(\Delta B\), so \(-40\) Å² and \(0\) Å² never overwrite each other. A finer FFT grid adds `_grid` and that limit to the same name. `RECOMPUTE_MAP` must still be on the first time you ask for that file.
 
 ## Background
 
@@ -119,11 +119,13 @@ The structure name is a short label in output file names. It does not have to be
 | Choice | Effect |
 | --- | --- |
 | Sharpening \(\Delta B\) | \(-40\) boosts high resolution. \(0\) leaves `FWT` as deposited. More negative sharpens more |
-| Resolution source and the two cutoffs | Fourier shell. The high-resolution cutoff should respect the `FWT` limit printed in the log |
+| Resolution source | Fourier shell. Explicit cutoffs show the two fields. The high-resolution cutoff should respect the `FWT` limit printed in the log |
+| Custom FFT grid for the final map | Off samples at that shell. On, a smaller number extends the `fft` grid with zero amplitude beyond `FWT` |
 | PNG sigma levels | Contours of the sharpened map. `1.2` is a single envelope nearer the classical \(1\sigma\) view. The worked example uses \(2\) and \(3.5\) |
 | Viewer sigma minimum and maximum | Range of the one browser isosurface. Defaults are \(1\) and \(5\) for this workflow |
 | Surface | `mesh` is a wireframe. The worked example uses `solid` |
-| Recompute the map | Turn on after changing \(\Delta B\) or the resolution cutoffs |
+| Extended map border | Padding around the model when the Fourier map is expanded. Default 5 Å |
+| Recompute the map | Turn on after changing \(\Delta B\), the resolution shell, or the FFT grid |
 
 ## Reading the figure
 
@@ -134,9 +136,9 @@ If the mesh is empty, lower the contour (try `1.0`). If the cage swallows the mo
 ## Adapting it
 
 1. Provide the coordinate file, the structure-factor mmCIF, and the validation \(2F_o-F_c\) coefficient file.
-2. Set the structure name and \(\Delta B\). Leave the resolution source on the structure-factor file, or set the cutoffs no finer than the `FWT` limit.
+2. Set the structure name and \(\Delta B\). Leave the resolution source on the structure-factor file, or switch to explicit cutoffs and set them no finer than the `FWT` limit. Leave the FFT-grid switch off unless the final map should be sampled more finely than `FWT`.
 3. List hetero residues, then set the chain, residue, and neighbours.
-4. Recompute the map the first time, and again whenever \(\Delta B\) or the resolution cutoffs change. Leave recomputation off while you tune σ and the view.
+4. Recompute the map the first time, and again whenever \(\Delta B\), the resolution shell, or the FFT grid changes. Leave recomputation off while you tune σ and the view.
 
 The extended map can be opened with the coordinates:
 

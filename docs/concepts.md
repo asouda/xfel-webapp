@@ -78,11 +78,17 @@ Column names are read from each MTZ with `mtzdump` and matched against a short l
 
 ## Resolution limits
 
+Every form has a Resolution section. The source is either the structure-factor file or explicit cutoffs. The low- and high-resolution fields appear only when explicit cutoffs are chosen.
+
 `RESOLUTION_SOURCE = "sf"` reads the resolution range from the structure-factor MTZ after `cif2mtz`. `mtzdump` reports that range. The mmCIF often has no `pdbx_d_res_low` or `pdbx_d_res_high`, so the MTZ is the source used here.
 
 For two datasets, the common shell is the poorer low-resolution limit and the poorer high-resolution limit.
 
 `RESOLUTION_SOURCE = "explicit"` ignores the MTZ range and uses `LOWRES` and `DMIN`. `LOWRES` is the larger number in ångströms. `DMIN` must be coarser than or equal to the high-resolution limit of the coefficients that are actually transformed. Very low-resolution terms are sensitive to bulk solvent and scaling. An explicit `LOWRES` is how you cut them when the MTZ range is wider than you want.
+
+The same section has a switch, **Set a custom FFT grid resolution for the final map (Å)**. It starts off, and `fft` then samples at the high-resolution limit of the coefficients. Turn it on and a smaller number extends the reciprocal box. Points beyond the coefficients are absent from the MTZ and contribute zero amplitude, so the real-space grid is denser. A number coarser than the coefficient limit is rejected. The extended-map name gains `_grid` and that limit, so the finer map is not reused in place of the ordinary one.
+
+**Extended map border (Å)** is also in that section. It is the padding described below. The default is 5 Å.
 
 ## The shared tail of every workflow
 
@@ -90,7 +96,7 @@ After the map exists, the workflows do the same three things, and then open the 
 
 ### Extend the map
 
-`fft` writes the map on the crystallographic grid. The app expands it so that it covers the coordinate file plus a border, `MAP_BORDER_A` (default 5 Å), repeating the unit cell where the model lies outside. The sigma on that map stays the value from `fft`. The coordinate file is the light model, the refined omit model, or the single structure, depending on the workflow.
+`fft` writes the map on the crystallographic grid. The app expands it so that it covers the coordinate file plus the extended map border, `MAP_BORDER_A` (default 5 Å), repeating the unit cell where the model lies outside. The sigma on that map stays the value from `fft`. The coordinate file is the light model, the refined omit model, or the single structure, depending on the workflow.
 
 ### Clip a site fragment
 

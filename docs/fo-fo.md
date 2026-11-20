@@ -64,7 +64,7 @@ NCYC 0
 
 and writes `{id}_calc.mtz` plus `{id}_checked.pdb`. Zero cycles compute \(F_c\) from the deposited coordinates and write the observed amplitudes as `FP` and `SIGFP`. The coordinates used for the figure stay at the deposited positions. This step is bookkeeping of the amplitude columns. The difference phase comes from the next step, not from this \(F_c\), unless the phase source is switched to a REFMAC phase.
 
-**5. Read the resolution shell.** With the resolution source set to the structure-factor files, `mtzdump` reports the range of each `{id}-sf.mtz`, and the job keeps the common shell: the poorer low-resolution limit and the poorer high-resolution limit. With an explicit shell, the two cutoffs on the form are used instead. The explicit pair stored for this workflow is 20.0–2.10 Å.
+**5. Read the resolution shell.** The Resolution section starts on the structure-factor files. `mtzdump` then reports the range of each `{id}-sf.mtz`, and the job keeps the common shell: the poorer low-resolution limit and the poorer high-resolution limit. Choose explicit cutoffs and the two fields appear. The explicit pair stored for this workflow is 20.0–2.10 Å. The FFT-grid switch in the same section starts off, so the final map is sampled at that high-resolution limit. Extended map border, default 5 Å, is the padding used in step 9.
 
 **6. Combine the two amplitudes and one phase.** `cad` copies four amplitude columns and one phase into `cad_6w1v_6w1o.mtz`:
 
@@ -101,16 +101,16 @@ Dark is `FP`, the reference. Light is `FPH1`, the second amplitude set in the SC
 \Delta\rho(\mathbf{r}) \propto \sum_{hkl} \big(|F_{\mathrm{LIGHT}}| - |F_{\mathrm{DARK}}|\big)\, e^{i\varphi_{\mathrm{ref}}}\, e^{-2\pi i\, \mathbf{h}\cdot\mathbf{r}}
 \]
 
-over the same resolution shell and writes `6w1v_minus_6w1o_{tag}.ccp4`:
+over the same resolution shell and writes `6w1v_minus_6w1o.ccp4`:
 
 ```text
-RESOLUTION <low> <high>
+RESOLUTION <low> <grid>
 LABIN F1=F_LIGHT SIG1=SIGF_LIGHT F2=F_DARK SIG2=SIGF_DARK PHI=PHI_REF
 ```
 
-`F1` minus `F2`, with phase `PHI`, is the signed difference Fourier. Positive density is stronger in `6w1v`. Negative density is stronger in `6w1o`. The map at this stage covers the asymmetric unit.
+`<grid>` is the high-resolution cutoff while the FFT-grid switch is off. Turn the switch on and a smaller number replaces `<grid>` only. Points beyond the coefficients contribute zero amplitude. The map name then gains `_grid` and that limit. `F1` minus `F2`, with phase `PHI`, is the signed difference Fourier. Positive density is stronger in `6w1v`. Negative density is stronger in `6w1o`. The map at this stage covers the asymmetric unit.
 
-**9. Cover the light model.** The app repeats the unit cell and pads the grid by the map border (default 5 Å) around the light coordinates, writing `*_extended.ccp4`. The sigma stays the value from `fft`. Later steps use that extended map.
+**9. Cover the light model.** The app repeats the unit cell and pads the grid by the extended map border (default 5 Å) around the light coordinates, writing `*_extended.ccp4`. The sigma stays the value from `fft`. Later steps use that extended map.
 
 **10. Export the site fragment.** Headless Coot loads the extended map as a difference map and the light coordinates, centres on the centroid of `OEY` A416 (and on any extra copies listed on the form), and writes a sphere of radius equal to the clip radius (default 10 Å). The σ value passed into the Coot script affects only the contour drawn inside that Coot session. The voxels in the `.map` file are the clipped map.
 
@@ -133,7 +133,7 @@ Outputs:
 | `pymol_6w1v_minus_6w1o_{site}.pml` | The scene |
 | `*_extended.ccp4` | The map that can be reopened in Coot |
 
-While an extended map of the same name is kept, a later run can reuse it and only redraw the figure. Turn recomputation on after changing the files, the phase source, or the resolution shell.
+While an extended map of the same name is kept, a later run can reuse it and only redraw the figure. Turn recomputation on after changing the files, the phase source, the resolution shell, or the FFT grid. A finer grid writes a different file name.
 
 ## Background
 
@@ -167,10 +167,11 @@ Six files, three per structure. The labels on the form are short names used in t
 | Choice | Effect |
 | --- | --- |
 | Phase source | Light validation phases (the Fig. 1a default), dark validation phases (the classical reference), or either zero-cycle REFMAC phase |
-| Resolution source and the two cutoffs | Shell used by `scaleit` and `fft`. The high-resolution cutoff should be no finer than the worse dataset |
+| Resolution source | Shell used by `scaleit` and `fft`. Explicit cutoffs show the two fields. The high-resolution cutoff should be no finer than the worse dataset |
+| Custom FFT grid for the final map | Off samples at that shell. On, a smaller number extends the `fft` grid with zero amplitude beyond the coefficients |
 | PNG sigma levels | Nested contours in the PyMOL figure. A single level is a cleaner figure than \(3\), \(4\), and \(5\) |
 | Viewer sigma minimum and maximum | Range of the one isosurface in the browser. The PNG levels are independent |
-| Map border, clip radius, carve | How much map is stored, how much is clipped, and how tightly the mesh hugs the atoms |
+| Extended map border, clip radius, carve | How much map is stored, how much is clipped, and how tightly the mesh hugs the atoms |
 | Recompute the map | Off reuses the extended map so contour and camera edits stay cheap |
 
 The full list is on the [parameters](parameters.md) page. Shared contour and clipping behaviour is on the [background](concepts.md) page.
@@ -184,7 +185,7 @@ If the mesh is empty, lower the contour (try `3` alone). If the cage swallows th
 ## Adapting it
 
 1. Point the six file fields at the new pair, or upload the files. A `.gz` name is decompressed automatically.
-2. Set the two labels and the phase source. Leave the resolution source on the structure-factor files for the common shell, or switch to explicit cutoffs.
+2. Set the two labels and the phase source. Leave the resolution source on the structure-factor files for the common shell, or switch to explicit cutoffs and set the two fields. Leave the FFT-grid switch off unless the final map should be sampled more finely than the coefficients.
 3. List hetero residues, then set the chain, residue, and neighbouring residues.
 4. Recompute the map the first time. Leave recomputation off while you tune σ and the view.
 

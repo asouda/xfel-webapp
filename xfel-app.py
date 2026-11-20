@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import subprocess
 import threading
 import time
 import traceback
@@ -21,6 +22,7 @@ from xfel_web.ccp4 import (
     scan_hetatm,
     viewer_pymol_text,
 )
+from prepare_reconstruction_summary import parse_residues, prepare
 from xfel_web.forms import FormError, decompress_gzip, parse_job
 from xfel_web.interrupt import CalculationStopped, Interrupt, activate, deactivate
 from xfel_web.pipelines import RUNNERS
@@ -121,8 +123,10 @@ WORKFLOWS = {
             "refmac_ncyc": "0",
             "distance_sigma": "0.5",
             "angle_sigma": "25",
+            "dihedral_sigma": "10",
             "distance_restraints": "MN1 O5\nMN3 O5\nMN4 O5\nCA1 O5",
             "angle_restraints": "MN3 O5 MN4\nMN3 O5 CA1\nMN4 O5 CA1\nO5 CA1 O1\nO2 MN3 O5\nO3 MN3 O5\nO4 MN3 O5\nO4 MN4 O5",
+            "dihedral_restraints": "",
             "lowres": "30",
             "dmin": "1.89",
             "png_width": "1600",
@@ -160,8 +164,10 @@ WORKFLOWS = {
             "refmac_ncyc": "0",
             "distance_sigma": "0.5",
             "angle_sigma": "25",
+            "dihedral_sigma": "10",
             "distance_restraints": "",
             "angle_restraints": "",
+            "dihedral_restraints": "",
             "n_atoms": "1",
             "n_check_map": "0",
             "harmonic_sigma": "0.1",
@@ -606,13 +612,14 @@ def job_status(job_id: str):
                 viewer["carve"] = links["carve"]
             if viewer.get("light_model"):
                 viewer["light_model_url"] = f"/api/jobs/{job_id}/viewer/light"
+        figure = Path(result.get("figure") or "")
         public_result = {
             "caption": result["caption"],
             "output_dir": result["output_dir"],
             "final_map": result["final_map"],
             "fragment": result["fragment"],
             "pymol_script": result["pymol_script"],
-            "figure_url": f"/api/jobs/{job_id}/figure",
+            "figure_url": f"/api/jobs/{job_id}/figure" if figure.is_file() else None,
             "viewer": viewer,
             "files": result["files"],
             "steps": result.get("steps"),
@@ -705,6 +712,55 @@ def job_snapshot(job_id: str):
         files.append({"role": "Viewer snapshot", "path": str(dest)})
         _save_job(job)
     return jsonify({"path": str(dest), "name": dest.name})
+
+
+@app.post("/api/jobs/<job_id>/summary")
+def job_summary(job_id: str):
+    """Write summary/ for a finished reconstruction, including the Maestro archive."""
+    job = _get_job(job_id)
+    if job.get("workflow") != "reconstruct":
+        return jsonify({"error": "This calculation is not a reconstruction."}), 400
+    if job.get("status") != "succeeded":
+        return jsonify({"error": "The reconstruction has not finished."}), 400
+    result = job.get("result") or {}
+    output_dir = Path(result.get("output_dir") or "")
+    if not output_dir.is_dir():
+        return jsonify({"error": "The output directory for this calculation is not available."}), 400
+    payload = request.get_json(silent=True) or {}
+    resid_text = payload.get("resid") if isinstance(payload, dict) else None
+    residues = None
+    if isinstance(resid_text, str) and resid_text.strip():
+        try:
+            residues = parse_residues(resid_text)
+        except SystemExit as exc:
+            message = exc.code if isinstance(exc.code, str) else "The residue list could not be read."
+            return jsonify({"error": message}), 400
+    with _JOBS_LOCK:
+        if job.get("summary_running"):
+            return jsonify({"error": "A summary is already being written."}), 400
+        job["summary_running"] = True
+    try:
+        summary = prepare(output_dir, residues)
+    except SystemExit as exc:
+        message = exc.code if isinstance(exc.code, str) else "The summary could not be written."
+        return jsonify({"error": message}), 400
+    except subprocess.CalledProcessError:
+        return jsonify({
+            "error": "Schrödinger could not write the Maestro project. The server log has the details.",
+        }), 400
+    finally:
+        with _JOBS_LOCK:
+            job["summary_running"] = False
+    with _JOBS_LOCK:
+        files = result.setdefault("files", [])
+        role = "Reconstruction summary"
+        if not any(item.get("role") == role for item in files):
+            files.append({"role": role, "path": str(summary)})
+        _save_job(job)
+    return jsonify({
+        "summary": str(summary),
+        "maestro": str(summary / "loadMaestro.prjzip"),
+    })
 
 
 @app.post("/api/jobs/<job_id>/pymol-script")

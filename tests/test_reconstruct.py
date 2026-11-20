@@ -9,7 +9,7 @@ from pathlib import Path
 import gemmi
 import numpy as np
 
-from xfel_web.ccp4 import reasonable_bond_commands, reasonable_bond_specs
+from xfel_web.ccp4 import Ccp4Session, reasonable_bond_commands, reasonable_bond_specs
 from xfel_web.pipelines import _viewer_scene
 from xfel_web.restraints import external_harmonic_keywords
 from xfel_web.forms import FormError, parse_job
@@ -344,6 +344,7 @@ class LoopTests(unittest.TestCase):
             )
             calls.append(Path(cfg["files"]["dark_pdb"]).read_text())
             self.last_harmonics.append(cfg.get("harmonic_atoms"))
+            self.render_flags.append(bool(cfg.get("render_png")))
             return {
                 "caption": "omit caption",
                 "figure": str(dest),
@@ -357,6 +358,7 @@ class LoopTests(unittest.TestCase):
 
         logs = []
         self.last_harmonics = []
+        self.render_flags = []
         result = run_reconstruct(
             {
                 "output_dir": root / "out",
@@ -516,6 +518,51 @@ class LoopTests(unittest.TestCase):
                 (root / "out" / "omit_reconstructed_final.pdb").read_text(encoding="utf-8"),
                 (root / "out" / "r-iteration-02" / "omit_refined_step02.pdb").read_text(encoding="utf-8"),
             )
+
+    def test_pymol_draws_a_png_only_when_the_run_pauses_for_a_map_check(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "spike.ccp4"
+            _spike_map(source)
+            peak = locate_peak(source, 3, False, 3)
+
+            def pause(partial):
+                return None
+
+            self._run(root, peak["xyz"], [])
+            self.assertEqual(self.render_flags, [False, False])
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "spike.ccp4"
+            _spike_map(source)
+            peak = locate_peak(source, 3, False, 3)
+            self._run(root, peak["xyz"], [], n_check=1, pause=pause)
+            self.assertEqual(self.render_flags, [True, False])
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "spike.ccp4"
+            _spike_map(source)
+            peak = locate_peak(source, 3, False, 3)
+            self._run(root, peak["xyz"], [], n_check=2, pause=pause)
+            self.assertEqual(self.render_flags, [False, False])
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "spike.ccp4"
+            _spike_map(source)
+            peak = locate_peak(source, 3, False, 3)
+            self._run(root, peak["xyz"], [], n_check=1)
+            self.assertEqual(self.render_flags, [False, False])
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "spike.ccp4"
+            _spike_map(source)
+            peak = locate_peak(source, 3, False, 3)
+            self._run(root, peak["xyz"], [], n_atoms=2, n_check=2, pause=pause)
+            self.assertEqual(self.render_flags, [False, True])
 
     def test_a_map_check_pauses_before_the_atom_is_added(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -687,11 +734,16 @@ class ReconstructFormTests(unittest.TestCase):
             cfg = parse_job("reconstruct", self._form(root), {}, root)
         self.assertEqual(cfg["n_atoms"], 2)
         self.assertEqual(cfg["n_check_map"], 0)
+        self.assertEqual(cfg["refmac_ncyc"], 0)
+        self.assertEqual(cfg["refmac_bref"], "ISOT")
+        self.assertEqual(cfg["refmac_type"], "REST")
         self.assertEqual(cfg["neighborhood_size"], 3)
         self.assertFalse(cfg["spline_seed"])
         self.assertEqual(cfg["spline_order"], 3)
         self.assertEqual(cfg["distance_restraints"], [])
         self.assertEqual(cfg["angle_restraints"], [])
+        self.assertEqual(cfg["dihedral_restraints"], [])
+        self.assertEqual(cfg["dihedral_sigma"], 10.0)
         self.assertIsNone(cfg["custom_dictionary"])
         self.assertTrue(cfg["geometry_bonds"])
         self.assertFalse(cfg["show_oec_bonds"])
@@ -701,12 +753,34 @@ class ReconstructFormTests(unittest.TestCase):
         self.assertEqual(cfg["harmonic_sigma"], 0.1)
         self.assertEqual(cfg["candidate_atoms"], "missing")
 
+    def test_spline_order_is_read_only_when_the_spline_maximum_is_on(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            off = parse_job("reconstruct", self._form(root, spline_order="7"), {}, root)
+            self.assertFalse(off["spline_seed"])
+            self.assertEqual(off["spline_order"], 3)
+            with self.assertRaises(FormError):
+                parse_job("reconstruct", self._form(root, spline_seed="on", spline_order="7"), {}, root)
+            on = parse_job("reconstruct", self._form(root, spline_seed="on", spline_order="2"), {}, root)
+        self.assertTrue(on["spline_seed"])
+        self.assertEqual(on["spline_order"], 2)
+
     def test_a_non_positive_harmonic_sigma_is_rejected_when_the_option_is_on(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             with self.assertRaises(FormError):
-                parse_job("reconstruct", self._form(root, harmonic_added="on", harmonic_sigma="0"), {}, root)
-            cfg = parse_job("reconstruct", self._form(root, harmonic_added="on", harmonic_sigma="0.1"), {}, root)
+                parse_job(
+                    "reconstruct",
+                    self._form(root, use_refmac="on", harmonic_added="on", harmonic_sigma="0"),
+                    {},
+                    root,
+                )
+            cfg = parse_job(
+                "reconstruct",
+                self._form(root, use_refmac="on", harmonic_added="on", harmonic_sigma="0.1"),
+                {},
+                root,
+            )
         self.assertTrue(cfg["harmonic_added"])
         self.assertEqual(cfg["harmonic_sigma"], 0.1)
 
@@ -779,3 +853,109 @@ class RefmacRfactorTests(unittest.TestCase):
 
     def test_a_missing_log_has_no_r_factors(self):
         self.assertEqual(read_refmac_rfactors(Path("/no/such/refmac.log")), (None, None))
+
+
+class PymolScriptTests(unittest.TestCase):
+    def test_the_script_is_saved_and_pymol_runs_only_when_a_png_is_requested(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            fragment = root / "fragment.ccp4"
+            _spike_map(fragment)
+            model = root / "model.pdb"
+            model.write_text(_pdb_line(1, "MN1", 16, 16, 16, "MN") + "\nEND\n")
+            session = Ccp4Session.__new__(Ccp4Session)
+            session.output_dir = root
+            session.pymol = Path("pymol")
+            messages = []
+            session._sink = messages.append
+            called = []
+
+            def run_command(*args, **kwargs):
+                called.append(args)
+
+            session.run_command = run_command
+            pml = root / "scene.pml"
+            png = root / "scene.png"
+            common = dict(
+                fragment=fragment,
+                model_pdb=model,
+                map_name="DIFF",
+                png_path=png,
+                pml_path=pml,
+                site_chain="A",
+                site_resi=416,
+                extra_residues=[],
+                positive_levels=[3.5],
+                negative_levels=[3.5],
+                positive_colors=["green"],
+                negative_colors=["red"],
+                contour_mode="sigma",
+                surface="mesh",
+                carve=3.0,
+                show_oec_bonds=False,
+                draw_distances=False,
+                oec_pairs=[],
+                png_width=800,
+                png_height=600,
+                ray_trace=True,
+                geometry_bonds=False,
+            )
+            session.render_figure(**common, render_png=False)
+            self.assertTrue(pml.is_file())
+            self.assertIn('load "', pml.read_text())
+            render = pml.with_name("scene_render.pml")
+            self.assertTrue(render.is_file())
+            self.assertIn("png ", render.read_text())
+            self.assertFalse(png.is_file())
+            self.assertEqual(called, [])
+            self.assertTrue(any("PyMOL was not run" in line for line in messages))
+
+            png.write_bytes(b"\x89PNG\r\n\x1a\n")
+            session.render_figure(**common, render_png=True)
+            self.assertEqual(len(called), 1)
+            self.assertEqual(called[0][0][0], "pymol")
+
+    def test_the_saved_png_is_offered_only_when_the_file_exists(self):
+        import importlib.util
+
+        module_path = Path(__file__).resolve().parents[1] / "xfel-app.py"
+        spec = importlib.util.spec_from_file_location("xfel_app_figure", module_path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        job_id = "d" * 32
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            figure = root / "figure.png"
+            module._JOBS[job_id] = {
+                "id": job_id,
+                "status": "paused",
+                "workflow": "reconstruct",
+                "created": 0,
+                "log_path": str(root / "log.txt"),
+                "result": {
+                    "caption": "paused",
+                    "output_dir": str(root),
+                    "final_map": str(root / "map.ccp4"),
+                    "fragment": str(root / "fragment.ccp4"),
+                    "pymol_script": str(root / "scene.pml"),
+                    "figure": str(figure),
+                    "files": [],
+                    "view_id": "checkpoint-1",
+                    "checkpoint": True,
+                    "iteration": 1,
+                },
+            }
+            client = module.app.test_client()
+            try:
+                missing = client.get(f"/api/jobs/{job_id}")
+                self.assertEqual(missing.status_code, 200)
+                self.assertIsNone(missing.get_json()["result"]["figure_url"])
+                figure.write_bytes(b"\x89PNG\r\n\x1a\n")
+                present = client.get(f"/api/jobs/{job_id}")
+                self.assertEqual(
+                    present.get_json()["result"]["figure_url"],
+                    f"/api/jobs/{job_id}/figure",
+                )
+            finally:
+                module._JOBS.pop(job_id, None)
+                module._job_path(job_id).unlink(missing_ok=True)

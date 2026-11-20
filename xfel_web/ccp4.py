@@ -1563,6 +1563,7 @@ except NameError:
         png_height: int,
         ray_trace: bool,
         geometry_bonds: bool = False,
+        render_png: bool = True,
     ) -> None:
         stats = ccp4_map_stats(fragment)
         self.emit(
@@ -1732,6 +1733,11 @@ except NameError:
         render_path = pml_path.with_name(pml_path.stem + "_render.pml")
         png_cmd = f'png {png_path}, {png_width}, {png_height}, dpi=200, ray={ray_flag}'
         render_path.write_text(f"@{pml_path.name}\n{png_cmd}\nquit\n")
+        if not render_png:
+            self.emit(
+                "PyMOL was not run. The script is saved, and a PNG is drawn only when the calculation pauses for a map check."
+            )
+            return
         self.emit("→ pymol  (pymol_render.log)")
         log_path = self.output_dir / "pymol_render.log"
 

@@ -38,19 +38,6 @@ def _float(form, name: str, label: str) -> float:
         raise FormError(f"{label} must be a number.") from exc
 
 
-def _optional_float(form, name: str, label: str) -> float | None:
-    raw = _text(form, name)
-    if not raw:
-        return None
-    try:
-        value = float(raw)
-    except ValueError as exc:
-        raise FormError(f"{label} must be a number.") from exc
-    if not math.isfinite(value):
-        raise FormError(f"{label} must be a finite number.")
-    return value
-
-
 def _int(form, name: str, label: str) -> int:
     raw = _text(form, name)
     try:
@@ -254,6 +241,72 @@ def parse_angle_restraints(text: str) -> list[tuple]:
     return specs
 
 
+def parse_dihedral_restraints(text: str) -> list[tuple]:
+    specs = []
+    for line_no, raw in enumerate(text.splitlines(), start=1):
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        parts = line.replace(",", " ").split()
+        if len(parts) not in {4, 5, 6}:
+            raise FormError(
+                f"Dihedral line {line_no} should be 'ATOM1 ATOM2 ATOM3 ATOM4', "
+                "optionally followed by the angle and a sigma, both in degrees."
+            )
+        atoms = tuple(part.upper() for part in parts[:4])
+        try:
+            if len(parts) == 4:
+                specs.append(atoms)
+            elif len(parts) == 5:
+                specs.append((*atoms, float(parts[4])))
+            else:
+                specs.append((*atoms, float(parts[4]), float(parts[5])))
+        except ValueError as exc:
+            raise FormError(f"Dihedral line {line_no}: angle and sigma must be numbers, in degrees.") from exc
+    return specs
+
+
+def _restraint_block(form, flag: str, parser, text_name: str, sigma_name: str, sigma_label: str, default_sigma: float):
+    """Restraints for one switch. Off keeps the default sigma and applies nothing."""
+    if not _flag(form, flag):
+        return [], default_sigma
+    try:
+        specs = parser(_text(form, text_name))
+    except ValueError as exc:
+        raise FormError(str(exc)) from exc
+    sigma = _float(form, sigma_name, sigma_label)
+    if sigma <= 0:
+        raise FormError(f"{sigma_label} must be positive.")
+    return specs, sigma
+
+
+def _active_restraints(form, refine: bool):
+    """External restraints are parsed only while REFMAC refinement is on."""
+    if not refine:
+        return [], 0.5, [], 25.0, [], 10.0
+    distances, distance_sigma = _restraint_block(
+        form, "use_distance_restraints", parse_distance_restraints,
+        "distance_restraints", "distance_sigma", "Distance sigma", 0.5,
+    )
+    angles, angle_sigma = _restraint_block(
+        form, "use_angle_restraints", parse_angle_restraints,
+        "angle_restraints", "angle_sigma", "Angle sigma", 25.0,
+    )
+    dihedrals, dihedral_sigma = _restraint_block(
+        form, "use_dihedral_restraints", parse_dihedral_restraints,
+        "dihedral_restraints", "dihedral_sigma", "Dihedral sigma", 10.0,
+    )
+    return distances, distance_sigma, angles, angle_sigma, dihedrals, dihedral_sigma
+
+
+def _custom_dictionary(form, files, output_dir: Path, project: Path):
+    if not _flag(form, "use_custom_dictionary"):
+        return None
+    return resolve_optional_input_file(
+        form, files, "custom_dictionary", "custom dictionary", output_dir, project
+    )
+
+
 def resolve_output_dir(text: str, project: Path) -> Path:
     if not text.strip():
         raise FormError("Choose an output directory.")
@@ -361,16 +414,64 @@ def resolve_input_file(form, files, key: str, label: str, output_dir: Path, proj
     return path
 
 
+_BREF_TOKENS = {"ISOT", "ANIS", "MIXE", "OVER"}
+_TYPE_TOKENS = {"REST", "UNRE"}
+
+
+def _resolution_limits(form, source: str) -> tuple[float | None, float | None]:
+    """Explicit cutoffs are required only when that source is selected."""
+    if source != "explicit":
+        return None, None
+    lowres = _float(form, "lowres", "Low-resolution cutoff")
+    dmin = _float(form, "dmin", "High-resolution cutoff")
+    if not (lowres > dmin > 0):
+        raise FormError(
+            "The low-resolution cutoff must be a larger number of ångströms than the high-resolution cutoff."
+        )
+    return lowres, dmin
+
+
+def _fft_grid(form, source: str, lowres: float | None, dmin: float | None) -> float | None:
+    """A custom FFT grid is read only while its switch is on."""
+    if not _flag(form, "use_fft_grid"):
+        return None
+    value = _float(form, "fft_dmin", "FFT grid resolution for the final map")
+    if source == "explicit":
+        try:
+            fft_grid_resolution(lowres, dmin, value)
+        except ValueError as exc:
+            raise FormError(str(exc)) from exc
+    return value
+
+
+def _refmac_settings(form) -> tuple[int, str, str, bool]:
+    """Cycles, ``REFI BREF``, ``REFI TYPE``, and whether the section is on.
+
+    The section off means zero cycles. The keyword defaults are still stored
+    so a later zero-cycle job has a complete protocol.
+    """
+    if not _flag(form, "use_refmac"):
+        return 0, "ISOT", "REST", False
+    cycles = _int(form, "refmac_ncyc", "REFMAC cycles")
+    if cycles < 0:
+        raise FormError("REFMAC cycles cannot be negative. Use 0 to calculate the map without moving atoms.")
+    bref = (_text(form, "refmac_bref") or "ISOT").upper()
+    if bref not in _BREF_TOKENS:
+        raise FormError("B-factor refinement must be ISOTropic, ANISotropic, MIXEd, or OVERall.")
+    kind = (_text(form, "refmac_type") or "REST").upper()
+    if kind not in _TYPE_TOKENS:
+        raise FormError("Refinement type must be RESTrained or UNREstrained.")
+    return cycles, bref, kind, True
+
+
 def _common(form, project: Path) -> dict:
     output_dir = resolve_output_dir(_text(form, "output_dir"), project)
     ccp4_root = Path(_text(form, "ccp4_root") or "/Applications/ccp4-9").expanduser()
     resolution_source = _text(form, "resolution_source") or "sf"
     if resolution_source not in {"sf", "explicit"}:
         raise FormError("Resolution source must be the structure-factor file or explicit cutoffs.")
-    lowres = _float(form, "lowres", "Low-resolution cutoff")
-    dmin = _float(form, "dmin", "High-resolution cutoff")
-    if resolution_source == "explicit" and not (lowres > dmin > 0):
-        raise FormError("The low-resolution cutoff must be a larger number of ångströms than the high-resolution cutoff.")
+    lowres, dmin = _resolution_limits(form, resolution_source)
+    fft_dmin = _fft_grid(form, resolution_source, lowres, dmin)
     chain = _chain(form)
     resi = _int(form, "site_resi", "Site residue")
     label = _text(form, "site_label") or "site"
@@ -393,7 +494,8 @@ def _common(form, project: Path) -> dict:
         "resolution_source": resolution_source,
         "lowres": lowres,
         "dmin": dmin,
-        "map_border": _float(form, "map_border", "Map border"),
+        "fft_dmin": fft_dmin,
+        "map_border": _float(form, "map_border", "Extended map border"),
         "site_chain": chain,
         "site_resi": resi,
         "site_label": label,
@@ -455,36 +557,25 @@ def parse_job(workflow: str, form, files, project: Path) -> dict:
         )
     elif workflow == "refinement":
         positive, negative = _difference_levels(form)
-        cycles = _int(form, "refmac_ncyc", "REFMAC cycles")
-        if cycles < 0:
-            raise FormError("REFMAC cycles cannot be negative. Use 0 to calculate the map without moving atoms.")
-        fft_dmin = _optional_float(form, "fft_dmin", "FFT grid resolution for the final map")
-        if fft_dmin is not None and cfg["resolution_source"] == "explicit":
-            try:
-                fft_grid_resolution(cfg["lowres"], cfg["dmin"], fft_dmin)
-            except ValueError as exc:
-                raise FormError(str(exc)) from exc
-        try:
-            distances = parse_distance_restraints(_text(form, "distance_restraints"))
-            angles = parse_angle_restraints(_text(form, "angle_restraints"))
-        except ValueError as exc:
-            raise FormError(str(exc)) from exc
+        cycles, bref, refi_type, refine = _refmac_settings(form)
+        distances, distance_sigma, angles, angle_sigma, dihedrals, dihedral_sigma = _active_restraints(form, refine)
         center_mode, center_xyz = _map_center(form)
-        custom_dictionary = resolve_optional_input_file(
-            form, files, "custom_dictionary", "custom dictionary", output_dir, project
-        )
+        custom_dictionary = _custom_dictionary(form, files, output_dir, project) if refine else None
         cfg.update(
             {
                 "dark_id": _identifier(form, "dark_id", "Omit-model name"),
                 "light_id": _identifier(form, "light_id", "Observed-data name"),
                 "refmac_ncyc": cycles,
-                "fft_dmin": fft_dmin,
+                "refmac_bref": bref,
+                "refmac_type": refi_type,
                 "map_center": center_mode,
                 "map_center_xyz": center_xyz,
                 "distance_restraints": distances,
-                "distance_sigma": _float(form, "distance_sigma", "Distance sigma"),
+                "distance_sigma": distance_sigma,
                 "angle_restraints": angles,
-                "angle_sigma": _float(form, "angle_sigma", "Angle sigma"),
+                "angle_sigma": angle_sigma,
+                "dihedral_restraints": dihedrals,
+                "dihedral_sigma": dihedral_sigma,
                 "custom_dictionary": custom_dictionary,
                 "positive_levels": positive,
                 "negative_levels": negative,
@@ -497,33 +588,24 @@ def parse_job(workflow: str, form, files, project: Path) -> dict:
         )
     elif workflow == "reconstruct":
         positive, negative = _difference_levels(form)
-        cycles = _int(form, "refmac_ncyc", "REFMAC cycles")
-        if cycles < 0:
-            raise FormError("REFMAC cycles cannot be negative. Use 0 to calculate the map without moving atoms.")
+        cycles, bref, refi_type, refine = _refmac_settings(form)
         n_atoms = _int(form, "n_atoms", "Number of atoms to reconstruct")
         if n_atoms < 1:
             raise FormError("Number of atoms to reconstruct must be at least 1.")
         n_check = _int(form, "n_check_map", "Map check interval")
         if n_check < 0:
             raise FormError("Map check interval cannot be negative. Use 0 to show only the final model.")
-        spline_order = _int(form, "spline_order", "Spline order")
-        if not 0 <= spline_order <= 5:
-            raise FormError("Spline order must be an integer from 0 through 5.")
-        fft_dmin = _optional_float(form, "fft_dmin", "FFT grid resolution for the final map")
-        if fft_dmin is not None and cfg["resolution_source"] == "explicit":
-            try:
-                fft_grid_resolution(cfg["lowres"], cfg["dmin"], fft_dmin)
-            except ValueError as exc:
-                raise FormError(str(exc)) from exc
-        try:
-            distances = parse_distance_restraints(_text(form, "distance_restraints"))
-            angles = parse_angle_restraints(_text(form, "angle_restraints"))
-        except ValueError as exc:
-            raise FormError(str(exc)) from exc
+        spline_seed = _flag(form, "spline_seed")
+        if spline_seed:
+            spline_order = _int(form, "spline_order", "Spline order")
+            if not 0 <= spline_order <= 5:
+                raise FormError("Spline order must be an integer from 0 through 5.")
+        else:
+            spline_order = 3
+        distances, distance_sigma, angles, angle_sigma, dihedrals, dihedral_sigma = _active_restraints(form, refine)
         center_mode, center_xyz = _map_center(form)
-        custom_dictionary = resolve_optional_input_file(
-            form, files, "custom_dictionary", "custom dictionary", output_dir, project
-        )
+        custom_dictionary = _custom_dictionary(form, files, output_dir, project) if refine else None
+        harmonic_added = refine and _flag(form, "harmonic_added")
         cfg["show_oec_bonds"] = False
         cfg["ray_trace"] = True
         cfg["recompute_map"] = True
@@ -533,23 +615,26 @@ def parse_job(workflow: str, form, files, project: Path) -> dict:
                 "dark_id": _identifier(form, "dark_id", "Omit-model name"),
                 "light_id": _identifier(form, "light_id", "Observed-data name"),
                 "refmac_ncyc": cycles,
-                "fft_dmin": fft_dmin,
+                "refmac_bref": bref,
+                "refmac_type": refi_type,
                 "map_center": center_mode,
                 "map_center_xyz": center_xyz,
                 "distance_restraints": distances,
-                "distance_sigma": _float(form, "distance_sigma", "Distance sigma"),
+                "distance_sigma": distance_sigma,
                 "angle_restraints": angles,
-                "angle_sigma": _float(form, "angle_sigma", "Angle sigma"),
+                "angle_sigma": angle_sigma,
+                "dihedral_restraints": dihedrals,
+                "dihedral_sigma": dihedral_sigma,
                 "custom_dictionary": custom_dictionary,
                 "positive_levels": positive,
                 "negative_levels": negative,
                 "n_atoms": n_atoms,
                 "n_check_map": n_check,
                 "candidate_atoms": _candidate_atoms(form),
-                "harmonic_added": _flag(form, "harmonic_added"),
-                "harmonic_sigma": _harmonic_sigma(form),
+                "harmonic_added": harmonic_added,
+                "harmonic_sigma": _harmonic_sigma(form) if harmonic_added else 0.1,
                 "neighborhood_size": _odd_neighborhood(form),
-                "spline_seed": _flag(form, "spline_seed"),
+                "spline_seed": spline_seed,
                 "spline_order": spline_order,
                 "geometry_bonds": True,
                 "viewer_light_label": "Reference site",
