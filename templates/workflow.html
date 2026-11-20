@@ -535,6 +535,18 @@
     <h2>Reconstruction steps</h2>
     <p class="hint">Each completed iteration is added here while the calculation continues. The R-factor and R-free are the final values from that iteration’s REFMAC job. On a search step the atom is inserted after that job, at the coordinates of the peak. Distance to reference is the distance from the peak to that atom in the reference model, including when the atom was already in the working model. In that case the Note gives the distance from the atom’s previous coordinates to the peak. The last row of a finished run is the residual map, which adds no atom.</p>
     <div class="table-wrap" id="reconstruction-steps-table"></div>
+    {% if spec.slug == 'reconstruct' %}
+    <div class="summary-actions" id="summary-actions" hidden>
+      <button type="button" class="pill solid" id="summary-btn">Prepare summary</button>
+      <label class="summary-resid" for="summary-resid">Residues
+        <input id="summary-resid" placeholder="A602,A170,A189,C354" autocomplete="off" spellcheck="false">
+        <span class="hint">Optional. Chain and residue number, comma-separated, as in <code>--resid</code>. Leave this blank to use the residues selected in the PyMOL scripts. A list here replaces that selection.</span>
+      </label>
+      <p class="hint">Writes <code>summary/</code> in the output directory. The coordinates and maps there are links to the iteration files. The Maestro project keeps its own copy of the shown residues and of the maps.</p>
+      <p class="error" id="summary-error" hidden></p>
+      <p class="hint" id="summary-result" hidden></p>
+    </div>
+    {% endif %}
   </section>
 </section>
 {% endblock %}
@@ -544,5 +556,5 @@
 </script>
 <script src="{{ url_for('static', filename='vendor/ngl-2.5.0.js') }}?v=2"></script>
 <script src="{{ url_for('static', filename='js/sigma-color.js') }}?v=1"></script>
-<script src="{{ url_for('static', filename='js/workflow.js') }}?v=43"></script>
+<script src="{{ url_for('static', filename='js/workflow.js') }}?v=45"></script>
 {% endblock %}

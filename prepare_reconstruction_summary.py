@@ -3,11 +3,13 @@
 
 The summary directory receives the light reference PDB, each iteration's
 refined model with the newly placed atom, the extended omit-map fragment, and
-the reconstructed final PDB. PDB files keep only the residues named with
-``--resid``, or, when that option is omitted, the residues selected in the
-PyMOL scripts under ``r-iteration-##``. Iteration files are stored with
-``step##`` at the start of the name, so the viewers list them as step01,
-step02, step03, and so on. VMD and ChimeraX scripts in that directory load the reference, then each
+the reconstructed final PDB. The coordinates and maps in that folder are
+symbolic links to the run, not copies. VMD and ChimeraX show the residues
+named with ``--resid``, or, when that option is omitted, the residues
+selected in the PyMOL scripts under ``r-iteration-##``. The Maestro project
+stores its own copy of those residues and of each map, so the archive can be
+moved on its own. Iteration files are stored with ``step##`` at the start of
+the name, so the viewers list them as step01, step02, step03, and so on. VMD and ChimeraX scripts in that directory load the reference, then each
 added model and its map, and the reconstructed final model last. The atom
 placed in an iteration is bright green. The final model is not: nothing was
 added in that file. A Maestro project archive has one entry per step, with
@@ -78,6 +80,9 @@ class FilteredPdb:
     highlight_index: int | None
     newest_source: AtomRecord | None
     newest_source_kept: bool
+    # Clipped coordinates for the Maestro project. ``path`` is the summary
+    # link the viewer scripts open, which still points at the full source file.
+    structure_path: Path | None = None
 
 
 @dataclass
@@ -419,12 +424,41 @@ def map_contour(raw: bytes) -> tuple[float, float, float]:
     return stdev, used, level
 
 
+def _link_file(source: Path, dest: Path) -> None:
+    """Replace ``dest`` with a relative symbolic link to ``source``.
+
+    An existing regular file at ``dest`` is removed. The link target is not.
+    """
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    if dest.is_symlink() or dest.exists():
+        dest.unlink()
+    dest.symlink_to(Path(os.path.relpath(source, dest.parent)))
+
+
 def copy_map(source: Path, dest: Path) -> MapCopy:
+    """Record contour statistics and link ``dest`` at ``source``."""
     raw = source.read_bytes()
     stdev, used, level = map_contour(raw)
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    dest.write_bytes(raw)
+    _link_file(source, dest)
     return MapCopy(path=dest, stdev=stdev, level=level, sigma=used)
+
+
+def _place_pdb(
+    source: Path,
+    dest: Path,
+    clipped_dir: Path,
+    residues: list[Residue],
+    *,
+    keep_newest: bool = False,
+) -> FilteredPdb:
+    """Link ``dest`` at the full PDB and keep a clipped copy for Maestro."""
+    filtered = filter_pdb(
+        source, clipped_dir / dest.name, residues, keep_newest=keep_newest
+    )
+    _link_file(source, dest)
+    filtered.structure_path = filtered.path
+    filtered.path = dest
+    return filtered
 
 
 def summary_filename(source_name: str) -> str:
@@ -513,6 +547,45 @@ def _data_name(path: Path) -> str:
     return path.name
 
 
+def _displayed_residues(
+    residues: list[Residue], extra: AtomRecord | None = None
+) -> list[Residue]:
+    """Residues to draw, including a placed atom that falls outside the list."""
+    shown = list(residues)
+    if extra is None:
+        return shown
+    if (extra.chain, extra.resseq) not in {
+        (residue.chain, residue.resseq) for residue in residues
+    }:
+        shown.append(Residue(extra.chain, extra.resseq))
+    return shown
+
+
+def _vmd_selection(residues: list[Residue]) -> str:
+    if not residues:
+        return "none"
+    return " or ".join(
+        f"(chain {residue.chain} and resid {residue.resseq})" for residue in residues
+    )
+
+
+def _cx_residue_spec(model_id: int, residues: list[Residue]) -> str:
+    grouped: dict[str, list[int]] = {}
+    order: list[str] = []
+    for residue in residues:
+        if residue.chain not in grouped:
+            grouped[residue.chain] = []
+            order.append(residue.chain)
+        if residue.resseq not in grouped[residue.chain]:
+            grouped[residue.chain].append(residue.resseq)
+    if not order:
+        return f"#{model_id}"
+    return "|".join(
+        f"#{model_id}/{chain}:{','.join(str(number) for number in grouped[chain])}"
+        for chain in order
+    )
+
+
 def _tcl_quote(name: str) -> str:
     if "{" in name or "}" in name:
         raise SystemExit(f"VMD cannot quote this path safely: {name}")
@@ -528,6 +601,7 @@ def write_vmd(
     references: list[FilteredPdb],
     steps: list[IterationSummary],
     finals: list[FilteredPdb],
+    residues: list[Residue],
 ) -> None:
     lines = [
         "# loadVMD.cmd",
@@ -539,6 +613,8 @@ def write_vmd(
         "# PDB and map paths are relative to this directory. vmd -e does not",
         "# record the script location, so start VMD from this directory. Sourcing",
         "# the script by its full path does change to that directory.",
+        "# Those names are symbolic links to the reconstruction files.",
+        "# Only the residues named below are drawn.",
         "#",
         "# The light reference is ball-and-stick in silver, material Ghost.",
         "# Each refined_added model is ball-and-stick colored by atom name.",
@@ -580,16 +656,16 @@ def write_vmd(
         "    mol addrep $molid",
         "}",
         "",
-        "proc load_reference {filepath} {",
+        "proc load_reference {filepath selection} {",
         "    global SILVER",
         "    set molid [mol new $filepath type pdb waitfor all]",
         "    clear_reps $molid",
-        "    show_ballstick $molid all $SILVER Ghost",
+        "    show_ballstick $molid $selection $SILVER Ghost",
         "    mol rename $molid [file tail $filepath]",
         "    return $molid",
         "}",
         "",
-        "proc load_added {filepath highlight} {",
+        "proc load_added {filepath selection serial} {",
         "    global BRIGHT",
         "    set molid [mol new $filepath type pdb waitfor all]",
         "    clear_reps $molid",
@@ -599,35 +675,30 @@ def write_vmd(
         "        molinfo $molid set drawn 0",
         "        return $molid",
         "    }",
-        "    if {$highlight < 0 || $highlight >= $natoms} {",
-        "        set highlight [expr {$natoms - 1}]",
-        "    }",
-        "    if {$natoms == 1} {",
-        "        show_ballstick $molid all $BRIGHT Opaque",
+        "    if {$serial < 0} {",
+        "        set placed \"index [expr {$natoms - 1}]\"",
         "    } else {",
-        "        mol representation CPK $::BALL_SCALE $::BOND_RADIUS 16 16",
-        "        mol color Name",
-        "        mol selection \"not index $highlight\"",
-        "        mol material Opaque",
-        "        mol addrep $molid",
-        "        show_ballstick $molid \"index $highlight\" $BRIGHT Opaque",
+        "        set placed \"serial $serial\"",
         "    }",
+        "    mol representation CPK $::BALL_SCALE $::BOND_RADIUS 16 16",
+        "    mol color Name",
+        "    mol selection \"($selection) and not ($placed)\"",
+        "    mol material Opaque",
+        "    mol addrep $molid",
+        "    show_ballstick $molid \"($selection) and ($placed)\" $BRIGHT Opaque",
         "    mol rename $molid [file tail $filepath]",
         "    molinfo $molid set drawn 0",
         "    return $molid",
         "}",
         "",
-        "proc load_colored {filepath} {",
+        "proc load_colored {filepath selection} {",
         "    set molid [mol new $filepath type pdb waitfor all]",
         "    clear_reps $molid",
-        "    set natoms [molinfo $molid get numatoms]",
-        "    if {$natoms > 0} {",
-        "        mol representation CPK $::BALL_SCALE $::BOND_RADIUS 16 16",
-        "        mol color Name",
-        "        mol selection all",
-        "        mol material Opaque",
-        "        mol addrep $molid",
-        "    }",
+        "    mol representation CPK $::BALL_SCALE $::BOND_RADIUS 16 16",
+        "    mol color Name",
+        "    mol selection $selection",
+        "    mol material Opaque",
+        "    mol addrep $molid",
         "    mol rename $molid [file tail $filepath]",
         "    molinfo $molid set drawn 0",
         "    return $molid",
@@ -658,18 +729,27 @@ def write_vmd(
     ]
 
     def load_structure(pdb: FilteredPdb, comment: str, *, highlight: bool) -> None:
+        shown = _displayed_residues(residues, pdb.highlight if highlight else None)
+        selection = _tcl_quote(_vmd_selection(shown))
         if not highlight:
             lines.append(f"# {comment}")
-            lines.append(f"load_colored {_tcl_quote(_data_name(pdb.path))}")
+            lines.append(
+                f"load_colored {_tcl_quote(_data_name(pdb.path))} {selection}"
+            )
             return
         placed = pdb.highlight
         note = placed.describe() if placed else "none"
-        index = 0 if pdb.highlight_index is None else pdb.highlight_index
+        serial = -1 if placed is None or placed.serial is None else placed.serial
         lines.append(f"# {comment}: {note}")
-        lines.append(f"load_added {_tcl_quote(_data_name(pdb.path))} {index}")
+        lines.append(
+            f"load_added {_tcl_quote(_data_name(pdb.path))} {selection} {serial}"
+        )
 
+    base = _tcl_quote(_vmd_selection(residues))
     for reference in references:
-        lines.append(f"load_reference {_tcl_quote(_data_name(reference.path))}")
+        lines.append(
+            f"load_reference {_tcl_quote(_data_name(reference.path))} {base}"
+        )
     for step in steps:
         if step.added is not None:
             load_structure(
@@ -700,16 +780,19 @@ def _cx_model_lines(
     model_id: int,
     *,
     color: str,
+    shown: str,
     last: AtomRecord | None = None,
 ) -> list[str]:
     spec = f"#{model_id}"
     lines = [
         f"style {spec} ball",
         f"size {spec} ballScale 0.175 stickRadius 0.075",
+        f"hide {spec}",
+        f"show {shown}",
         f"hide {spec} cartoons",
         f"hide {spec} pseudobonds",
-        f"show {spec} atoms",
-        f"color {spec} {color}",
+        f"show {shown}",
+        f"color {shown} {color}",
     ]
     if last is not None and last.serial is not None:
         lines.append(f"color {spec}@@serial_number={last.serial} lime")
@@ -725,6 +808,7 @@ def write_chimerax(
     references: list[FilteredPdb],
     steps: list[IterationSummary],
     finals: list[FilteredPdb],
+    residues: list[Residue],
 ) -> None:
     """Write a ChimeraX command script.
 
@@ -742,7 +826,9 @@ def write_chimerax(
         '#   open loadChimeraX.cmd format cmd',
         "#",
         "# PDB and map paths are relative to this script. ChimeraX runs the",
-        "# script from the directory that contains it.",
+        "# script from the directory that contains it. Those names are",
+        "# symbolic links to the reconstruction files. Only the residues",
+        "# named below are shown.",
         "#",
         "# The light reference is ball-and-stick in silver.",
         "# Each refined_added model is ball-and-stick colored by element",
@@ -763,7 +849,13 @@ def write_chimerax(
     model_id = 1
     for reference in references:
         lines.append(f"open {_cx_quote(_data_name(reference.path))}")
-        lines.extend(_cx_model_lines(model_id, color="silver"))
+        lines.extend(
+            _cx_model_lines(
+                model_id,
+                color="silver",
+                shown=_cx_residue_spec(model_id, residues),
+            )
+        )
         lines.append("")
         model_id += 1
     for step in steps:
@@ -772,7 +864,16 @@ def write_chimerax(
             note = placed.describe() if placed else "no atoms"
             lines.append(f"# step {step.step:02d} placed atom: {note}")
             lines.append(f"open {_cx_quote(_data_name(step.added.path))}")
-            lines.extend(_cx_model_lines(model_id, color="byelement", last=placed))
+            lines.extend(
+                _cx_model_lines(
+                    model_id,
+                    color="byelement",
+                    shown=_cx_residue_spec(
+                        model_id, _displayed_residues(residues, placed)
+                    ),
+                    last=placed,
+                )
+            )
             lines.append("")
             model_id += 1
         if step.map_file is not None:
@@ -797,7 +898,13 @@ def write_chimerax(
     for final in finals:
         lines.append("# reconstructed final, colored by element, no highlight")
         lines.append(f"open {_cx_quote(_data_name(final.path))}")
-        lines.extend(_cx_model_lines(model_id, color="byelement"))
+        lines.extend(
+            _cx_model_lines(
+                model_id,
+                color="byelement",
+                shown=_cx_residue_spec(model_id, residues),
+            )
+        )
         lines.append("")
         model_id += 1
     lines.append("hide pseudobonds")
@@ -870,7 +977,7 @@ def _atom_payload(record: AtomRecord | None) -> dict | None:
 
 def _pdb_payload(item: FilteredPdb) -> dict:
     return {
-        "path": str(item.path),
+        "path": str(item.structure_path or item.path),
         "natoms": item.natoms,
         "highlight": _atom_payload(item.highlight),
         "highlight_index": item.highlight_index,
@@ -1033,7 +1140,11 @@ def _style_structure(
 
 
 def _add_map(proj, row, item: MapCopy, label: str) -> int:
-    """Attach a white mesh of ``item`` to a project row. Return vertex count."""
+    """Attach a white mesh of ``item`` to a project row. Return vertex count.
+
+    The volume is copied into the project, including when ``item.path`` is a
+    symbolic link, so the archive does not depend on that link later.
+    """
     from schrodinger.infra import mmproj, mmsurf
 
     ivol, center, _kind, _comment = mmsurf.mmvisio_read_ccp4(str(item.path))
@@ -1072,7 +1183,7 @@ def _import_entry(
 ):
     from schrodinger import structure
 
-    model = structure.Structure.read(str(pdb.path))
+    model = structure.Structure.read(str(pdb.structure_path or pdb.path))
     _style_structure(model, pdb, silver=silver, highlight=highlight)
     return proj.importStructure(model, name=title)
 
@@ -1169,10 +1280,41 @@ def prepare(run_dir: Path, residues: list[Residue] | None = None) -> Path:
     for stale in summary.glob("step*_refined.pdb"):
         stale.unlink()
 
+    clipped = Path(tempfile.mkdtemp(prefix="xfel-summary-"))
+    references: list[FilteredPdb] = []
+    steps: list[IterationSummary] = []
+    finals: list[FilteredPdb] = []
+    try:
+        references, steps, finals = _fill_summary(
+            summary, clipped, light_paths, iterations, final_paths, residues
+        )
+        write_vmd(summary / "loadVMD.cmd", references, steps, finals, residues)
+        write_chimerax(
+            summary / "loadChimeraX.cmd", references, steps, finals, residues
+        )
+        write_maestro_project(
+            summary / "loadMaestro.prjzip", references, steps, finals
+        )
+    finally:
+        shutil.rmtree(clipped, ignore_errors=True)
+    print(f"wrote {summary / 'loadVMD.cmd'}")
+    print(f"wrote {summary / 'loadChimeraX.cmd'}")
+    print(f"wrote {summary / 'loadMaestro.prjzip'}")
+    return summary
+
+
+def _fill_summary(
+    summary: Path,
+    clipped: Path,
+    light_paths: list[Path],
+    iterations: dict[int, dict[str, Path]],
+    final_paths: list[Path],
+    residues: list[Residue],
+) -> tuple[list[FilteredPdb], list[IterationSummary], list[FilteredPdb]]:
     references: list[FilteredPdb] = []
     for source in light_paths:
         dest = summary / source.name
-        filtered = filter_pdb(source, dest, residues)
+        filtered = _place_pdb(source, dest, clipped, residues)
         references.append(filtered)
         print(f"reference: {dest.name} ({filtered.natoms} atoms)")
 
@@ -1183,7 +1325,9 @@ def prepare(run_dir: Path, residues: list[Residue] | None = None) -> Path:
         if "added" in slot:
             source = slot["added"]
             dest = summary / summary_filename(source.name)
-            item.added = filter_pdb(source, dest, residues, keep_newest=True)
+            item.added = _place_pdb(
+                source, dest, clipped, residues, keep_newest=True
+            )
             placed = (
                 item.added.highlight.describe()
                 if item.added.highlight
@@ -1218,33 +1362,25 @@ def prepare(run_dir: Path, residues: list[Residue] | None = None) -> Path:
     finals: list[FilteredPdb] = []
     for source in final_paths:
         dest = summary / summary_filename(source.name)
-        filtered = filter_pdb(source, dest, residues)
+        filtered = _place_pdb(source, dest, clipped, residues)
         finals.append(filtered)
         print(f"final: {dest.name} ({filtered.natoms} atoms, no highlight)")
         if filtered.newest_source is not None and not filtered.newest_source_kept:
             print(
                 "warning: the newest atom in "
                 f"{source.name} is {filtered.newest_source.describe()}, "
-                "which is outside --resid and is omitted from the summary PDB.",
+                "which is outside the residue list and is not shown.",
                 file=sys.stderr,
             )
 
-    write_vmd(summary / "loadVMD.cmd", references, steps, finals)
-    write_chimerax(summary / "loadChimeraX.cmd", references, steps, finals)
-    write_maestro_project(
-        summary / "loadMaestro.prjzip", references, steps, finals
-    )
-    print(f"wrote {summary / 'loadVMD.cmd'}")
-    print(f"wrote {summary / 'loadChimeraX.cmd'}")
-    print(f"wrote {summary / 'loadMaestro.prjzip'}")
-    return summary
+    return references, steps, finals
 
 
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(
         description=(
-            "Copy a reconstruction run into a summary folder, keep selected "
-            "PDB residues, and write VMD, ChimeraX, and Maestro load scripts."
+            "Link a reconstruction run into a summary folder and write VMD, "
+            "ChimeraX, and Maestro files for the selected residues."
         )
     )
     parser.add_argument(

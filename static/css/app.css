@@ -527,6 +527,17 @@ label.viewer-sigma-exact { flex-direction: row; align-items: center; gap: 4px; c
 figcaption { margin-top: 12px; color: var(--muted); }
 .reconstruction-steps h2 { margin: 0 0 8px; font-size: 22px; }
 .reconstruction-steps .hint { margin: 0 0 8px; }
+.reconstruction-steps .summary-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 16px;
+}
+.reconstruction-steps .summary-actions .hint { margin: 0; }
+.reconstruction-steps .summary-actions .error { margin: 0; }
+.reconstruction-steps .summary-resid { width: 100%; }
+.reconstruction-steps .summary-resid .hint { margin: 0; }
 .reconstruction-steps tbody tr,
 .reconstruction-steps tbody tr:hover { cursor: default; background: transparent; }
 .reconstruction-steps .num { text-align: right; font-variant-numeric: tabular-nums; }

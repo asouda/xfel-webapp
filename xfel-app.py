@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import subprocess
 import threading
 import time
 import traceback
@@ -21,6 +22,7 @@ from xfel_web.ccp4 import (
     scan_hetatm,
     viewer_pymol_text,
 )
+from prepare_reconstruction_summary import parse_residues, prepare
 from xfel_web.forms import FormError, decompress_gzip, parse_job
 from xfel_web.interrupt import CalculationStopped, Interrupt, activate, deactivate
 from xfel_web.pipelines import RUNNERS
@@ -710,6 +712,55 @@ def job_snapshot(job_id: str):
         files.append({"role": "Viewer snapshot", "path": str(dest)})
         _save_job(job)
     return jsonify({"path": str(dest), "name": dest.name})
+
+
+@app.post("/api/jobs/<job_id>/summary")
+def job_summary(job_id: str):
+    """Write summary/ for a finished reconstruction, including the Maestro archive."""
+    job = _get_job(job_id)
+    if job.get("workflow") != "reconstruct":
+        return jsonify({"error": "This calculation is not a reconstruction."}), 400
+    if job.get("status") != "succeeded":
+        return jsonify({"error": "The reconstruction has not finished."}), 400
+    result = job.get("result") or {}
+    output_dir = Path(result.get("output_dir") or "")
+    if not output_dir.is_dir():
+        return jsonify({"error": "The output directory for this calculation is not available."}), 400
+    payload = request.get_json(silent=True) or {}
+    resid_text = payload.get("resid") if isinstance(payload, dict) else None
+    residues = None
+    if isinstance(resid_text, str) and resid_text.strip():
+        try:
+            residues = parse_residues(resid_text)
+        except SystemExit as exc:
+            message = exc.code if isinstance(exc.code, str) else "The residue list could not be read."
+            return jsonify({"error": message}), 400
+    with _JOBS_LOCK:
+        if job.get("summary_running"):
+            return jsonify({"error": "A summary is already being written."}), 400
+        job["summary_running"] = True
+    try:
+        summary = prepare(output_dir, residues)
+    except SystemExit as exc:
+        message = exc.code if isinstance(exc.code, str) else "The summary could not be written."
+        return jsonify({"error": message}), 400
+    except subprocess.CalledProcessError:
+        return jsonify({
+            "error": "Schrödinger could not write the Maestro project. The server log has the details.",
+        }), 400
+    finally:
+        with _JOBS_LOCK:
+            job["summary_running"] = False
+    with _JOBS_LOCK:
+        files = result.setdefault("files", [])
+        role = "Reconstruction summary"
+        if not any(item.get("role") == role for item in files):
+            files.append({"role": role, "path": str(summary)})
+        _save_job(job)
+    return jsonify({
+        "summary": str(summary),
+        "maestro": str(summary / "loadMaestro.prjzip"),
+    })
 
 
 @app.post("/api/jobs/<job_id>/pymol-script")
