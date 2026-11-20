@@ -121,8 +121,10 @@ WORKFLOWS = {
             "refmac_ncyc": "0",
             "distance_sigma": "0.5",
             "angle_sigma": "25",
+            "dihedral_sigma": "10",
             "distance_restraints": "MN1 O5\nMN3 O5\nMN4 O5\nCA1 O5",
             "angle_restraints": "MN3 O5 MN4\nMN3 O5 CA1\nMN4 O5 CA1\nO5 CA1 O1\nO2 MN3 O5\nO3 MN3 O5\nO4 MN3 O5\nO4 MN4 O5",
+            "dihedral_restraints": "",
             "lowres": "30",
             "dmin": "1.89",
             "png_width": "1600",
@@ -160,8 +162,10 @@ WORKFLOWS = {
             "refmac_ncyc": "0",
             "distance_sigma": "0.5",
             "angle_sigma": "25",
+            "dihedral_sigma": "10",
             "distance_restraints": "",
             "angle_restraints": "",
+            "dihedral_restraints": "",
             "n_atoms": "1",
             "n_check_map": "0",
             "harmonic_sigma": "0.1",
@@ -606,13 +610,14 @@ def job_status(job_id: str):
                 viewer["carve"] = links["carve"]
             if viewer.get("light_model"):
                 viewer["light_model_url"] = f"/api/jobs/{job_id}/viewer/light"
+        figure = Path(result.get("figure") or "")
         public_result = {
             "caption": result["caption"],
             "output_dir": result["output_dir"],
             "final_map": result["final_map"],
             "fragment": result["fragment"],
             "pymol_script": result["pymol_script"],
-            "figure_url": f"/api/jobs/{job_id}/figure",
+            "figure_url": f"/api/jobs/{job_id}/figure" if figure.is_file() else None,
             "viewer": viewer,
             "files": result["files"],
             "steps": result.get("steps"),

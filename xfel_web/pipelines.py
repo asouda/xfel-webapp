@@ -26,6 +26,7 @@ from xfel_web.ccp4 import (
 from xfel_web.direct_map import direct_site_cube, parse_fft_sampling, whole_cell_exceeds_fft
 from xfel_web.restraints import (
     external_angle_keywords,
+    external_dihedral_keywords,
     external_distance_keywords,
     external_harmonic_keywords,
 )
@@ -68,20 +69,53 @@ def _refmac_filename(path: Path) -> str:
     return text
 
 
-def refmac_keywords(ncyc: int, leading: str = "", library: Path | None = None) -> str:
+def refmac_keywords(
+    ncyc: int,
+    leading: str = "",
+    library: Path | None = None,
+    bref: str = "ANIS",
+    refi_type: str = "REST",
+) -> str:
     """REFMAC standard input.
 
     ``library`` is a ``LIBIN`` line. External restraints follow it, so they
     replace matching distances and angles from that file and from the CCP4
     monomer library. The fixed protocol and ``NCYC`` come last.
+
+    ``bref`` and ``refi_type`` are the ``REFI BREF`` and ``REFI TYPE`` tokens.
+    The defaults keep the Fo−Fo zero-cycle job on anisotropic restrained
+    refinement. Omit maps and reconstruction pass the form values, whose
+    defaults are isotropic and restrained.
     """
+    bref = str(bref).upper()
+    refi_type = str(refi_type).upper()
+    if bref not in {"ISOT", "ANIS", "MIXE", "OVER"}:
+        raise ValueError(f"REFI BREF must be ISOT, ANIS, MIXE, or OVER, got {bref!r}")
+    if refi_type not in {"REST", "UNRE"}:
+        raise ValueError(f"REFI TYPE must be REST or UNRE, got {refi_type!r}")
+    protocol = REFMAC_FIXED_KEYWORDS.replace("    TYPE REST -\n", f"    TYPE {refi_type} -\n", 1)
+    protocol = protocol.replace("    BREF ANIS\n", f"    BREF {bref}\n", 1)
     parts: list[str] = []
     if library is not None:
         parts.append("LIBIN " + _refmac_filename(library))
     if leading and leading.strip():
         parts.append(leading.strip())
-    parts.append(REFMAC_FIXED_KEYWORDS.strip())
+    parts.append(protocol.strip())
     return "\n".join(parts) + f"\nNCYC {int(ncyc)}\nEND"
+
+
+def _sampling_grid(session: Ccp4Session, low: float, high: float, requested: float | None) -> tuple[float, str]:
+    """High-resolution limit of the ``fft`` grid, and a filename suffix when it is finer."""
+    grid_high = fft_grid_resolution(low, high, requested)
+    suffix = ""
+    if grid_high < high - 1e-4:
+        suffix = "_grid" + f"{grid_high:.2f}".replace(".", "p")
+        session.emit(
+            f"FFT sampling grid is the {grid_high:.3f} Å grid. "
+            f"The coefficients stop at {high:.3f} Å, so reciprocal-space points "
+            f"from {high:.3f} to {grid_high:.3f} Å contribute zero amplitude."
+        )
+    return grid_high, suffix
 
 
 def _cartesian_center(cfg: dict) -> tuple[float, float, float] | None:
@@ -310,8 +344,9 @@ def run_fofo(cfg: dict, emit) -> dict:
         session, cfg["resolution_source"], cfg["lowres"], cfg["dmin"],
         [(dark_id, dark_sf_mtz), (light_id, light_sf_mtz)],
     )
-    diff_map = out / f"{light_id}_minus_{dark_id}.ccp4"
-    extended_map = out / f"{light_id}_minus_{dark_id}_extended.ccp4"
+    grid_high, grid_suffix = _sampling_grid(session, low, high, cfg.get("fft_dmin"))
+    diff_map = out / f"{light_id}_minus_{dark_id}{grid_suffix}.ccp4"
+    extended_map = out / f"{light_id}_minus_{dark_id}{grid_suffix}_extended.ccp4"
 
     if extended_map.is_file() and not cfg["recompute_map"]:
         session.emit(f"Reusing existing map: {extended_map}")
@@ -394,7 +429,7 @@ def run_fofo(cfg: dict, emit) -> dict:
             "fft",
             [("hklin", scale_mtz), ("mapout", diff_map)],
             (
-                f"RESOLUTION {low:.2f} {high:.2f}\n"
+                f"RESOLUTION {low:.2f} {grid_high:.2f}\n"
                 "LABIN F1=F_LIGHT SIG1=SIGF_LIGHT F2=F_DARK SIG2=SIGF_DARK PHI=PHI_REF\n"
                 "END"
             ),
@@ -527,15 +562,7 @@ def run_refinement(cfg: dict, emit) -> dict:
     low, high = _prepare_resolution(
         session, cfg["resolution_source"], cfg["lowres"], cfg["dmin"], [(light_id, light_sf_mtz)]
     )
-    grid_high = fft_grid_resolution(low, high, cfg.get("fft_dmin"))
-    grid_suffix = ""
-    if grid_high < high - 1e-4:
-        grid_suffix = "_grid" + f"{grid_high:.2f}".replace(".", "p")
-        session.emit(
-            f"FFT sampling grid is the {grid_high:.3f} Å grid. "
-            f"The coefficients stop at {high:.3f} Å, so reciprocal-space points "
-            f"from {high:.3f} to {grid_high:.3f} Å contribute zero amplitude."
-        )
+    grid_high, grid_suffix = _sampling_grid(session, low, high, cfg.get("fft_dmin"))
     diff_map = out / f"{light_id}_DELFWT_{dark_id}{grid_suffix}.ccp4"
     extended_map = out / f"{light_id}_DELFWT_{dark_id}{grid_suffix}_extended.ccp4"
     refined_pdb = out / f"{dark_id}_refined.pdb"
@@ -619,7 +646,7 @@ def run_refinement(cfg: dict, emit) -> dict:
             refmac_library = custom_dictionary
             session.emit(
                 f"Custom dictionary: {custom_dictionary}. "
-                "External restraints are read after this file and replace matching distances and angles."
+                "External restraints are read after this file and replace matching distances, angles, and dihedrals."
             )
         elif custom_dictionary:
             session.emit(
@@ -649,7 +676,16 @@ def run_refinement(cfg: dict, emit) -> dict:
                 files["dark_pdb"], cfg["site_copies"], cfg["angle_restraints"], cfg["angle_sigma"]
             ),
         )
-        restraint_text = "\n".join(part for part in (distance_text, angle_text) if part)
+        dihedral_text = _restraints(
+            "Dihedral restraints",
+            lambda: external_dihedral_keywords(
+                files["dark_pdb"],
+                cfg["site_copies"],
+                cfg.get("dihedral_restraints") or [],
+                cfg.get("dihedral_sigma", 10.0),
+            ),
+        )
+        restraint_text = "\n".join(part for part in (distance_text, angle_text, dihedral_text) if part)
         harmonic_atoms = list(cfg.get("harmonic_atoms") or [])
         if harmonic_atoms and int(cfg["refmac_ncyc"]) > 0:
             harmonic_sigma = float(cfg.get("harmonic_sigma", 0.1))
@@ -671,7 +707,13 @@ def run_refinement(cfg: dict, emit) -> dict:
         session.run_ccp4(
             "refmac5",
             refmac_files,
-            refmac_keywords(int(cfg["refmac_ncyc"]), restraint_text, refmac_library),
+            refmac_keywords(
+                int(cfg["refmac_ncyc"]),
+                restraint_text,
+                refmac_library,
+                bref=cfg.get("refmac_bref", "ISOT"),
+                refi_type=cfg.get("refmac_type", "REST"),
+            ),
             out / f"{dark_id}_vs_{light_id}_refmac{int(cfg['refmac_ncyc'])}.log",
         )
         omit_labels = session.mtz_labels(omit_mtz)
@@ -784,6 +826,7 @@ def run_refinement(cfg: dict, emit) -> dict:
         png_height=cfg["png_height"],
         ray_trace=cfg["ray_trace"],
         geometry_bonds=bool(cfg.get("geometry_bonds")),
+        render_png=bool(cfg.get("render_png", True)),
     )
     sigma_txt = ", ".join(f"±{level:g}" for level in cfg["positive_levels"])
     grid_sentence = ""
@@ -850,8 +893,9 @@ def run_twofofc(cfg: dict, emit) -> dict:
     low, high = _prepare_resolution(
         session, cfg["resolution_source"], cfg["lowres"], cfg["dmin"], [(pdb_id, sf_mtz)]
     )
-    density_map = out / f"{pdb_id}_2fofc_{b_tag}.ccp4"
-    extended_map = out / f"{pdb_id}_2fofc_{b_tag}_extended.ccp4"
+    grid_high, grid_suffix = _sampling_grid(session, low, high, cfg.get("fft_dmin"))
+    density_map = out / f"{pdb_id}_2fofc_{b_tag}{grid_suffix}.ccp4"
+    extended_map = out / f"{pdb_id}_2fofc_{b_tag}{grid_suffix}_extended.ccp4"
 
     if extended_map.is_file() and not cfg["recompute_map"]:
         session.emit(f"Reusing existing map: {extended_map}")
@@ -881,7 +925,7 @@ def run_twofofc(cfg: dict, emit) -> dict:
             [("hklin", val_mtz), ("mapout", density_map)],
             (
                 f"TITLE {pdb_id} weighted 2mFo-DFc sharpened by dB={cfg['delta_b']:.2f}\n"
-                f"RESOLUTION {low:.2f} {high:.2f}\n"
+                f"RESOLUTION {low:.2f} {grid_high:.2f}\n"
                 f"LABIN F1={fwt_lab} PHI={phwt_lab}\n"
                 f"SCALE F1 1.0 {cfg['delta_b']:.2f}\n"
                 "END"

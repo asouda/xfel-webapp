@@ -286,20 +286,30 @@ input:focus, select:focus, textarea:focus {
   outline: 2px solid rgba(110, 162, 255, 0.8);
   outline-offset: 1px;
 }
+.file-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 8px 0; }
+.file-btn { display: inline-flex; margin: 0; width: fit-content; position: relative; }
 .file-btn input { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
-.file-btn span, .path-label { display: inline; }
-.file-btn {
-  display: inline-flex;
-  margin: 8px 0;
-  width: fit-content;
-}
-.file-btn span {
+.file-btn span, button.file-btn {
   border-radius: 999px;
   padding: 8px 14px;
   border: 1px solid var(--line);
+  background: transparent;
   color: var(--ink);
   cursor: pointer;
+  font: inherit;
+  font-size: 14px;
 }
+.file-btn[aria-pressed="true"] span, button.file-btn[aria-pressed="true"] {
+  background: var(--pill-solid-bg);
+  color: var(--pill-solid-fg);
+  border-color: var(--pill-solid-bg);
+  font-weight: 600;
+}
+.path-entry { display: flex; flex-direction: column; gap: 6px; }
+.path-entry[hidden] { display: none; }
+.panel-fields { display: flex; flex-direction: column; gap: 12px; margin-top: 10px; }
+.panel-fields[hidden] { display: none; }
+.path-label { font-size: 13px; color: var(--muted); }
 .check { flex-direction: row; align-items: center; gap: 10px; grid-column: 1 / -1; }
 .check input { width: auto; accent-color: var(--blue); }
 .choice { flex-direction: row; align-items: center; gap: 10px; margin-top: 8px; }

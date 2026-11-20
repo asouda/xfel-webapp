@@ -389,9 +389,17 @@ class _IterationLog:
             handle.write(text + "\n")
 
 
-def _omit_config(cfg: dict, omit_pdb: Path, output_dir: Path, added: list[dict]) -> dict:
+def _omit_config(
+    cfg: dict,
+    omit_pdb: Path,
+    output_dir: Path,
+    added: list[dict],
+    *,
+    render_png: bool,
+) -> dict:
     """Omit-map settings for one iteration, plus harmonic restraints on atoms already added."""
     child = _iteration_config(cfg, omit_pdb, output_dir)
+    child["render_png"] = render_png
     if cfg.get("harmonic_added") and added:
         child["harmonic_atoms"] = [
             {
@@ -704,8 +712,22 @@ def run_reconstruct(cfg: dict, emit, pause=None, omit_runner=None, report_step=N
         shutil.copy2(working, snapshot)
         log("")
         log(f"Reconstruction iteration {iteration}: omit model {snapshot.name}, {len(added)} atoms added so far")
+        # The script is written for every iteration. PyMOL runs only when this
+        # step will wait for the 3D viewer, which is a map-check pause.
+        checks_map = bool(n_check) and iteration % n_check == 0
         result = _stamp_iteration_outputs(
-            iter_dir, iteration, omit_runner(_omit_config(cfg, snapshot, iter_dir, added), log)
+            iter_dir,
+            iteration,
+            omit_runner(
+                _omit_config(
+                    cfg,
+                    snapshot,
+                    iter_dir,
+                    added,
+                    render_png=checks_map and pause is not None,
+                ),
+                log,
+            ),
         )
         fragment = Path(result["fragment"])
         if not fragment.is_file():
@@ -718,7 +740,7 @@ def run_reconstruct(cfg: dict, emit, pause=None, omit_runner=None, report_step=N
             bool(cfg["spline_seed"]),
             int(cfg["spline_order"]),
         )
-        if n_check and iteration % n_check == 0:
+        if checks_map:
             if pause is None:
                 log("A map check was requested, but this run cannot pause, so the search continues.")
             else:
@@ -937,7 +959,12 @@ def run_reconstruct(cfg: dict, emit, pause=None, omit_runner=None, report_step=N
         log("")
         log(f"Final residual map of the reconstructed model ({len(added)} atoms added)")
         result = _stamp_iteration_outputs(
-            iter_dir, iteration, omit_runner(_omit_config(cfg, snapshot, iter_dir, added), log)
+            iter_dir,
+            iteration,
+            omit_runner(
+                _omit_config(cfg, snapshot, iter_dir, added, render_png=False),
+                log,
+            ),
         )
         r_factor, r_free = read_refmac_rfactors(_refmac_log(iter_dir, cfg))
         steps.append(

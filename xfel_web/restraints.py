@@ -236,3 +236,147 @@ def external_angle_keywords(
     if not lines:
         raise ValueError("Angle restraints produced no external restraints")
     return "\n".join(lines)
+
+
+def _sub(left, right):
+    return (left[0] - right[0], left[1] - right[1], left[2] - right[2])
+
+
+def _dot(left, right) -> float:
+    return left[0] * right[0] + left[1] * right[1] + left[2] * right[2]
+
+
+def _cross(left, right):
+    return (
+        left[1] * right[2] - left[2] * right[1],
+        left[2] * right[0] - left[0] * right[2],
+        left[0] * right[1] - left[1] * right[0],
+    )
+
+
+def _norm(vector) -> float:
+    return math.sqrt(_dot(vector, vector))
+
+
+def _dihedral_degrees(coords, atom_a: str, atom_b: str, atom_c: str, atom_d: str, where: str) -> float:
+    """Signed torsion of planes ABC and BCD, in degrees, from −180 to 180."""
+    names = (atom_a, atom_b, atom_c, atom_d)
+    missing = [name for name in names if name not in coords]
+    if missing:
+        raise ValueError(
+            f"Atom {missing[0]} is not in {where}. Atoms present: {', '.join(sorted(coords))}"
+        )
+    points = [coords[name] for name in names]
+    toward_a = _sub(points[0], points[1])
+    toward_c = _sub(points[2], points[1])
+    toward_d = _sub(points[3], points[2])
+    normal_abc = _cross(toward_a, toward_c)
+    normal_bcd = _cross(toward_c, toward_d)
+    axis = _norm(toward_c)
+    if _norm(normal_abc) == 0 or axis == 0 or _norm(normal_bcd) == 0:
+        raise ValueError(
+            f"Dihedral {atom_a}-{atom_b}-{atom_c}-{atom_d} is undefined because three atoms are collinear"
+        )
+    axis_unit = tuple(value / axis for value in toward_c)
+    reference = _cross(normal_abc, axis_unit)
+    return math.degrees(math.atan2(_dot(reference, normal_bcd), _dot(normal_abc, normal_bcd)))
+
+
+def external_dihedral_keywords(
+    pdb_path: Path,
+    site_copies: list[tuple[str, int]],
+    specs,
+    default_sigma_deg: float,
+) -> str:
+    """REFMAC external torsions. The atoms are first, second, third, fourth.
+
+    The target is the angle between the plane of the first three atoms and the
+    plane of the last three, in degrees. A spec that includes an angle or a
+    sigma uses those numbers. A missing angle is taken from the coordinates,
+    and a missing sigma is ``default_sigma_deg``. ``period 1`` is one target.
+    These lines replace the monomer-library torsion, including a torsion from
+    a custom dictionary read earlier in the same job.
+    """
+    if not specs:
+        return ""
+    if default_sigma_deg <= 0:
+        raise ValueError(f"Dihedral sigma must be positive, got {default_sigma_deg}")
+    parsed = []
+    seen: set[tuple[str, str, str, str]] = set()
+    for spec in specs:
+        if len(spec) == 4:
+            atom_a, atom_b, atom_c, atom_d = spec
+            angle_deg, sigma_deg = None, default_sigma_deg
+        elif len(spec) == 5:
+            atom_a, atom_b, atom_c, atom_d, angle_deg = spec
+            sigma_deg = default_sigma_deg
+        elif len(spec) == 6:
+            atom_a, atom_b, atom_c, atom_d, angle_deg, sigma_deg = spec
+        else:
+            raise ValueError(
+                "Each dihedral restraint must be (atom_1, atom_2, atom_3, atom_4), "
+                "(atom_1, atom_2, atom_3, atom_4, angle), or "
+                "(atom_1, atom_2, atom_3, atom_4, angle, sigma). "
+                f"Got {spec!r}"
+            )
+        atom_a = str(atom_a).strip().upper()
+        atom_b = str(atom_b).strip().upper()
+        atom_c = str(atom_c).strip().upper()
+        atom_d = str(atom_d).strip().upper()
+        atoms = (atom_a, atom_b, atom_c, atom_d)
+        if len(set(atoms)) < 4:
+            raise ValueError(f"Dihedral atoms must be four different atoms: {spec!r}")
+        reverse = (atom_d, atom_c, atom_b, atom_a)
+        if atoms in seen or reverse in seen:
+            raise ValueError(f"Repeated dihedral in dihedral restraints: {spec!r}")
+        seen.add(atoms)
+        sigma_deg = float(sigma_deg)
+        if sigma_deg <= 0:
+            raise ValueError(
+                f"Standard deviation for {atom_a}-{atom_b}-{atom_c}-{atom_d} must be positive"
+            )
+        if angle_deg is not None:
+            angle_deg = float(angle_deg)
+            if not -180.0 <= angle_deg <= 180.0:
+                raise ValueError(
+                    f"Dihedral for {atom_a}-{atom_b}-{atom_c}-{atom_d} "
+                    "must be between -180 and 180 degrees"
+                )
+        parsed.append(
+            {
+                "atoms": atoms,
+                "angle_deg": angle_deg,
+                "sigma_deg": sigma_deg,
+            }
+        )
+
+    lines: list[str] = []
+    for chain, resi in site_copies:
+        for alt, coords in residue_conformers(pdb_path, chain, int(resi)).items():
+            where = f"chain {chain} residue {int(resi)}"
+            if alt:
+                where += f" altloc {alt}"
+            alt_txt = f" altecode {alt}" if alt else ""
+            for spec in parsed:
+                atom_a, atom_b, atom_c, atom_d = spec["atoms"]
+                missing = [name for name in (atom_a, atom_b, atom_c, atom_d) if name not in coords]
+                if missing:
+                    raise ValueError(
+                        f"Atom {missing[0]} is not in {where}. Atoms present: {', '.join(sorted(coords))}"
+                    )
+                angle_deg = spec["angle_deg"]
+                if angle_deg is None:
+                    angle_deg = _dihedral_degrees(coords, atom_a, atom_b, atom_c, atom_d, where)
+                parts = []
+                for role, name in (("first", atom_a), ("next", atom_b), ("next", atom_c), ("next", atom_d)):
+                    parts.append(
+                        f"{role} chain {chain} resi {int(resi)} atom {name}{alt_txt}"
+                    )
+                lines.append(
+                    "exte torsion "
+                    + " ".join(parts)
+                    + f" value {angle_deg:.3f} sigma {spec['sigma_deg']:.3f} period 1"
+                )
+    if not lines:
+        raise ValueError("Dihedral restraints produced no external restraints")
+    return "\n".join(lines)

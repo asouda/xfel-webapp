@@ -124,38 +124,100 @@
     syncMapCenter();
   }
 
+  const resolutionSource = document.getElementById("resolution-source");
+  const explicitCutoffs = document.getElementById("explicit-cutoffs");
+
+  function syncResolution() {
+    if (!resolutionSource || !explicitCutoffs) return;
+    const explicit = resolutionSource.value === "explicit";
+    explicitCutoffs.hidden = !explicit;
+    explicitCutoffs.querySelectorAll("input").forEach((input) => {
+      input.disabled = !explicit;
+    });
+  }
+
+  if (resolutionSource) {
+    resolutionSource.addEventListener("change", syncResolution);
+    syncResolution();
+  }
+
   function showError(message) {
     errorBox.hidden = false;
     errorBox.textContent = message;
   }
 
-  document.querySelectorAll('input[type="file"]').forEach((input) => {
-    input.addEventListener("change", () => {
-      const span = input.parentElement.querySelector("span");
-      span.textContent = input.files[0] ? input.files[0].name : "Choose file";
+  function applyFileSource(group, mode, focus) {
+    const fileLabel = group.querySelector("label.file-btn");
+    const file = group.querySelector('input[type="file"]');
+    const pathButton = group.querySelector(".path-toggle");
+    const pathEntry = group.querySelector(".path-entry");
+    const path = pathEntry.querySelector("input");
+    const span = fileLabel.querySelector("span");
+    const usePath = mode === "path";
+    pathEntry.hidden = !usePath;
+    path.disabled = !usePath;
+    pathButton.setAttribute("aria-pressed", usePath ? "true" : "false");
+    if (usePath) {
+      file.value = "";
+      span.textContent = "Choose file";
+      fileLabel.setAttribute("aria-pressed", "false");
+      if (focus) path.focus();
+      return;
+    }
+    const chosen = file.files[0];
+    span.textContent = chosen ? chosen.name : "Choose file";
+    fileLabel.setAttribute("aria-pressed", chosen ? "true" : "false");
+  }
+
+  document.querySelectorAll("fieldset").forEach((group) => {
+    const pathButton = group.querySelector(".path-toggle");
+    const file = group.querySelector('input[type="file"]');
+    if (!pathButton || !file) return;
+    const path = group.querySelector(".path-entry input");
+    applyFileSource(group, path && !path.disabled && path.value.trim() ? "path" : "file");
+    pathButton.addEventListener("click", () => {
+      applyFileSource(group, "path", true);
+      path.dispatchEvent(new Event("change"));
+    });
+    file.addEventListener("change", () => {
+      if (file.files[0]) applyFileSource(group, "file");
     });
   });
+
+  function ancestorHidden(el) {
+    let node = el.parentElement;
+    while (node) {
+      if (node.hidden) return true;
+      node = node.parentElement;
+    }
+    return false;
+  }
+
+  function syncPanel(box) {
+    const panel = document.getElementById(box.getAttribute("aria-controls"));
+    if (!panel) return;
+    const on = box.checked && !ancestorHidden(box);
+    panel.hidden = !on;
+    panel.querySelectorAll(".panel-switch").forEach((nested) => syncPanel(nested));
+    panel.querySelectorAll("input, textarea, select").forEach((el) => {
+      const pathEntry = el.closest(".path-entry");
+      el.disabled = ancestorHidden(el) || (pathEntry ? pathEntry.hidden : false);
+    });
+  }
+
+  document.querySelectorAll(".panel-switch").forEach((box) => {
+    box.addEventListener("change", () => syncPanel(box));
+  });
+  document.querySelectorAll(".panel-switch").forEach((box) => syncPanel(box));
 
   const modelNameInput = form.querySelector('[name="dark_id"], [name="pdb_id"]');
   const referenceNameInput = form.querySelector('[name="light_id"]');
   const outputDirInput = form.querySelector('[name="output_dir"]');
-  const harmonicAdded = document.getElementById("harmonic-added");
-  const harmonicSigma = document.getElementById("harmonic-sigma");
 
   function coordinateBasename(filename) {
     const base = String(filename || "").split(/[/\\]/).pop();
     if (!base) return "";
     return base.replace(/\.gz$/i, "").replace(/\.(pdb|ent|cif|mmcif)$/i, "");
-  }
-
-  function syncHarmonic() {
-    if (!harmonicAdded || !harmonicSigma) return;
-    harmonicSigma.disabled = !harmonicAdded.checked;
-  }
-
-  if (harmonicAdded) {
-    harmonicAdded.addEventListener("change", syncHarmonic);
-    syncHarmonic();
   }
 
   const initialOutput = outputDirInput ? outputDirInput.value.replace(/\/+$/, "") : "";
@@ -187,7 +249,7 @@
     const path = form.querySelector(`[name="path_${fileKey}"]`);
     const update = () => {
       const fromFile = file && file.files[0] ? file.files[0].name : "";
-      const fromPath = path && path.value.trim() ? path.value.trim() : "";
+      const fromPath = path && !path.disabled && path.value.trim() ? path.value.trim() : "";
       if (fromFile || fromPath) useCoordinateName(fromFile || fromPath, input);
     };
     if (file) file.addEventListener("change", update);
@@ -210,7 +272,7 @@
     const file = form.querySelector(`[name="file_${key}"]`);
     const path = form.querySelector(`[name="path_${key}"]`);
     if (file && file.files[0]) data.append("file", file.files[0]);
-    if (path) data.append("path", path.value);
+    else if (path && !path.disabled) data.append("path", path.value);
     scanButton.disabled = true;
     try {
       const response = await fetch("/api/scan", { method: "POST", body: data });
@@ -526,7 +588,14 @@
 
   function showResult(data) {
     setViewerTitle(data);
-    figure.src = `${data.figure_url}?t=${Date.now()}`;
+    const savedFigure = figure.closest(".static-figure");
+    if (data.figure_url) {
+      figure.src = `${data.figure_url}?t=${Date.now()}`;
+      if (savedFigure) savedFigure.hidden = false;
+    } else if (savedFigure) {
+      figure.removeAttribute("src");
+      savedFigure.hidden = true;
+    }
     caption.textContent = data.caption;
     if (Array.isArray(data.steps) && data.steps.length) showReconstructionSteps(data.steps);
     if (data.viewer && data.viewer.voxel && data.iteration != null) {

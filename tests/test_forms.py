@@ -28,6 +28,7 @@ from xfel_web.forms import (
     decompress_gzip,
     parse_angle_restraints,
     parse_copies,
+    parse_dihedral_restraints,
     parse_distance_restraints,
     parse_extra_residues,
     parse_job,
@@ -45,8 +46,9 @@ from xfel_web.pipelines import (
     intensity_truncate_args,
     is_reflection_mtz,
     refmac_amplitude_cad_keywords,
+    refmac_keywords,
 )
-from xfel_web.restraints import external_angle_keywords, external_distance_keywords
+from xfel_web.restraints import external_angle_keywords, external_dihedral_keywords, external_distance_keywords
 
 
 def _pdb_line(serial, name, x, y, z, element):
@@ -197,6 +199,10 @@ class ParseTests(unittest.TestCase):
         self.assertEqual(parse_copies("A", 416, "D 416\nA 416"), [("A", 416), ("D", 416)])
         self.assertEqual(parse_distance_restraints("MN1 O5\nMN4 O5 2.4 0.5"), [("MN1", "O5"), ("MN4", "O5", 2.4, 0.5)])
         self.assertEqual(parse_angle_restraints("MN3 O5 MN4 109.5"), [("MN3", "O5", "MN4", 109.5)])
+        self.assertEqual(
+            parse_dihedral_restraints("MN1 O5 MN4 CA1 180 10"),
+            [("MN1", "O5", "MN4", "CA1", 180.0, 10.0)],
+        )
         with self.assertRaises(FormError):
             parse_extra_residues("AB 189")
 
@@ -324,6 +330,7 @@ class ParseTests(unittest.TestCase):
             _pdb_line(1, "MN1", 0, 0, 0, "MN")
             + _pdb_line(2, "O5", 1, 0, 0, "O")
             + _pdb_line(3, "MN4", 1, 1, 0, "MN")
+            + _pdb_line(4, "CA1", 1, 1, 1, "CA")
             + "END\n"
         )
         try:
@@ -333,6 +340,17 @@ class ParseTests(unittest.TestCase):
             angle = external_angle_keywords(path, [("A", 416)], [("MN1", "O5", "MN4")], 25)
             self.assertIn("exte angle first chain A resi 416 atom MN1", angle)
             self.assertIn("value 90.000 sigma 25.000", angle)
+            torsion = external_dihedral_keywords(path, [("A", 416)], [("MN1", "O5", "MN4", "CA1")], 10)
+            self.assertIn("exte torsion first chain A resi 416 atom MN1", torsion)
+            self.assertIn("next chain A resi 416 atom CA1", torsion)
+            self.assertIn("value 90.000 sigma 10.000 period 1", torsion)
+            with self.assertRaises(ValueError):
+                external_dihedral_keywords(
+                    path,
+                    [("A", 416)],
+                    [("MN1", "O5", "MN4", "CA1"), ("CA1", "MN4", "O5", "MN1")],
+                    10,
+                )
             conformers = residue_conformers(path, "A", 416)
             self.assertIn("MN1", conformers[""])
         finally:
@@ -386,6 +404,9 @@ class RefinementFormTests(unittest.TestCase):
             root = Path(tmp)
             cfg = parse_job("refinement", self._form(root), {}, root)
         self.assertIsNone(cfg["fft_dmin"])
+        self.assertEqual(cfg["refmac_ncyc"], 0)
+        self.assertEqual(cfg["refmac_bref"], "ISOT")
+        self.assertEqual(cfg["refmac_type"], "REST")
         self.assertEqual(cfg["map_center"], "residue")
         self.assertIsNone(cfg["map_center_xyz"])
 
@@ -410,7 +431,14 @@ class RefinementFormTests(unittest.TestCase):
     def test_finer_grid_resolution_is_kept(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            cfg = parse_job("refinement", self._form(root, fft_dmin="1.20"), {}, root)
+            ignored = parse_job("refinement", self._form(root, fft_dmin="1.20"), {}, root)
+            cfg = parse_job(
+                "refinement",
+                self._form(root, use_fft_grid="on", fft_dmin="1.20"),
+                {},
+                root,
+            )
+        self.assertIsNone(ignored["fft_dmin"])
         self.assertEqual(cfg["fft_dmin"], 1.2)
 
     def test_custom_dictionary_is_optional(self):
@@ -426,7 +454,13 @@ class RefinementFormTests(unittest.TestCase):
             library.write_text("data_comp_list\n")
             cfg = parse_job(
                 "refinement",
-                self._form(root, refmac_ncyc="0", path_custom_dictionary=str(library)),
+                self._form(
+                    root,
+                    use_refmac="on",
+                    refmac_ncyc="0",
+                    use_custom_dictionary="on",
+                    path_custom_dictionary=str(library),
+                ),
                 {},
                 root,
             )
@@ -454,13 +488,72 @@ class RefinementFormTests(unittest.TestCase):
             self.assertEqual(stored.read_bytes(), b"MTZ ")
             self.assertEqual(stored.parent.name, "inputs")
 
+    def test_a_custom_dictionary_path_is_ignored_while_the_switch_is_off(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            library = root / "ligand.cif"
+            library.write_text("data_comp_list\n")
+            cfg = parse_job(
+                "refinement",
+                self._form(root, use_refmac="on", path_custom_dictionary=str(library)),
+                {},
+                root,
+            )
+        self.assertIsNone(cfg["custom_dictionary"])
+
+    def test_restraint_text_is_used_only_while_its_switch_is_on(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            posted = self._form(
+                root,
+                distance_restraints="MN1 O5",
+                angle_restraints="MN1 O5 MN4",
+                dihedral_restraints="MN1 O5 MN4 CA1",
+            )
+            off = parse_job("refinement", posted, {}, root)
+            self.assertEqual(off["distance_restraints"], [])
+            self.assertEqual(off["angle_restraints"], [])
+            self.assertEqual(off["dihedral_restraints"], [])
+            self.assertEqual(off["dihedral_sigma"], 10.0)
+            on = parse_job(
+                "refinement",
+                self._form(
+                    root,
+                    use_refmac="on",
+                    use_distance_restraints="on",
+                    use_angle_restraints="on",
+                    use_dihedral_restraints="on",
+                    distance_restraints="MN1 O5",
+                    angle_restraints="MN1 O5 MN4",
+                    dihedral_restraints="MN1 O5 MN4 CA1 180",
+                    dihedral_sigma="10",
+                ),
+                {},
+                root,
+            )
+            self.assertEqual(on["distance_restraints"], [("MN1", "O5")])
+            self.assertEqual(on["angle_restraints"], [("MN1", "O5", "MN4")])
+            self.assertEqual(on["dihedral_restraints"], [("MN1", "O5", "MN4", "CA1", 180.0)])
+            with self.assertRaises(FormError):
+                parse_job(
+                    "refinement",
+                    self._form(root, use_refmac="on", use_dihedral_restraints="on", dihedral_sigma="0"),
+                    {},
+                    root,
+                )
+
     def test_missing_custom_dictionary_is_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             with self.assertRaises(FormError) as caught:
                 parse_job(
                     "refinement",
-                    self._form(root, path_custom_dictionary=str(root / "missing.cif")),
+                    self._form(
+                        root,
+                        use_refmac="on",
+                        use_custom_dictionary="on",
+                        path_custom_dictionary=str(root / "missing.cif"),
+                    ),
                     {},
                     root,
                 )
@@ -470,8 +563,69 @@ class RefinementFormTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             with self.assertRaises(FormError) as caught:
-                parse_job("refinement", self._form(root, fft_dmin="2.50"), {}, root)
+                parse_job("refinement", self._form(root, use_fft_grid="on", fft_dmin="2.50"), {}, root)
         self.assertIn("coarser", str(caught.exception))
+
+    def test_structure_factor_resolution_does_not_require_cutoffs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            form = self._form(root, resolution_source="sf", use_fft_grid="on", fft_dmin="1.20")
+            form.pop("lowres")
+            form.pop("dmin")
+            cfg = parse_job("refinement", form, {}, root)
+        self.assertEqual(cfg["resolution_source"], "sf")
+        self.assertIsNone(cfg["lowres"])
+        self.assertIsNone(cfg["dmin"])
+        self.assertEqual(cfg["fft_dmin"], 1.2)
+
+    def test_refmac_section_off_forces_zero_cycles(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cfg = parse_job(
+                "refinement",
+                self._form(
+                    root,
+                    refmac_ncyc="5",
+                    refmac_bref="ANIS",
+                    refmac_type="UNRE",
+                    use_distance_restraints="on",
+                    distance_restraints="MN1 O5",
+                ),
+                {},
+                root,
+            )
+        self.assertEqual(cfg["refmac_ncyc"], 0)
+        self.assertEqual(cfg["refmac_bref"], "ISOT")
+        self.assertEqual(cfg["refmac_type"], "REST")
+        self.assertEqual(cfg["distance_restraints"], [])
+
+    def test_refmac_keywords_follow_the_form(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cfg = parse_job(
+                "refinement",
+                self._form(
+                    root,
+                    use_refmac="on",
+                    refmac_ncyc="3",
+                    refmac_bref="OVER",
+                    refmac_type="UNRE",
+                ),
+                {},
+                root,
+            )
+        self.assertEqual(cfg["refmac_ncyc"], 3)
+        text = refmac_keywords(cfg["refmac_ncyc"], bref=cfg["refmac_bref"], refi_type=cfg["refmac_type"])
+        self.assertIn("TYPE UNRE", text)
+        self.assertIn("BREF OVER", text)
+        self.assertIn("RESI MLKF", text)
+        self.assertIn("NCYC 3", text)
+        default = refmac_keywords(0)
+        self.assertIn("TYPE REST", default)
+        self.assertIn("BREF ANIS", default)
+        isotropic = refmac_keywords(0, bref="ISOT", refi_type="REST")
+        self.assertIn("BREF ISOT", isotropic)
+        self.assertNotIn("BREF ANIS", isotropic)
 
 
 class TruncateColumnTests(unittest.TestCase):
