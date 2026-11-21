@@ -198,6 +198,140 @@ def _identity_label(atom: PdbAtom) -> str:
     return f"{atom.name} chain {atom.chain} residue {atom.resseq}{icode}"
 
 
+def _link_record(line: str) -> str | None:
+    """Return one PDB ``LINK`` record, or None when the line is not one.
+
+    A record that already starts in column 1 keeps its spacing. Leading
+    whitespace is removed so a text file of extracted records is accepted.
+    ``LINKR`` and any other name that merely begins with ``LINK`` are left alone.
+    """
+    text = line.rstrip("\r\n")
+    body = text.lstrip(" \t")
+    if len(body) < 4 or not body.startswith("LINK"):
+        return None
+    rest = body[4:]
+    if rest and not rest[0].isspace():
+        return None
+    if text.startswith("LINK"):
+        return text
+    return body
+
+
+def read_link_records(path: Path) -> list[str]:
+    """LINK records in ``path``, in file order. Exact repeats are omitted."""
+    records = []
+    with Path(path).open(encoding="utf-8", errors="replace") as handle:
+        for line in handle:
+            record = _link_record(line)
+            if record is not None:
+                records.append(record)
+    return _unique_link_records(records)
+
+
+def _unique_link_records(records: list[str]) -> list[str]:
+    """First occurrence of each LINK record. Trailing space does not make a new one."""
+    unique = []
+    seen = set()
+    for record in records:
+        key = record.rstrip()
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(key)
+    return unique
+
+
+def apply_link_records(pdb_text: str, records: list[str]) -> str:
+    """Replace every LINK record in a PDB with ``records``.
+
+    An empty list leaves the text unchanged. Existing LINK records are
+    removed, including repeats, and each supplied record is written once.
+    The new records stand where the first old record stood. A file that had
+    none receives them immediately before the first ``ATOM`` or ``HETATM``
+    record, or before ``END`` when the file has no atoms.
+    """
+    records = _unique_link_records(records)
+    if not records:
+        return pdb_text
+    lines = pdb_text.splitlines()
+    kept: list[str] = []
+    insert_at = None
+    for line in lines:
+        if _link_record(line) is not None:
+            if insert_at is None:
+                insert_at = len(kept)
+            continue
+        kept.append(line)
+    if insert_at is None:
+        insert_at = next(
+            (index for index, line in enumerate(kept) if line.startswith(("ATOM", "HETATM"))),
+            None,
+        )
+    if insert_at is None:
+        insert_at = next(
+            (index for index, line in enumerate(kept) if line.startswith("END")),
+            len(kept),
+        )
+    updated = kept[:insert_at] + list(records) + kept[insert_at:]
+    text = "\n".join(updated)
+    if pdb_text.endswith(("\n", "\r\n")) or not pdb_text:
+        text += "\n"
+    return text
+
+
+def replace_link_records(path: Path, records: list[str]) -> None:
+    """Replace the LINK records in ``path``. An empty list leaves the file unchanged."""
+    if not records:
+        return
+    text = path.read_text(encoding="utf-8", errors="replace")
+    updated = apply_link_records(text, records)
+    if updated != text:
+        path.write_text(updated, encoding="utf-8")
+
+
+def _prepare_omit_snapshot(working: Path, snapshot: Path, records: list[str]) -> None:
+    """Copy the working model and replace its LINK records with ``records``."""
+    if working.resolve() != snapshot.resolve():
+        shutil.copy2(working, snapshot)
+    replace_link_records(snapshot, records)
+
+
+def _link_count_text(count: int) -> str:
+    noun = "LINK record" if count == 1 else "LINK records"
+    return f"{count} {noun}"
+
+
+def configured_link_records(cfg: dict, emit) -> list[str]:
+    """LINK records that replace those in every omit model before refinement.
+
+    The switch defaults to on. The source is the starting omit model, unless
+    ``link_records`` names another file. Either source replaces the LINK
+    records already in the initial omit model and in each step. The switch
+    being off yields no records.
+    """
+    if not cfg.get("restore_links", True):
+        return []
+    external = cfg.get("link_records")
+    source = Path(external) if external else Path(cfg["files"]["dark_pdb"])
+    if not source.is_file():
+        raise ValueError(f"The LINK record file was not found: {source}")
+    records = read_link_records(source)
+    if external and not records:
+        raise ValueError(
+            f"{source.name} contains no LINK records. "
+            "Leave the LINK record file empty to use the starting omit model."
+        )
+    if records:
+        emit(
+            f"LINK records: {_link_count_text(len(records))} from {source.name}. "
+            "They replace the LINK records in the initial omit model and in each step's omit model "
+            "before refinement."
+        )
+    else:
+        emit(f"{source.name} contains no LINK records, so none are copied.")
+    return records
+
+
 def insert_atom_record(pdb_text: str, record: str) -> str:
     """Insert one PDB atom, with a fresh serial, beside its residue or before END."""
     record = record.rstrip("\n")
@@ -893,6 +1027,13 @@ def run_reconstruct(cfg: dict, emit, pause=None, omit_runner=None, report_step=N
             "The new atom is inserted into those refined coordinates, "
             "and the next iteration starts from that model."
         )
+    link_records = configured_link_records(cfg, emit)
+    if link_records:
+        replace_link_records(working, link_records)
+        emit(
+            f"Replaced the LINK records in the initial omit model {working.name} "
+            f"with {_link_count_text(len(link_records))}."
+        )
 
     added: list[dict] = []
     excluded: set[tuple] = set()
@@ -911,9 +1052,14 @@ def run_reconstruct(cfg: dict, emit, pause=None, omit_runner=None, report_step=N
         iter_dir.mkdir(parents=True, exist_ok=True)
         log = _IterationLog(emit, iter_dir / "reconstruction.log")
         snapshot = iter_dir / f"{cfg['dark_id']}_omit.pdb"
-        shutil.copy2(working, snapshot)
+        _prepare_omit_snapshot(working, snapshot, link_records)
         log("")
         log(f"Reconstruction iteration {iteration}: omit model {snapshot.name}, {len(added)} atoms added so far")
+        if link_records:
+            log(
+                f"Replaced the LINK records in {snapshot.name} with "
+                f"{_link_count_text(len(link_records))} before refinement."
+            )
         # The script is written for every iteration. PyMOL runs only when this
         # step will wait for the 3D viewer, which is a map-check pause.
         checks_map = bool(n_check) and iteration % n_check == 0
@@ -1169,9 +1315,14 @@ def run_reconstruct(cfg: dict, emit, pause=None, omit_runner=None, report_step=N
         iter_dir.mkdir(parents=True, exist_ok=True)
         log = _IterationLog(emit, iter_dir / "reconstruction.log")
         snapshot = iter_dir / f"{cfg['dark_id']}_omit.pdb"
-        shutil.copy2(working, snapshot)
+        _prepare_omit_snapshot(working, snapshot, link_records)
         log("")
         log(f"Final residual map of the reconstructed model ({len(added)} atoms added)")
+        if link_records:
+            log(
+                f"Replaced the LINK records in {snapshot.name} with "
+                f"{_link_count_text(len(link_records))} before refinement."
+            )
         result = _stamp_iteration_outputs(
             iter_dir,
             iteration,

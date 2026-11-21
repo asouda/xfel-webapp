@@ -262,6 +262,8 @@ pre {
 .hint { color: var(--faint); font-size: 13px; margin: 6px 0 0; }
 .file-grid, .fields { display: grid; grid-template-columns: 1fr 1fr; gap: 14px 16px; }
 .field-stack { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.reconstruct-counts { align-items: start; }
+.link-source .check { grid-column: auto; }
 fieldset {
   margin: 0;
   padding: 14px;

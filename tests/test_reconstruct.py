@@ -22,10 +22,12 @@ from xfel_web.forms import FormError, parse_job
 from xfel_web.peaks import DensityMap
 from xfel_web.reconstruction import (
     _section_directions,
+    apply_link_records,
     closest_atom,
     describe_atom,
     insert_atom_record,
     place_record_at,
+    read_link_records,
     remove_atom_identity,
     locate_peak,
     missing_atoms,
@@ -380,6 +382,59 @@ class PeakTests(unittest.TestCase):
             self.assertAlmostEqual(by_name["density_xyz_pmm"], 16.0 + 1.0 / math.sqrt(3.0), places=5)
 
 
+class LinkRecordTests(unittest.TestCase):
+    def test_supplied_records_replace_link_lines_and_leave_linkr_in_place(self):
+        kept = "LINK         OE2 GLU A 189                 MN1 OEY A 416     1555   1555  2.15"
+        dropped = "LINK         O5  OEY A 416                 MN1 OEY A 416     1555   1555  1.80"
+        atom = _pdb_line(1, "MN1", 0, 0, 0, "MN")
+        source = "\n".join(
+            [
+                "HEADER    TEST",
+                "LINKR        not a LINK record",
+                atom,
+                "LINK         OLD GLU A 189                 MN1 OEY A 416",
+                "END",
+            ]
+        ) + "\n"
+        updated = apply_link_records(source, [kept, dropped])
+        self.assertIn("LINKR        not a LINK record", updated)
+        self.assertNotIn("OLD GLU", updated)
+        self.assertLess(updated.index(atom), updated.index(kept))
+        self.assertLess(updated.index(dropped), updated.index("END"))
+        self.assertEqual(updated.count("HETATM"), 1)
+        self.assertEqual(apply_link_records(source, []), source)
+
+    def test_a_file_without_link_records_receives_them_before_the_first_atom(self):
+        dropped = "LINK         O5  OEY A 416                 MN1 OEY A 416     1555   1555  1.80"
+        atom = _pdb_line(1, "MN1", 0, 0, 0, "MN")
+        source = "\n".join(["HEADER    TEST", atom, "END"]) + "\n"
+        updated = apply_link_records(source, [dropped])
+        self.assertLess(updated.index(dropped), updated.index("HETATM"))
+        self.assertEqual(updated.count(dropped), 1)
+
+    def test_replacement_removes_existing_records_and_writes_each_record_once(self):
+        kept = "LINK         OE2 GLU A 189                 MN1 OEY A 416     1555   1555  2.15"
+        dropped = "LINK         O5  OEY A 416                 MN1 OEY A 416     1555   1555  1.80"
+        extra = "LINK         O   HOH A 814                 MN1 OEY A 416     1555   1555  2.10"
+        atom = _pdb_line(1, "MN1", 0, 0, 0, "MN")
+        source = "\n".join(["HEADER    TEST", atom, kept, kept, extra, "END"]) + "\n"
+        updated = apply_link_records(source, [kept, dropped, kept])
+        links = [line for line in updated.splitlines() if line.startswith("LINK")]
+        self.assertEqual(links, [kept, dropped])
+        self.assertNotIn(extra, updated)
+        self.assertEqual(updated.count("HETATM"), 1)
+
+    def test_an_indented_link_line_is_read_and_linkr_is_not(self):
+        dropped = "LINK         O5  OEY A 416                 MN1 OEY A 416     1555   1555  1.80"
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "links.txt"
+            path.write_text(
+                "\n".join(["LINKR        skip", f"  {dropped}", "REMARK no"]) + "\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(read_link_records(path), [dropped])
+
+
 class LoopTests(unittest.TestCase):
     def _run(
         self,
@@ -397,6 +452,10 @@ class LoopTests(unittest.TestCase):
         omit_lines=(),
         shift_refined=0.0,
         calls=None,
+        restore_links=None,
+        link_records=None,
+        drop_links=False,
+        extra_refined_lines=(),
     ):
         source = root / "spike.ccp4"
         _spike_map(source)
@@ -415,6 +474,10 @@ class LoopTests(unittest.TestCase):
             shutil.copy2(source, dest)
             refined = Path(cfg["output_dir"]) / f"{cfg['dark_id']}_refined.pdb"
             source_text = Path(cfg["files"]["dark_pdb"]).read_text(encoding="utf-8")
+            if drop_links:
+                source_text = "\n".join(
+                    line for line in source_text.splitlines() if line[:6].strip() != "LINK"
+                ) + "\n"
             if shift_refined:
                 shifted_lines = []
                 for line in source_text.splitlines():
@@ -425,6 +488,12 @@ class LoopTests(unittest.TestCase):
                 refined.write_text("\n".join(shifted_lines) + "\n", encoding="utf-8")
             else:
                 refined.write_text(source_text, encoding="utf-8")
+            if extra_refined_lines:
+                existing = refined.read_text(encoding="utf-8")
+                refined.write_text(
+                    existing.rstrip("\n") + "\n" + "\n".join(extra_refined_lines) + "\n",
+                    encoding="utf-8",
+                )
             log_path = Path(cfg["output_dir"]) / (
                 f"{cfg['dark_id']}_vs_{cfg['light_id']}_refmac{int(cfg['refmac_ncyc'])}.log"
             )
@@ -453,23 +522,28 @@ class LoopTests(unittest.TestCase):
         logs = []
         self.last_harmonics = []
         self.render_flags = []
+        job = {
+            "output_dir": root / "out",
+            "dark_id": "omit",
+            "light_id": "ref",
+            "n_atoms": n_atoms,
+            "n_check_map": n_check,
+            "density_cutoff": density_cutoff,
+            "neighborhood_size": 3,
+            "spline_seed": False,
+            "spline_order": 3,
+            "harmonic_added": harmonic,
+            "harmonic_sigma": 0.1,
+            "candidate_atoms": candidate_atoms,
+            "refmac_ncyc": 0,
+            "files": {"dark_pdb": omit, "light_pdb": reference, "light_sf": reference},
+        }
+        if restore_links is not None:
+            job["restore_links"] = restore_links
+        if link_records is not None:
+            job["link_records"] = link_records
         result = run_reconstruct(
-            {
-                "output_dir": root / "out",
-                "dark_id": "omit",
-                "light_id": "ref",
-                "n_atoms": n_atoms,
-                "n_check_map": n_check,
-                "density_cutoff": density_cutoff,
-                "neighborhood_size": 3,
-                "spline_seed": False,
-                "spline_order": 3,
-                "harmonic_added": harmonic,
-                "harmonic_sigma": 0.1,
-                "candidate_atoms": candidate_atoms,
-                "refmac_ncyc": 0,
-                "files": {"dark_pdb": omit, "light_pdb": reference, "light_sf": reference},
-            },
+            job,
             logs.append,
             pause=pause,
             omit_runner=omit_runner,
@@ -891,6 +965,147 @@ class LoopTests(unittest.TestCase):
             self.assertTrue(any("farther than 3" in line for line in logs))
             self.assertTrue(any("O5" in line and "Closest missing atom" in line for line in logs))
 
+    def test_link_records_are_copied_into_each_omit_model_before_refinement(self):
+        kept = "LINK         OE2 GLU A 189                 MN1 OEY A 416     1555   1555  2.15"
+        dropped = "LINK         O5  OEY A 416                 MN1 OEY A 416     1555   1555  1.80"
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "spike.ccp4"
+            _spike_map(source)
+            peak = locate_peak(source, 3, False, 3)
+            _result, calls, logs = self._run(
+                root,
+                peak["xyz"],
+                [],
+                restore_links=True,
+                omit_lines=[kept, dropped],
+                drop_links=True,
+            )
+            self.assertIn(kept, calls[0])
+            self.assertIn(dropped, calls[0])
+            self.assertIn(kept, calls[1])
+            self.assertIn(dropped, calls[1])
+            added = (root / "out" / "r-iteration-01" / "omit_refined_added_O5_step01.pdb").read_text()
+            self.assertNotIn("LINK ", added)
+            step2 = (root / "out" / "r-iteration-02" / "omit_omit_step02.pdb").read_text(encoding="utf-8")
+            self.assertEqual(step2, calls[1])
+            self.assertIn("MN1", step2)
+            logged = (root / "out" / "r-iteration-02" / "reconstruction.log").read_text(encoding="utf-8")
+            self.assertIn(
+                "Replaced the LINK records in omit_omit_step02.pdb with 2 LINK records before refinement.",
+                logged,
+            )
+            self.assertTrue(any("2 LINK records from omit.pdb" in line for line in logs))
+
+    def test_link_records_stay_out_of_later_steps_when_the_switch_is_off(self):
+        kept = "LINK         OE2 GLU A 189                 MN1 OEY A 416     1555   1555  2.15"
+        dropped = "LINK         O5  OEY A 416                 MN1 OEY A 416     1555   1555  1.80"
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "spike.ccp4"
+            _spike_map(source)
+            peak = locate_peak(source, 3, False, 3)
+            _result, calls, _logs = self._run(
+                root,
+                peak["xyz"],
+                [],
+                restore_links=False,
+                omit_lines=[kept, dropped],
+                drop_links=True,
+            )
+            self.assertIn(dropped, calls[0])
+            self.assertNotIn("LINK", calls[1])
+            step2 = (root / "out" / "r-iteration-02" / "omit_omit_step02.pdb").read_text(encoding="utf-8")
+            self.assertNotIn("LINK", step2)
+
+    def test_an_external_link_file_supplies_every_step(self):
+        kept = "LINK         OE2 GLU A 189                 MN1 OEY A 416     1555   1555  2.15"
+        dropped = "LINK         O5  OEY A 416                 MN1 OEY A 416     1555   1555  1.80"
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "spike.ccp4"
+            _spike_map(source)
+            peak = locate_peak(source, 3, False, 3)
+            external = root / "links.txt"
+            external.write_text(dropped + "\n", encoding="utf-8")
+            _result, calls, logs = self._run(
+                root,
+                peak["xyz"],
+                [],
+                restore_links=True,
+                link_records=external,
+                omit_lines=[kept],
+                drop_links=True,
+            )
+            self.assertIn(dropped, calls[0])
+            self.assertNotIn(kept, calls[0])
+            self.assertIn(dropped, calls[1])
+            self.assertNotIn(kept, calls[1])
+            self.assertTrue(any("1 LINK record from links.txt" in line for line in logs))
+            step1 = (root / "out" / "r-iteration-01" / "omit_omit_step01.pdb").read_text(encoding="utf-8")
+            self.assertEqual(
+                [line for line in step1.splitlines() if line.startswith("LINK")],
+                [dropped],
+            )
+            self.assertIn(kept, (root / "omit.pdb").read_text(encoding="utf-8"))
+
+    def test_kept_link_records_are_replaced_and_a_repeated_record_is_written_once(self):
+        kept = "LINK         OE2 GLU A 189                 MN1 OEY A 416     1555   1555  2.15"
+        dropped = "LINK         O5  OEY A 416                 MN1 OEY A 416     1555   1555  1.80"
+        extra = "LINK         O   HOH A 814                 MN1 OEY A 416     1555   1555  2.10"
+
+        def link_lines(text: str) -> list[str]:
+            return [line for line in text.splitlines() if line.startswith("LINK")]
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "spike.ccp4"
+            _spike_map(source)
+            peak = locate_peak(source, 3, False, 3)
+            _result, calls, _logs = self._run(
+                root,
+                peak["xyz"],
+                [],
+                restore_links=True,
+                omit_lines=[kept, kept, dropped],
+                extra_refined_lines=(kept, extra),
+            )
+            self.assertEqual(link_lines(calls[0]), [kept, dropped])
+            self.assertEqual(link_lines(calls[1]), [kept, dropped])
+            step1 = (root / "out" / "r-iteration-01" / "omit_omit_step01.pdb").read_text(encoding="utf-8")
+            self.assertEqual(link_lines(step1), [kept, dropped])
+
+    def test_an_external_file_replaces_links_in_the_initial_model_and_every_step(self):
+        kept = "LINK         OE2 GLU A 189                 MN1 OEY A 416     1555   1555  2.15"
+        chosen = "LINK         O5  OEY A 416                 MN1 OEY A 416     1555   1555  1.80"
+
+        def link_lines(text: str) -> list[str]:
+            return [line for line in text.splitlines() if line.startswith("LINK")]
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "spike.ccp4"
+            _spike_map(source)
+            peak = locate_peak(source, 3, False, 3)
+            external = root / "links.txt"
+            external.write_text(chosen + "\n" + chosen + "\n", encoding="utf-8")
+            _result, calls, _logs = self._run(
+                root,
+                peak["xyz"],
+                [],
+                restore_links=True,
+                link_records=external,
+                omit_lines=[kept, kept],
+                extra_refined_lines=(kept,),
+            )
+            self.assertEqual(link_lines(calls[0]), [chosen])
+            self.assertEqual(link_lines(calls[1]), [chosen])
+            step1 = (root / "out" / "r-iteration-01" / "omit_omit_step01.pdb").read_text(encoding="utf-8")
+            step2 = (root / "out" / "r-iteration-02" / "omit_omit_step02.pdb").read_text(encoding="utf-8")
+            self.assertEqual(link_lines(step1), [chosen])
+            self.assertEqual(link_lines(step2), [chosen])
+            self.assertEqual(link_lines((root / "omit.pdb").read_text(encoding="utf-8")), [kept, kept])
+
 
 class ReconstructFormTests(unittest.TestCase):
     def _form(self, root: Path, **overrides):
@@ -929,6 +1144,7 @@ class ReconstructFormTests(unittest.TestCase):
             "distance_restraints": "",
             "angle_restraints": "",
             "n_atoms": "2",
+            "restore_links": "on",
             "density_cutoff": "0",
             "n_check_map": "0",
             "neighborhood_size": "3",
@@ -973,6 +1189,8 @@ class ReconstructFormTests(unittest.TestCase):
         self.assertFalse(cfg["harmonic_protein"])
         self.assertEqual(cfg["harmonic_protein_sigma"], 0.1)
         self.assertEqual(cfg["candidate_atoms"], "missing")
+        self.assertTrue(cfg["restore_links"])
+        self.assertIsNone(cfg["link_records"])
 
     def test_spline_order_is_read_only_when_the_spline_maximum_is_on(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1039,6 +1257,42 @@ class ReconstructFormTests(unittest.TestCase):
         self.assertTrue(on["harmonic_protein"])
         self.assertEqual(on["harmonic_protein_sigma"], 0.3)
 
+    def test_an_external_link_file_is_optional_and_must_contain_link_records(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            off = parse_job(
+                "reconstruct",
+                self._form(root, restore_links="", path_link_records=str(root / "missing.pdb")),
+                {},
+                root,
+            )
+            self.assertFalse(off["restore_links"])
+            self.assertIsNone(off["link_records"])
+            blank = root / "blank.pdb"
+            blank.write_text("END\n", encoding="utf-8")
+            with self.assertRaises(FormError):
+                parse_job("reconstruct", self._form(root, path_link_records=str(blank)), {}, root)
+            with self.assertRaises(FormError):
+                parse_job(
+                    "reconstruct",
+                    self._form(root, path_link_records=str(root / "absent.pdb")),
+                    {},
+                    root,
+                )
+            chosen = root / "links.pdb"
+            chosen.write_text(
+                "LINK         O5  OEY A 416                 MN1 OEY A 416     1555   1555  1.80\nEND\n",
+                encoding="utf-8",
+            )
+            cfg = parse_job(
+                "reconstruct",
+                self._form(root, path_link_records=str(chosen)),
+                {},
+                root,
+            )
+        self.assertTrue(cfg["restore_links"])
+        self.assertEqual(cfg["link_records"], chosen.resolve())
+
     def test_every_reference_atom_can_be_made_eligible(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -1064,6 +1318,8 @@ class ReconstructFormTests(unittest.TestCase):
             form["path_light_pdb"] = form["path_dark_pdb"]
             cfg = parse_job("refinement", form, {}, root)
         self.assertNotIn("n_atoms", cfg)
+        self.assertNotIn("restore_links", cfg)
+        self.assertNotIn("link_records", cfg)
         self.assertNotIn("density_cutoff", cfg)
         self.assertNotIn("geometry_bonds", cfg)
         self.assertNotIn("n_check_map", cfg)

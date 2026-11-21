@@ -318,6 +318,28 @@ def _active_restraints(form, refine: bool):
     return distances, distance_sigma, angles, angle_sigma, dihedrals, dihedral_sigma
 
 
+def _link_record_file(form, files, output_dir: Path, project: Path) -> Path | None:
+    """External LINK records for reconstruction. None uses the starting omit model.
+
+    The file is read only while the switch is on. Off ignores a path or upload.
+    """
+    if not _flag(form, "restore_links"):
+        return None
+    path = resolve_optional_input_file(
+        form, files, "link_records", "LINK record file", output_dir, project
+    )
+    if path is None:
+        return None
+    from xfel_web.reconstruction import read_link_records
+
+    if not read_link_records(path):
+        raise FormError(
+            "The LINK record file contains no LINK records. "
+            "Leave the field empty to use the LINK records in the starting omit model."
+        )
+    return path
+
+
 def _custom_dictionary(form, files, output_dir: Path, project: Path):
     if not _flag(form, "use_custom_dictionary"):
         return None
@@ -632,6 +654,7 @@ def parse_job(workflow: str, form, files, project: Path) -> dict:
         custom_dictionary = _custom_dictionary(form, files, output_dir, project) if refine else None
         harmonic_added = refine and _flag(form, "harmonic_added")
         harmonic_protein, harmonic_protein_sigma = _protein_harmonic(form, refine)
+        restore_links = _flag(form, "restore_links")
         cfg["show_oec_bonds"] = False
         cfg["ray_trace"] = True
         cfg["recompute_map"] = True
@@ -655,6 +678,8 @@ def parse_job(workflow: str, form, files, project: Path) -> dict:
                 "positive_levels": positive,
                 "negative_levels": negative,
                 "n_atoms": n_atoms,
+                "restore_links": restore_links,
+                "link_records": _link_record_file(form, files, output_dir, project),
                 "density_cutoff": density_cutoff,
                 "n_check_map": n_check,
                 "candidate_atoms": _candidate_atoms(form),

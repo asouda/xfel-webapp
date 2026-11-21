@@ -33,7 +33,7 @@
     <p>The starting omit model is rebuilt one heavy atom at a time. Each iteration refines the current omit model and calculates its mFo−DFc map. The highest peak of the clipped map is matched to the nearest eligible heavy atom in the reference model, and that atom’s PDB record is added to the refined coordinates at the Cartesian position of the peak. That structure is the omit model of the next iteration. A peak whose voxel density is below the density cutoff is treated as noise: no atom is added, and the reconstruction stops. By default an atom already in the omit model is not eligible. The form can include every heavy atom in the reference model instead. When that choice selects an atom whose identity is already in the working model, the existing record is removed and the reference record is written at the peak, which moves that atom. Hydrogens are not candidates.</p>
     <h2>How it is calculated</h2>
     <ol>
-      <li>The omit-map workflow refines the current omit model and calculates its clipped mFo−DFc map. The REFMAC refinement section starts off, which runs zero cycles and leaves the heavy atoms where they are. Turn it on to set the cycle count and the REFMAC protocol. The refined coordinates are saved as the omit-model name followed by <code>_refined_stepNN.pdb</code>. A custom dictionary is read only when its switch is on and the cycle count is greater than zero. When the harmonic switch is on, each atom added in an earlier iteration is held at the coordinates written into the omit model. The default sigma is 0.1 Å. When the protein harmonic switch is on, every protein atom in every chain is held at its coordinates in the model, except atoms in the site residue, the additional copies, and the neighbouring residues. Those restraints are used only when the cycle count is greater than zero.</li>
+      <li>The omit-map workflow refines the current omit model and calculates its clipped mFo−DFc map. The REFMAC refinement section starts off, which runs zero cycles and leaves the heavy atoms where they are. Turn it on to set the cycle count and the REFMAC protocol. The refined coordinates are saved as the omit-model name followed by <code>_refined_stepNN.pdb</code>. When <strong>Copy LINK records before each refinement</strong> is on, which is the default, the LINK records from the starting omit model replace the LINK records in each step’s omit model, including the initial omit model, before that refinement. A repeated record is written once. An optional file replaces those records in every omit model, including the initial one. The records include the ones that name atoms added in earlier steps. REFMAC leaves a LINK record out of the coordinates it writes while either atom is still missing, so the chosen records replace the LINK records again at the next step. A custom dictionary is read only when its switch is on and the cycle count is greater than zero. When the harmonic switch is on, each atom added in an earlier iteration is held at the coordinates written into the omit model. The default sigma is 0.1 Å. When the protein harmonic switch is on, every protein atom in every chain is held at its coordinates in the model, except atoms in the site residue, the additional copies, and the neighbouring residues. Those restraints are used only when the cycle count is greater than zero.</li>
       <li>When the map-check interval is a positive integer, the calculation pauses after that many iterations. The 3D viewer shows the site from the refined omit model, named with <code>_refined_stepNN.pdb</code>, and that iteration’s difference map. PyMOL writes a script in the iteration folder at every step, and it runs that script to save a PNG only for a step that pauses here. When a highest-density voxel was found, a small magenta octahedron marks its coordinates. A note in the lower-left corner of the viewer gives the step, the closest reference atom, and its distance from that voxel. <strong>Continue iterations</strong> resumes the search. An interval of 0 shows only the finished model and its residual map, and does not run PyMOL.</li>
       <li>The peak is the strongest voxel that is a local maximum inside a cubic neighborhood of the map calculated after REFMAC. When the spline maximum is on, the point moves to the spline maximum inside that neighborhood. The default neighborhood is 3 and the default spline order is 3.</li>
       <li>Density profiles through that point, from −2 Å to +2 Å, are written in the iteration directory. The offset is the distance in Ångstroms along the line. The columns are the Cartesian x, y, and z axes, the six face diagonals of the cube, and the four body diagonals. If that voxel’s density is below the density cutoff, the peak is treated as noise and the reconstruction stops without adding an atom. Otherwise the nearest eligible heavy atom in the reference model is identified. A distance beyond 1 Å is a warning. A distance beyond 3 Å stops the reconstruction without adding that atom.</li>
@@ -77,7 +77,7 @@
       {% endfor %}
     </div>
     {% if spec.slug == 'reconstruct' %}
-    <div class="fields">
+    <div class="fields reconstruct-counts">
       <div class="field-stack">
         <label>Number of atoms to reconstruct
           <input name="n_atoms" type="number" min="1" step="1" value="{{ defaults.n_atoms }}" required>
@@ -88,6 +88,28 @@
           <span class="hint">Stop when the located peak's voxel density is below this value. That peak is treated as noise and no atom is added.</span>
         </label>
       </div>
+      <fieldset class="link-source">
+        <legend>LINK records</legend>
+        <label class="check">
+          <input type="checkbox" name="restore_links" class="panel-switch" aria-controls="link-record-fields" checked>
+          Copy LINK records before each refinement
+        </label>
+        <p class="hint">On by default. These records replace the LINK records already in the initial omit model and in each step’s omit model before REFMAC. A repeated record is written once. REFMAC leaves a LINK record out of the coordinates it writes while either atom is still missing.</p>
+        <div id="link-record-fields" class="panel-fields">
+          <p class="hint">Optional. Leave this empty to use the LINK records in the starting omit model. A chosen file replaces the LINK records in every omit model, including the initial one.</p>
+          <div class="file-actions">
+            <label class="file-btn" aria-pressed="false">
+              <input type="file" name="file_link_records" accept=".pdb,.ent,.txt,.link,.gz">
+              <span>Choose file</span>
+            </label>
+            <button type="button" class="file-btn path-toggle" aria-pressed="false" aria-controls="path_link_records">Specify full path</button>
+          </div>
+          <div class="path-entry" hidden>
+            <label class="path-label" for="path_link_records">Full path</label>
+            <input id="path_link_records" name="path_link_records" value="" placeholder="/path/to/links.pdb" autocomplete="off" disabled>
+          </div>
+        </div>
+      </fieldset>
       <fieldset class="wide">
         <legend>Atoms eligible for placement</legend>
         <label class="choice">
