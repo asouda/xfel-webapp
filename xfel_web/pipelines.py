@@ -29,10 +29,11 @@ from xfel_web.restraints import (
     external_dihedral_keywords,
     external_distance_keywords,
     external_harmonic_keywords,
+    protein_harmonic_lines,
 )
 
 # Protocol sent on every refmac5 job. A trailing "-" continues the keyword.
-# A custom dictionary is a LIBIN line before any external restraints. NCYC is last.
+# A custom dictionary is a libin file assignment on the command line. NCYC is last.
 REFMAC_FIXED_KEYWORDS = """\
 MAKE -
     HYDROGEN NO -
@@ -59,28 +60,18 @@ WEIGHT -
     AUTO"""
 
 
-def _refmac_filename(path: Path) -> str:
-    """One REFMAC keyword token. A path with spaces is quoted."""
-    text = str(path)
-    if any(character.isspace() for character in text):
-        if "'" in text:
-            raise ValueError(f"Library path contains both a space and a quote: {text}")
-        return f"'{text}'"
-    return text
-
-
 def refmac_keywords(
     ncyc: int,
     leading: str = "",
-    library: Path | None = None,
     bref: str = "ANIS",
     refi_type: str = "REST",
 ) -> str:
     """REFMAC standard input.
 
-    ``library`` is a ``LIBIN`` line. External restraints follow it, so they
-    replace matching distances and angles from that file and from the CCP4
-    monomer library. The fixed protocol and ``NCYC`` come last.
+    External restraints, when present, come first, so they replace matching
+    distances and angles from the CCP4 monomer library and from a ``libin``
+    dictionary assigned on the command line. The fixed protocol and ``NCYC``
+    come last.
 
     ``bref`` and ``refi_type`` are the ``REFI BREF`` and ``REFI TYPE`` tokens.
     The defaults keep the Fo−Fo zero-cycle job on anisotropic restrained
@@ -96,8 +87,6 @@ def refmac_keywords(
     protocol = REFMAC_FIXED_KEYWORDS.replace("    TYPE REST -\n", f"    TYPE {refi_type} -\n", 1)
     protocol = protocol.replace("    BREF ANIS\n", f"    BREF {bref}\n", 1)
     parts: list[str] = []
-    if library is not None:
-        parts.append("LIBIN " + _refmac_filename(library))
     if leading and leading.strip():
         parts.append(leading.strip())
     parts.append(protocol.strip())
@@ -141,7 +130,7 @@ def _check_site(pdb_path: Path, chain: str, resi: int, label: str):
 
 def _prepare_resolution(session: Ccp4Session, source: str, lowres: float, dmin: float, mtzs: list[tuple[str, Path]]):
     ranges = []
-    for label, mtz in mtzs:
+    for _label, mtz in mtzs:
         columns = session.mtz_labels(mtz)
         low, high = session.mtz_resolution_angstrom(mtz)
         session.emit(f"Structure factors {mtz.name}: {low:.2f}–{high:.2f} Å  columns={columns}")
@@ -641,9 +630,8 @@ def run_refinement(cfg: dict, emit) -> dict:
             ("xyzout", refined_pdb),
         ]
         custom_dictionary = cfg.get("custom_dictionary")
-        refmac_library = None
         if custom_dictionary and int(cfg["refmac_ncyc"]) > 0:
-            refmac_library = custom_dictionary
+            refmac_files.append(("libin", custom_dictionary))
             session.emit(
                 f"Custom dictionary: {custom_dictionary}. "
                 "External restraints are read after this file and replace matching distances, angles, and dihedrals."
@@ -685,8 +673,9 @@ def run_refinement(cfg: dict, emit) -> dict:
                 cfg.get("dihedral_sigma", 10.0),
             ),
         )
-        restraint_text = "\n".join(part for part in (distance_text, angle_text, dihedral_text) if part)
+        geometry_text = "\n".join(part for part in (distance_text, angle_text, dihedral_text) if part)
         harmonic_atoms = list(cfg.get("harmonic_atoms") or [])
+        harmonic_text = ""
         if harmonic_atoms and int(cfg["refmac_ncyc"]) > 0:
             harmonic_sigma = float(cfg.get("harmonic_sigma", 0.1))
             harmonic_text = external_harmonic_keywords(harmonic_atoms, harmonic_sigma)
@@ -694,23 +683,48 @@ def run_refinement(cfg: dict, emit) -> dict:
                 f"Harmonic restraints on {len(harmonic_atoms)} added atoms, sigma {harmonic_sigma:.3f} Å. "
                 "Each atom is held at the coordinates in the input model."
             )
-            restraint_text = "\n".join(part for part in (restraint_text, harmonic_text) if part)
         elif harmonic_atoms:
             session.emit(
                 "Harmonic restraints on the added atoms were not applied. REFMAC cycles is 0."
             )
+        protein_text = ""
+        if cfg.get("harmonic_protein") and int(cfg["refmac_ncyc"]) > 0:
+            protein_sigma = float(cfg.get("harmonic_protein_sigma", 0.1))
+            protein_text = protein_harmonic_lines(files["dark_pdb"], cfg, harmonic_atoms)
+            if protein_text:
+                protein_count = protein_text.count("\n") + 1
+                session.emit(
+                    f"Harmonic restraints on {protein_count} protein atoms outside the site "
+                    f"and the additional residues, sigma {protein_sigma:.3f} Å. "
+                    "Each atom is held at the coordinates in the input model."
+                )
+            else:
+                session.emit(
+                    "Protein harmonic restraints were requested, but the model has no protein atom "
+                    "outside the site and the additional residues."
+                )
+        elif cfg.get("harmonic_protein"):
+            session.emit(
+                "Protein harmonic restraints were not applied. REFMAC cycles is 0."
+            )
+        restraint_text = "\n".join(
+            part for part in (geometry_text, harmonic_text, protein_text) if part
+        )
         if restraint_text:
             restraint_path = out / f"{dark_id}_external_restraints.txt"
             restraint_path.write_text(restraint_text + "\n")
             session.emit(f"External restraints: {restraint_path}")
-            session.emit(restraint_text)
+            # The protein block can be one line per atom of a photosystem. The
+            # file keeps every line. The log keeps the short restraints and the count above.
+            logged = "\n".join(part for part in (geometry_text, harmonic_text) if part)
+            if logged:
+                session.emit(logged)
         session.run_ccp4(
             "refmac5",
             refmac_files,
             refmac_keywords(
                 int(cfg["refmac_ncyc"]),
                 restraint_text,
-                refmac_library,
                 bref=cfg.get("refmac_bref", "ISOT"),
                 refi_type=cfg.get("refmac_type", "REST"),
             ),

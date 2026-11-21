@@ -61,6 +61,135 @@ def _normalize_distance_specs(specs, default_sigma: float) -> list[dict]:
     return parsed
 
 
+# Polypeptide residues. MSE, SEC, and PYL are incorporated amino acids. The
+# remaining names are the protonation states used by common force fields.
+_PROTEIN_RESIDUES = frozenset(
+    {
+        "ALA", "ARG", "ASN", "ASP", "CYS", "GLN", "GLU", "GLY", "HIS", "ILE",
+        "LEU", "LYS", "MET", "PHE", "PRO", "SER", "THR", "TRP", "TYR", "VAL",
+        "MSE", "SEC", "PYL",
+        "ASH", "GLH", "LYN", "CYM", "CYX",
+        "HID", "HIE", "HIP", "HSD", "HSE", "HSP",
+    }
+)
+_NUCLEIC_RESIDUES = frozenset(
+    {
+        "A", "C", "G", "U", "I",
+        "DA", "DC", "DG", "DT", "DU", "DI",
+        "ADE", "CYT", "GUA", "THY", "URA",
+    }
+)
+_SOLVENT_RESIDUES = frozenset({"HOH", "WAT", "DOD", "H2O", "TIP", "SOL"})
+
+
+def is_protein_atom(record: str, resname: str) -> bool:
+    """True when the atom belongs to the polypeptide.
+
+    A listed amino acid counts as ATOM or as HETATM, so selenomethionine stored
+    as HETATM is still protein. Any other ATOM record is protein unless it is a
+    nucleotide or a solvent. Ligands, waters, and metals recorded as HETATM are
+    left out.
+    """
+    name = resname.strip().upper()
+    if name in _PROTEIN_RESIDUES:
+        return True
+    if not record.startswith("ATOM"):
+        return False
+    return name not in _NUCLEIC_RESIDUES and name not in _SOLVENT_RESIDUES
+
+
+def harmonic_atom_key(atom: dict) -> tuple:
+    """Chain, residue, insertion code, atom name, and altloc of one harmonic target."""
+    chain = atom.get("chain")
+    chain = " " if chain is None or str(chain) == "" else str(chain)
+    if chain != " ":
+        chain = chain.strip() or " "
+    return (
+        chain[:1],
+        int(atom["resi"]),
+        str(atom.get("icode") or "").strip(),
+        str(atom.get("name") or "").strip(),
+        str(atom.get("alt") or "").strip(),
+    )
+
+
+def site_and_additional_residues(cfg: dict) -> list[tuple[str, int]]:
+    """Residues left free: the site, its additional copies, and the neighbouring residues."""
+    pairs: list[tuple[str, int]] = []
+    copies = list(cfg.get("site_copies") or [])
+    if not copies and cfg.get("site_chain") is not None and cfg.get("site_resi") is not None:
+        copies = [(cfg["site_chain"], cfg["site_resi"])]
+    for chain, resi in copies:
+        pairs.append((str(chain), int(resi)))
+    for item in cfg.get("extra_residues") or []:
+        pairs.append((str(item["chain"]), int(item["resi"])))
+    unique: list[tuple[str, int]] = []
+    seen: set[tuple[str, int]] = set()
+    for pair in pairs:
+        if pair in seen:
+            continue
+        seen.add(pair)
+        unique.append(pair)
+    return unique
+
+
+def protein_atoms_outside(pdb_path: Path, free_residues) -> list[dict]:
+    """Protein atoms, in every chain, whose residue is not in ``free_residues``.
+
+    ``free_residues`` holds ``(chain, residue number)`` pairs. An insertion code
+    is not part of that pair, so every insertion at the number is left free.
+    Every altloc is returned, and a repeated record is returned once.
+    """
+    free = {(str(chain), int(resi)) for chain, resi in free_residues}
+    atoms: list[dict] = []
+    seen: set[tuple] = set()
+    with Path(pdb_path).open(encoding="utf-8", errors="replace") as handle:
+        for raw in handle:
+            if not raw.startswith(("ATOM", "HETATM")) or len(raw) < 27:
+                continue
+            if not is_protein_atom(raw[:6], raw[17:20]):
+                continue
+            try:
+                resi = int(raw[22:26])
+            except ValueError:
+                continue
+            chain = raw[21] if len(raw) > 21 else " "
+            if (chain, resi) in free:
+                continue
+            name = raw[12:16].strip()
+            if not name:
+                continue
+            atom = {
+                "chain": chain,
+                "resi": resi,
+                "name": name,
+                "alt": raw[16].strip() if len(raw) > 16 else "",
+                "icode": (raw[26] if len(raw) > 26 else " ").strip(),
+            }
+            key = harmonic_atom_key(atom)
+            if key in seen:
+                continue
+            seen.add(key)
+            atoms.append(atom)
+    return atoms
+
+
+def protein_harmonic_lines(pdb_path: Path, cfg: dict, skip: list[dict] | None = None) -> str:
+    """Harmonic lines for protein atoms outside the site and the additional residues.
+
+    Atoms listed in ``skip`` already carry a harmonic line, so they are omitted.
+    An empty selection returns an empty string.
+    """
+    atoms = protein_atoms_outside(pdb_path, site_and_additional_residues(cfg))
+    if skip:
+        held = {harmonic_atom_key(item) for item in skip}
+        atoms = [atom for atom in atoms if harmonic_atom_key(atom) not in held]
+    if not atoms:
+        return ""
+    sigma = float(cfg.get("harmonic_protein_sigma", 0.1))
+    return external_harmonic_keywords(atoms, sigma)
+
+
 def external_harmonic_keywords(atoms: list[dict], sigma: float) -> str:
     """REFMAC external harmonic lines that hold atoms at their current coordinates.
 

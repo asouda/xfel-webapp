@@ -178,9 +178,9 @@ class DirectMapTests(unittest.TestCase):
                     cell[axis] / nxyz[axis],
                     places=5,
                 )
-            ix = int(round(8.0 / cell[0] * nxyz[0]))
-            iy = int(round(10.0 / cell[1] * nxyz[1]))
-            iz = int(round(12.0 / cell[2] * nxyz[2]))
+            ix = round(8.0 / cell[0] * nxyz[0])
+            iy = round(10.0 / cell[1] * nxyz[1])
+            iz = round(12.0 / cell[2] * nxyz[2])
             file_index = {
                 mapc: (iy - cstart, nc),
                 mapr: (ix - rstart, nr),

@@ -86,9 +86,9 @@ Python package imported by `xfel-app.py`.
 - `ccp4.py` — locates CCP4, Coot, and PyMOL, runs the suite after sourcing `ccp4.setup-sh`, and builds the PyMOL scene.
 - `forms.py` — reads the workflow form into the dictionaries the pipelines expect.
 - `pipelines.py` — Fo−Fo, omit-model mFo−DFc, and 2mFo−DFc. The reconstruction calls the omit-map calculation once per iteration.
-- `reconstruction.py` — the loop that places one missing reference atom on each omit-map peak.
+- `reconstruction.py` — the loop that places one missing reference atom on each omit-map peak, and writes the finished step table as CSV and Excel.
 - `peaks.py` — the local-maximum search and the optional spline placement on the clipped map.
-- `restraints.py` — REFMAC external restraints, including harmonic restraints on atoms the reconstruction has added.
+- `restraints.py` — REFMAC external restraints: distances, angles, dihedrals, harmonic restraints on atoms the reconstruction has added, and harmonic restraints on protein atoms outside the site.
 
 
 

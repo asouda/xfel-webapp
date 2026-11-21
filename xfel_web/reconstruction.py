@@ -8,12 +8,16 @@ search is the local-maximum and optional spline placement in ``xfel_web.peaks``.
 
 from __future__ import annotations
 
+import csv
 import math
 import re
 import shutil
+import zipfile
 from dataclasses import dataclass
 from pathlib import Path
+from xml.sax.saxutils import escape
 
+from xfel_web.ccp4 import _element_symbol
 from xfel_web.interrupt import check as check_stopped
 from xfel_web.peaks import DensityMap, choose_peak, spline_maximum_index
 
@@ -44,13 +48,6 @@ class PdbAtom:
     @property
     def record_key(self) -> tuple:
         return self.identity + (self.alt,)
-
-
-def _element_symbol(line: str) -> str:
-    if len(line) >= 78 and line[76:78].strip():
-        return line[76:78].strip().upper()
-    letters = "".join(ch for ch in line[12:16] if ch.isalpha())
-    return letters[:1].upper()
 
 
 def read_pdb_atoms(path: Path) -> list[PdbAtom]:
@@ -345,7 +342,7 @@ def write_cross_sections(density_map, xyz, path: Path, *, header: list[str]) -> 
 
     origin = np.asarray(xyz, dtype=float)
     directions = _section_directions()
-    count = int(round((2 * SECTION_HALF_A) / SECTION_STEP_A))
+    count = round((2 * SECTION_HALF_A) / SECTION_STEP_A)
     offsets = [-SECTION_HALF_A + index * SECTION_STEP_A for index in range(count + 1)]
     columns = []
     for _name, direction in directions:
@@ -634,6 +631,206 @@ def _stamp_iteration_outputs(directory: Path, iteration: int, result: dict) -> d
     return _retarget_paths(result, replacements)
 
 
+# Columns of the reconstruction table shown under the viewer.
+# kind is int, float, coords, or text. digits is the on-screen precision.
+_TABLE_COLUMNS = (
+    ("Step", "step", "int", None),
+    ("R-factor", "r_factor", "float", 4),
+    ("R-free", "r_free", "float", 4),
+    ("Added atom", "atom", "text", None),
+    ("Coordinates (Å)", "coordinates", "coords", 3),
+    ("Distance to reference (Å)", "distance", "float", 2),
+    ("Voxel density", "density", "float", 3),
+    ("Note", "note", "text", None),
+)
+_XLSX_STYLE = {
+    ("int", None): 2,
+    ("float", 4): 3,
+    ("float", 2): 4,
+    ("float", 3): 5,
+}
+
+
+def _table_value(step: dict, key: str, kind: str):
+    if kind == "coords":
+        value = step.get(key)
+        if not isinstance(value, (list, tuple)) or len(value) != 3:
+            return ""
+        return ", ".join(f"{float(item):.3f}" for item in value)
+    if kind == "text":
+        value = step.get(key)
+        return "" if value is None else str(value)
+    value = step.get(key)
+    if value is None:
+        return ""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return ""
+    if not math.isfinite(number):
+        return ""
+    if kind == "int":
+        return int(number)
+    return number
+
+
+def _csv_cell(value, kind: str, digits: int | None) -> str:
+    if value == "":
+        return ""
+    if kind == "int":
+        return str(int(value))
+    if kind == "float":
+        return f"{float(value):.{digits}f}"
+    return str(value)
+
+
+def _xlsx_column(index: int) -> str:
+    letters = ""
+    number = index + 1
+    while number:
+        number, remainder = divmod(number - 1, 26)
+        letters = chr(65 + remainder) + letters
+    return letters
+
+
+def _xlsx_cell(column: int, row_number: int, value, kind: str, digits: int | None, *, header: bool) -> str:
+    ref = f"{_xlsx_column(column)}{row_number}"
+    if header:
+        return f'<c r="{ref}" t="inlineStr" s="1"><is><t>{escape(str(value))}</t></is></c>'
+    if value == "":
+        return ""
+    if kind in {"int", "float"}:
+        style = _XLSX_STYLE[(kind, digits)]
+        return f'<c r="{ref}" s="{style}"><v>{value}</v></c>'
+    return f'<c r="{ref}" t="inlineStr" s="0"><is><t>{escape(str(value))}</t></is></c>'
+
+
+def _xlsx_sheet(headers: list[str], rows: list[list]) -> str:
+    lines = [
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>',
+        '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">',
+        "<sheetData>",
+    ]
+    header_cells = "".join(
+        _xlsx_cell(index, 1, header, "text", None, header=True)
+        for index, header in enumerate(headers)
+    )
+    lines.append(f'<row r="1">{header_cells}</row>')
+    for row_index, row in enumerate(rows, start=2):
+        cells = []
+        for column, ((_name, _key, kind, digits), value) in enumerate(zip(_TABLE_COLUMNS, row)):
+            cell = _xlsx_cell(column, row_index, value, kind, digits, header=False)
+            if cell:
+                cells.append(cell)
+        lines.append(f'<row r="{row_index}">{"".join(cells)}</row>')
+    lines.append("</sheetData></worksheet>")
+    return "".join(lines)
+
+
+_XLSX_STYLES = """\
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <numFmts count="2">
+    <numFmt numFmtId="164" formatCode="0.0000"/>
+    <numFmt numFmtId="165" formatCode="0.000"/>
+  </numFmts>
+  <fonts count="2">
+    <font><sz val="11"/><name val="Calibri"/></font>
+    <font><b/><sz val="11"/><name val="Calibri"/></font>
+  </fonts>
+  <fills count="2">
+    <fill><patternFill patternType="none"/></fill>
+    <fill><patternFill patternType="gray125"/></fill>
+  </fills>
+  <borders count="1">
+    <border><left/><right/><top/><bottom/><diagonal/></border>
+  </borders>
+  <cellStyleXfs count="1">
+    <xf numFmtId="0" fontId="0" fillId="0" borderId="0"/>
+  </cellStyleXfs>
+  <cellXfs count="6">
+    <xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>
+    <xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="0" applyFont="1"/>
+    <xf numFmtId="1" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>
+    <xf numFmtId="164" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>
+    <xf numFmtId="2" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>
+    <xf numFmtId="165" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>
+  </cellXfs>
+</styleSheet>
+"""
+
+
+def _write_xlsx(path: Path, headers: list[str], rows: list[list]) -> None:
+    """One worksheet whose columns match the reconstruction table."""
+    content_types = """\
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
+  <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
+  <Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>
+</Types>
+"""
+    root_rels = """\
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
+</Relationships>
+"""
+    workbook = """\
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <sheets>
+    <sheet name="Reconstruction" sheetId="1" r:id="rId1"/>
+  </sheets>
+</workbook>
+"""
+    workbook_rels = """\
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
+  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
+</Relationships>
+"""
+    with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as book:
+        book.writestr("[Content_Types].xml", content_types)
+        book.writestr("_rels/.rels", root_rels)
+        book.writestr("xl/workbook.xml", workbook)
+        book.writestr("xl/_rels/workbook.xml.rels", workbook_rels)
+        book.writestr("xl/styles.xml", _XLSX_STYLES)
+        book.writestr("xl/worksheets/sheet1.xml", _xlsx_sheet(headers, rows))
+
+
+def write_reconstruction_table(directory: Path, stem: str, steps: list[dict]) -> tuple[Path, Path]:
+    """Write the finished reconstruction table as CSV and Excel.
+
+    The columns are the ones shown under the viewer. A missing value is a blank
+    cell. Numeric Excel cells keep the full value and display the same precision
+    as the table. The CSV writes that displayed precision.
+    """
+    directory.mkdir(parents=True, exist_ok=True)
+    headers = [name for name, _key, _kind, _digits in _TABLE_COLUMNS]
+    rows = [
+        [_table_value(step, key, kind) for _name, key, kind, _digits in _TABLE_COLUMNS]
+        for step in steps
+    ]
+    csv_path = directory / f"{stem}_reconstruction.csv"
+    with csv_path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(headers)
+        for row in rows:
+            writer.writerow(
+                [
+                    _csv_cell(value, kind, digits)
+                    for value, (_name, _key, kind, digits) in zip(row, _TABLE_COLUMNS)
+                ]
+            )
+    xlsx_path = directory / f"{stem}_reconstruction.xlsx"
+    _write_xlsx(xlsx_path, headers, rows)
+    return csv_path, xlsx_path
+
+
 def run_reconstruct(cfg: dict, emit, pause=None, omit_runner=None, report_step=None, report_row=None) -> dict:
     """Add reference atoms onto omit-map peaks, one atom per iteration."""
     if omit_runner is None:
@@ -645,6 +842,7 @@ def run_reconstruct(cfg: dict, emit, pause=None, omit_runner=None, report_step=N
     output_dir.mkdir(parents=True, exist_ok=True)
     n_atoms = int(cfg["n_atoms"])
     n_check = int(cfg["n_check_map"])
+    density_cutoff = float(cfg.get("density_cutoff", 0.0))
     reference_path = Path(cfg["files"]["light_pdb"])
     reference = read_pdb_atoms(reference_path)
     if not reference:
@@ -685,6 +883,10 @@ def run_reconstruct(cfg: dict, emit, pause=None, omit_runner=None, report_step=N
                 f"Warning: {n_atoms} atoms were requested, and only {len(missing)} heavy atoms are missing. "
                 "The run stops when none remain."
             )
+    emit(
+        f"Density cutoff: {density_cutoff:.4f}. "
+        "A located peak below this value is treated as noise and stops the run."
+    )
     if int(cfg.get("refmac_ncyc") or 0) > 0:
         emit(
             "REFMAC cycles is greater than zero. Each map is calculated after refinement. "
@@ -797,10 +999,6 @@ def run_reconstruct(cfg: dict, emit, pause=None, omit_runner=None, report_step=N
                 "The density is the value on the selected voxel."
             )
 
-        candidates = missing_atoms(
-            reference, read_pdb_atoms(working), excluded, include_present=include_present
-        )
-        atom, distance = closest_atom(candidates, xyz)
         header = [
             "# Cross sections of the omit mFo-DFc density through the peak",
             f"# voxel_index {peak['index'][0]} {peak['index'][1]} {peak['index'][2]}",
@@ -813,7 +1011,23 @@ def run_reconstruct(cfg: dict, emit, pause=None, omit_runner=None, report_step=N
         placed_distance = None
         placed_moved = None
         placed_note = ""
-        if atom is None or distance is None:
+        below_cutoff = peak["density"] < density_cutoff
+        if below_cutoff:
+            stop_reason = (
+                f"The peak density {peak['density']:.4f} is below the cutoff {density_cutoff:.4f}. "
+                "The peak is treated as noise. The atom was not added."
+            )
+            header.append("# action not_added")
+            log(f"Stopping: {stop_reason}")
+            placed_note = (
+                f"Not added. Peak density {peak['density']:.4f} is below the cutoff {density_cutoff:.4f}."
+            )
+        else:
+            candidates = missing_atoms(
+                reference, read_pdb_atoms(working), excluded, include_present=include_present
+            )
+            atom, distance = closest_atom(candidates, xyz)
+        if not below_cutoff and (atom is None or distance is None):
             if include_present:
                 stop_reason = "Every heavy atom in the reference model has already been added."
             else:
@@ -821,7 +1035,7 @@ def run_reconstruct(cfg: dict, emit, pause=None, omit_runner=None, report_step=N
             header.append("# atom none")
             log(f"Stopping: {stop_reason}")
             placed_note = stop_reason
-        else:
+        elif not below_cutoff:
             header.append(f"# atom {describe_atom(atom)}")
             header.append(f"# distance_A {distance:.4f}")
             kind = "reference" if include_present else "missing"
@@ -988,6 +1202,10 @@ def run_reconstruct(cfg: dict, emit, pause=None, omit_runner=None, report_step=N
     shutil.copy2(refined, reconstructed)
     emit(f"Reconstructed model after the final refinement: {reconstructed}")
     extras.append(("Reconstructed model", reconstructed))
+    table_csv, table_xlsx = write_reconstruction_table(output_dir, str(cfg["dark_id"]), steps)
+    emit(f"Reconstruction table: {table_csv.name} and {table_xlsx.name}")
+    extras.append(("Reconstruction table (CSV)", table_csv))
+    extras.append(("Reconstruction table (Excel)", table_xlsx))
     caption = (
         f"Reconstruction of {cfg['dark_id']} against {cfg['light_id']}: "
         f"{len(added)} of {n_atoms} atoms added. {stop_reason} "

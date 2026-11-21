@@ -47,7 +47,6 @@ from xfel_web.pipelines import (
     is_reflection_mtz,
     refmac_amplitude_cad_keywords,
     refmac_keywords,
-    refmac_keywords,
 )
 from xfel_web.restraints import external_angle_keywords, external_dihedral_keywords, external_distance_keywords
 
@@ -421,6 +420,8 @@ class RefinementFormTests(unittest.TestCase):
         self.assertEqual(cfg["refmac_ncyc"], 0)
         self.assertEqual(cfg["refmac_bref"], "ISOT")
         self.assertEqual(cfg["refmac_type"], "REST")
+        self.assertFalse(cfg["harmonic_protein"])
+        self.assertEqual(cfg["harmonic_protein_sigma"], 0.1)
         self.assertEqual(cfg["map_center"], "residue")
         self.assertIsNone(cfg["map_center_xyz"])
 
@@ -611,7 +612,36 @@ class RefinementFormTests(unittest.TestCase):
         self.assertEqual(cfg["refmac_ncyc"], 0)
         self.assertEqual(cfg["refmac_bref"], "ISOT")
         self.assertEqual(cfg["refmac_type"], "REST")
+        self.assertFalse(cfg["harmonic_protein"])
         self.assertEqual(cfg["distance_restraints"], [])
+
+    def test_protein_harmonic_sigma_follows_the_switch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            off = parse_job(
+                "refinement",
+                self._form(root, use_refmac="on", harmonic_protein_sigma="-1"),
+                {},
+                root,
+            )
+            self.assertFalse(off["harmonic_protein"])
+            self.assertEqual(off["harmonic_protein_sigma"], 0.1)
+            with self.assertRaises(FormError) as caught:
+                parse_job(
+                    "refinement",
+                    self._form(root, use_refmac="on", harmonic_protein="on", harmonic_protein_sigma="0"),
+                    {},
+                    root,
+                )
+            self.assertIn("Protein harmonic sigma", str(caught.exception))
+            cfg = parse_job(
+                "refinement",
+                self._form(root, use_refmac="on", harmonic_protein="on", harmonic_protein_sigma="0.25"),
+                {},
+                root,
+            )
+        self.assertTrue(cfg["harmonic_protein"])
+        self.assertEqual(cfg["harmonic_protein_sigma"], 0.25)
 
     def test_refmac_keywords_follow_the_form(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -735,11 +765,11 @@ class RefmacKeywordTests(unittest.TestCase):
         self.assertNotIn("exte ", refmac_keywords(5))
         self.assertNotIn("LIBIN", refmac_keywords(5))
 
-    def test_custom_dictionary_is_read_before_external_restraints(self):
-        text = refmac_keywords(2, "exte dist first chain A", Path("/tmp/ligand.cif"))
-        self.assertTrue(text.startswith("LIBIN /tmp/ligand.cif\nexte dist first chain A\nMAKE -"))
-        quoted = refmac_keywords(1, "exte angle", Path("/tmp/my lib/ligand.cif"))
-        self.assertTrue(quoted.startswith("LIBIN '/tmp/my lib/ligand.cif'\nexte angle\n"))
+    def test_keyword_script_leaves_the_custom_dictionary_to_the_command_line(self):
+        text = refmac_keywords(2, "exte dist first chain A")
+        self.assertTrue(text.startswith("exte dist first chain A\nMAKE -"))
+        self.assertNotIn("LIBIN", text)
+        self.assertNotIn("libin", text)
 
 
 def _write_map(path, values, *, nxyz, starts, axes, cell, symops, arms):

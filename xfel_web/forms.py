@@ -67,6 +67,25 @@ def _harmonic_sigma(form) -> float:
     return sigma
 
 
+def _harmonic_protein_sigma(form) -> float:
+    raw = _text(form, "harmonic_protein_sigma")
+    sigma = 0.1 if not raw else _float(form, "harmonic_protein_sigma", "Protein harmonic sigma")
+    if sigma <= 0:
+        raise FormError("Protein harmonic sigma must be positive.")
+    return sigma
+
+
+def _protein_harmonic(form, refine: bool) -> tuple[bool, float]:
+    """Whether protein atoms outside the site are restrained, and the sigma.
+
+    The switch is read only while REFMAC refinement is on. Off keeps the
+    default sigma and applies nothing.
+    """
+    if not refine or not _flag(form, "harmonic_protein"):
+        return False, 0.1
+    return True, _harmonic_protein_sigma(form)
+
+
 def _candidate_atoms(form) -> str:
     """Which reference atoms may be placed on an omit-map peak."""
     value = _text(form, "candidate_atoms") or "missing"
@@ -561,6 +580,7 @@ def parse_job(workflow: str, form, files, project: Path) -> dict:
         distances, distance_sigma, angles, angle_sigma, dihedrals, dihedral_sigma = _active_restraints(form, refine)
         center_mode, center_xyz = _map_center(form)
         custom_dictionary = _custom_dictionary(form, files, output_dir, project) if refine else None
+        harmonic_protein, harmonic_protein_sigma = _protein_harmonic(form, refine)
         cfg.update(
             {
                 "dark_id": _identifier(form, "dark_id", "Omit-model name"),
@@ -568,6 +588,8 @@ def parse_job(workflow: str, form, files, project: Path) -> dict:
                 "refmac_ncyc": cycles,
                 "refmac_bref": bref,
                 "refmac_type": refi_type,
+                "harmonic_protein": harmonic_protein,
+                "harmonic_protein_sigma": harmonic_protein_sigma,
                 "map_center": center_mode,
                 "map_center_xyz": center_xyz,
                 "distance_restraints": distances,
@@ -592,6 +614,9 @@ def parse_job(workflow: str, form, files, project: Path) -> dict:
         n_atoms = _int(form, "n_atoms", "Number of atoms to reconstruct")
         if n_atoms < 1:
             raise FormError("Number of atoms to reconstruct must be at least 1.")
+        density_cutoff = _float(form, "density_cutoff", "Density cutoff")
+        if not math.isfinite(density_cutoff):
+            raise FormError("Density cutoff must be a finite number.")
         n_check = _int(form, "n_check_map", "Map check interval")
         if n_check < 0:
             raise FormError("Map check interval cannot be negative. Use 0 to show only the final model.")
@@ -606,6 +631,7 @@ def parse_job(workflow: str, form, files, project: Path) -> dict:
         center_mode, center_xyz = _map_center(form)
         custom_dictionary = _custom_dictionary(form, files, output_dir, project) if refine else None
         harmonic_added = refine and _flag(form, "harmonic_added")
+        harmonic_protein, harmonic_protein_sigma = _protein_harmonic(form, refine)
         cfg["show_oec_bonds"] = False
         cfg["ray_trace"] = True
         cfg["recompute_map"] = True
@@ -629,10 +655,13 @@ def parse_job(workflow: str, form, files, project: Path) -> dict:
                 "positive_levels": positive,
                 "negative_levels": negative,
                 "n_atoms": n_atoms,
+                "density_cutoff": density_cutoff,
                 "n_check_map": n_check,
                 "candidate_atoms": _candidate_atoms(form),
                 "harmonic_added": harmonic_added,
                 "harmonic_sigma": _harmonic_sigma(form) if harmonic_added else 0.1,
+                "harmonic_protein": harmonic_protein,
+                "harmonic_protein_sigma": harmonic_protein_sigma,
                 "neighborhood_size": _odd_neighborhood(form),
                 "spline_seed": spline_seed,
                 "spline_order": spline_order,

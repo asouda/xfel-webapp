@@ -28,8 +28,6 @@ from xfel_web.interrupt import CalculationStopped, Interrupt, activate, deactiva
 from xfel_web.pipelines import RUNNERS
 
 WEB_ROOT = Path(__file__).resolve().parent
-PROJECT = WEB_ROOT.parent
-DATA = PROJECT / "data"
 RUNTIME = WEB_ROOT / "runtime" / "jobs"
 RUNTIME.mkdir(parents=True, exist_ok=True)
 
@@ -42,7 +40,7 @@ _PROBE_CACHE: dict[str, tuple[float, dict]] = {}
 
 
 def _existing(relative: str) -> str:
-    path = (PROJECT / relative).resolve()
+    path = (WEB_ROOT / relative).resolve()
     return str(path) if path.is_file() else ""
 
 
@@ -127,6 +125,7 @@ WORKFLOWS = {
             "distance_restraints": "MN1 O5\nMN3 O5\nMN4 O5\nCA1 O5",
             "angle_restraints": "MN3 O5 MN4\nMN3 O5 CA1\nMN4 O5 CA1\nO5 CA1 O1\nO2 MN3 O5\nO3 MN3 O5\nO4 MN3 O5\nO4 MN4 O5",
             "dihedral_restraints": "",
+            "harmonic_protein_sigma": "0.1",
             "lowres": "30",
             "dmin": "1.89",
             "png_width": "1600",
@@ -139,7 +138,7 @@ WORKFLOWS = {
         "title": "Reconstruct the model from the omit mFo−DFc maps",
         "kicker": "Omit-map reconstruction",
         "card": "Add missing atoms one at a time by placing each one on the highest peak of the omit-model difference map.",
-        "how": "Each iteration refines the omit model and calculates the omit mFo−DFc map. The highest peak is matched to the nearest eligible heavy atom in the reference model, and that atom is inserted into the refined coordinates. The next iteration starts from that model. By default the atom must be absent from the omit model. The form can instead make every heavy atom eligible. An atom that is already present is then moved to the peak: its old record is removed and the reference record is written at the peak. The viewer can pause every few iterations.",
+        "how": "Each iteration refines the omit model and calculates the omit mFo−DFc map. The highest peak is matched to the nearest eligible heavy atom in the reference model, and that atom is inserted into the refined coordinates. A peak whose voxel density is below the density cutoff is treated as noise and stops the run. The next iteration starts from the model that received an atom. By default the atom must be absent from the omit model. The form can instead make every heavy atom eligible. An atom that is already present is then moved to the peak: its old record is removed and the reference record is written at the peak. The viewer can pause every few iterations.",
         "scan_key": "dark_pdb",
         "scan_label": "starting omit-model coordinates",
         "files": [
@@ -169,8 +168,10 @@ WORKFLOWS = {
             "angle_restraints": "",
             "dihedral_restraints": "",
             "n_atoms": "1",
+            "density_cutoff": "0",
             "n_check_map": "0",
             "harmonic_sigma": "0.1",
+            "harmonic_protein_sigma": "0.1",
             "neighborhood_size": "3",
             "spline_order": "3",
             "lowres": "30",
@@ -472,7 +473,7 @@ def scan():
     elif raw_path:
         pdb_path = Path(raw_path).expanduser()
         if not pdb_path.is_absolute():
-            pdb_path = (PROJECT / pdb_path).resolve()
+            pdb_path = (WEB_ROOT / pdb_path).resolve()
     else:
         return jsonify({"error": "Choose a coordinate file or enter its path."}), 400
     if not pdb_path.is_file():
@@ -515,7 +516,7 @@ def start_job(slug: str):
     if slug not in RUNNERS:
         abort(404)
     try:
-        config = parse_job(slug, request.form, request.files, PROJECT)
+        config = parse_job(slug, request.form, request.files, WEB_ROOT)
     except FormError as exc:
         return jsonify({"error": str(exc)}), 400
     job_id = uuid.uuid4().hex

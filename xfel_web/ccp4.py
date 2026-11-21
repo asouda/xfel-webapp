@@ -649,8 +649,8 @@ def _viewer_viewport(width, height) -> tuple[int, int]:
     limit = 4096
     if wide > limit or high > limit:
         scale = limit / max(wide, high)
-        wide = max(2, int(round(wide * scale)))
-        high = max(2, int(round(high * scale)))
+        wide = max(2, round(wide * scale))
+        high = max(2, round(high * scale))
     return wide, high
 
 

@@ -1,9 +1,11 @@
 """Reconstruction workflow: peak placement, atom insertion, and the form."""
 
+import csv
 import math
 import shutil
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path
 
 import gemmi
@@ -11,7 +13,11 @@ import numpy as np
 
 from xfel_web.ccp4 import Ccp4Session, reasonable_bond_commands, reasonable_bond_specs
 from xfel_web.pipelines import _viewer_scene
-from xfel_web.restraints import external_harmonic_keywords
+from xfel_web.restraints import (
+    external_harmonic_keywords,
+    protein_harmonic_lines,
+    site_and_additional_residues,
+)
 from xfel_web.forms import FormError, parse_job
 from xfel_web.peaks import DensityMap
 from xfel_web.reconstruction import (
@@ -27,6 +33,7 @@ from xfel_web.reconstruction import (
     read_refmac_rfactors,
     run_reconstruct,
     write_cross_sections,
+    write_reconstruction_table,
 )
 
 
@@ -75,6 +82,33 @@ def _x_ramp_map(path: Path) -> None:
     _write_map(path, grid)
 
 
+def _polymer_line(
+    serial,
+    name,
+    element,
+    resname="ALA",
+    resi=10,
+    chain="B",
+    alt=" ",
+    icode=" ",
+    record="ATOM",
+):
+    line = [" "] * 80
+    line[0:6] = list(f"{record:<6}"[:6])
+    line[6:11] = list(f"{serial:5d}")
+    line[12:16] = list(f"{name:>4}")
+    line[16] = alt
+    line[17:20] = list(f"{resname:>3}")
+    line[21] = chain
+    line[22:26] = list(f"{resi:4d}")
+    line[26] = icode
+    line[30:38] = list(f"{1.0:8.3f}")
+    line[38:46] = list(f"{2.0:8.3f}")
+    line[46:54] = list(f"{3.0:8.3f}")
+    line[76:78] = list(f"{element:>2}")
+    return "".join(line)
+
+
 class HarmonicTests(unittest.TestCase):
     def test_a_harmonic_line_holds_the_added_atom_with_the_given_sigma(self):
         text = external_harmonic_keywords(
@@ -83,6 +117,65 @@ class HarmonicTests(unittest.TestCase):
         )
         self.assertEqual(text, "exte harm chain A residue 416 atom O5 altcode B sigma 0.100")
         self.assertEqual(external_harmonic_keywords([], 0.1), "")
+
+    def test_protein_atoms_outside_the_site_are_restrained_in_every_chain(self):
+        cfg = {
+            "site_chain": "A",
+            "site_resi": 416,
+            "site_copies": [("A", 416), ("D", 416)],
+            "extra_residues": [{"chain": "A", "resi": 189, "label": "GLU189"}],
+            "harmonic_protein_sigma": 0.2,
+        }
+        self.assertEqual(site_and_additional_residues(cfg), [("A", 416), ("D", 416), ("A", 189)])
+        lines = [
+            _polymer_line(1, "N", "N", chain="B", resi=10),
+            _polymer_line(2, "CA", "C", chain="B", resi=10),
+            _polymer_line(3, "CA", "C", chain="B", resi=10),
+            _polymer_line(4, "H", "H", chain="B", resi=10),
+            _polymer_line(5, "CA", "C", chain="B", resi=11, alt="B"),
+            _polymer_line(6, "CA", "C", resname="ALA", chain="A", resi=416),
+            _polymer_line(7, "CA", "C", resname="GLU", chain="A", resi=189),
+            _polymer_line(8, "CA", "C", resname="GLU", chain="A", resi=189, icode="A"),
+            _polymer_line(9, "CA", "C", chain="D", resi=416),
+            _polymer_line(10, "O", "O", resname="HOH", chain="A", resi=1, record="HETATM"),
+            _polymer_line(11, "MN", "MN", resname="OEX", chain="A", resi=416, record="HETATM"),
+            _polymer_line(12, "SE", "SE", resname="MSE", chain="C", resi=20, record="HETATM"),
+            _polymer_line(13, "N9", "N", resname="DG", chain="C", resi=1),
+            _polymer_line(14, "P", "P", resname="SEP", chain="C", resi=30),
+            _polymer_line(15, "P", "P", resname="SEP", chain="C", resi=31, record="HETATM"),
+            "END",
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            pdb = Path(tmp) / "model.pdb"
+            pdb.write_text("\n".join(lines) + "\n", encoding="utf-8")
+            text = protein_harmonic_lines(pdb, cfg)
+            held = protein_harmonic_lines(
+                pdb,
+                cfg,
+                skip=[{"chain": "B", "resi": 10, "name": "CA", "alt": "", "icode": ""}],
+            )
+        self.assertIn("exte harm chain B residue 10 atom N sigma 0.200", text)
+        self.assertIn("exte harm chain B residue 10 atom CA sigma 0.200", text)
+        self.assertEqual(text.count("chain B residue 10 atom CA"), 1)
+        self.assertIn("exte harm chain B residue 10 atom H sigma 0.200", text)
+        self.assertIn("exte harm chain B residue 11 atom CA altcode B sigma 0.200", text)
+        self.assertIn("exte harm chain C residue 20 atom SE sigma 0.200", text)
+        self.assertIn("exte harm chain C residue 30 atom P sigma 0.200", text)
+        self.assertNotIn("residue 416", text)
+        self.assertNotIn("residue 189", text)
+        self.assertNotIn("HOH", text)
+        self.assertNotIn("OEX", text)
+        self.assertNotIn("residue 1 atom", text)
+        self.assertNotIn("residue 31", text)
+        self.assertNotIn("chain B residue 10 atom CA", held)
+        self.assertIn("chain B residue 10 atom N", held)
+
+    def test_an_empty_protein_selection_adds_no_line(self):
+        cfg = {"site_copies": [("A", 10)], "extra_residues": [], "harmonic_protein_sigma": 0.1}
+        with tempfile.TemporaryDirectory() as tmp:
+            pdb = Path(tmp) / "model.pdb"
+            pdb.write_text(_polymer_line(1, "CA", "C", chain="A", resi=10) + "\nEND\n", encoding="utf-8")
+            self.assertEqual(protein_harmonic_lines(pdb, cfg), "")
 
 
 class BondTests(unittest.TestCase):
@@ -295,6 +388,7 @@ class LoopTests(unittest.TestCase):
         extra_atoms,
         n_atoms=1,
         n_check=0,
+        density_cutoff=0.0,
         pause=None,
         report_step=None,
         report_row=None,
@@ -366,6 +460,7 @@ class LoopTests(unittest.TestCase):
                 "light_id": "ref",
                 "n_atoms": n_atoms,
                 "n_check_map": n_check,
+                "density_cutoff": density_cutoff,
                 "neighborhood_size": 3,
                 "spline_seed": False,
                 "spline_order": 3,
@@ -382,6 +477,81 @@ class LoopTests(unittest.TestCase):
             report_row=report_row,
         )
         return result, calls, logs
+
+    def test_the_finished_table_is_written_as_csv_and_excel(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "spike.ccp4"
+            _spike_map(source)
+            peak = locate_peak(source, 3, False, 3)
+            result, _calls, _logs = self._run(root, peak["xyz"], [])
+            csv_path = root / "out" / "omit_reconstruction.csv"
+            xlsx_path = root / "out" / "omit_reconstruction.xlsx"
+            self.assertTrue(csv_path.is_file())
+            self.assertTrue(xlsx_path.is_file())
+            roles = [item["role"] for item in result["files"]]
+            self.assertIn("Reconstruction table (CSV)", roles)
+            self.assertIn("Reconstruction table (Excel)", roles)
+            with csv_path.open(encoding="utf-8", newline="") as handle:
+                rows = list(csv.reader(handle))
+            self.assertEqual(
+                rows[0],
+                [
+                    "Step",
+                    "R-factor",
+                    "R-free",
+                    "Added atom",
+                    "Coordinates (Å)",
+                    "Distance to reference (Å)",
+                    "Voxel density",
+                    "Note",
+                ],
+            )
+            self.assertEqual(rows[1][0], "1")
+            self.assertEqual(rows[1][1], "0.1631")
+            self.assertEqual(rows[1][2], "0.2185")
+            self.assertIn("O5", rows[1][3])
+            self.assertEqual(rows[2][3], "")
+            self.assertIn("Residual map", rows[2][7])
+            with zipfile.ZipFile(xlsx_path) as book:
+                sheet = book.read("xl/worksheets/sheet1.xml").decode("utf-8")
+                styles = book.read("xl/styles.xml").decode("utf-8")
+            self.assertIn("Residual map", sheet)
+            self.assertIn("0.1631", sheet)
+            self.assertIn('formatCode="0.0000"', styles)
+
+    def test_a_blank_cell_and_markup_stay_intact_in_both_tables(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            csv_path, xlsx_path = write_reconstruction_table(
+                root,
+                "job",
+                [
+                    {
+                        "step": 1,
+                        "r_factor": None,
+                        "r_free": None,
+                        "atom": "CA <ALA>",
+                        "coordinates": None,
+                        "distance": None,
+                        "density": float("nan"),
+                        "note": "a & b",
+                    }
+                ],
+            )
+            text = csv_path.read_text(encoding="utf-8")
+            self.assertIn("CA <ALA>", text)
+            self.assertIn("a & b", text)
+            with csv_path.open(encoding="utf-8", newline="") as handle:
+                row = list(csv.reader(handle))[1]
+            self.assertEqual(row[1], "")
+            self.assertEqual(row[6], "")
+            with zipfile.ZipFile(xlsx_path) as book:
+                sheet = book.read("xl/worksheets/sheet1.xml").decode("utf-8")
+            self.assertIn("CA &lt;ALA&gt;", sheet)
+            self.assertIn("a &amp; b", sheet)
+            self.assertIn("<v>1</v>", sheet)
+            self.assertNotIn("<v></v>", sheet)
 
     def test_a_peak_adds_the_reference_atom_and_a_final_map_is_calculated(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -472,6 +642,47 @@ class LoopTests(unittest.TestCase):
             self.assertIn("O5", result["steps"][0]["atom"])
             self.assertGreater(result["steps"][0]["distance"], 3)
             self.assertIn("Not added", result["steps"][0]["note"])
+
+    def test_a_peak_below_the_density_cutoff_stops_without_adding_an_atom(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "spike.ccp4"
+            _spike_map(source)
+            peak = locate_peak(source, 3, False, 3)
+            result, calls, logs = self._run(
+                root,
+                peak["xyz"],
+                [],
+                n_atoms=2,
+                density_cutoff=peak["density"] + 1.0,
+            )
+            self.assertEqual(len(calls), 1)
+            self.assertNotIn("O5", (root / "out" / "omit_reconstructed_final.pdb").read_text())
+            self.assertFalse((root / "out" / "r-iteration-01" / "omit_refined_added_O5_step01.pdb").is_file())
+            self.assertTrue(any("treated as noise" in line for line in logs))
+            self.assertIn("not added", result["caption"].lower())
+            self.assertEqual(len(result["steps"]), 1)
+            self.assertEqual(result["steps"][0]["atom"], "")
+            self.assertAlmostEqual(result["steps"][0]["density"], peak["density"])
+            self.assertIn("below the cutoff", result["steps"][0]["note"])
+            sections = (root / "out" / "r-iteration-01" / "density_sections_step01.txt").read_text()
+            self.assertIn("# action not_added", sections)
+
+    def test_a_peak_equal_to_the_density_cutoff_is_added(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "spike.ccp4"
+            _spike_map(source)
+            peak = locate_peak(source, 3, False, 3)
+            result, calls, _logs = self._run(
+                root,
+                peak["xyz"],
+                [],
+                density_cutoff=peak["density"],
+            )
+            self.assertEqual(len(calls), 2)
+            self.assertIn("O5", result["steps"][0]["atom"])
+            self.assertIn("Residual map", result["steps"][1]["note"])
 
     def test_an_atom_farther_than_1_angstrom_is_added_with_a_warning(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -718,6 +929,7 @@ class ReconstructFormTests(unittest.TestCase):
             "distance_restraints": "",
             "angle_restraints": "",
             "n_atoms": "2",
+            "density_cutoff": "0",
             "n_check_map": "0",
             "neighborhood_size": "3",
             "spline_order": "3",
@@ -732,8 +944,15 @@ class ReconstructFormTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             cfg = parse_job("reconstruct", self._form(root), {}, root)
-        self.assertEqual(cfg["n_atoms"], 2)
-        self.assertEqual(cfg["n_check_map"], 0)
+            self.assertEqual(cfg["n_atoms"], 2)
+            self.assertEqual(cfg["density_cutoff"], 0.0)
+            self.assertEqual(cfg["n_check_map"], 0)
+            kept = parse_job("reconstruct", self._form(root, density_cutoff="-0.2"), {}, root)
+            self.assertEqual(kept["density_cutoff"], -0.2)
+            with self.assertRaises(FormError):
+                parse_job("reconstruct", self._form(root, density_cutoff="noise"), {}, root)
+            with self.assertRaises(FormError):
+                parse_job("reconstruct", self._form(root, density_cutoff="nan"), {}, root)
         self.assertEqual(cfg["refmac_ncyc"], 0)
         self.assertEqual(cfg["refmac_bref"], "ISOT")
         self.assertEqual(cfg["refmac_type"], "REST")
@@ -751,6 +970,8 @@ class ReconstructFormTests(unittest.TestCase):
         self.assertEqual(cfg["viewer_light_label"], "Reference site")
         self.assertFalse(cfg["harmonic_added"])
         self.assertEqual(cfg["harmonic_sigma"], 0.1)
+        self.assertFalse(cfg["harmonic_protein"])
+        self.assertEqual(cfg["harmonic_protein_sigma"], 0.1)
         self.assertEqual(cfg["candidate_atoms"], "missing")
 
     def test_spline_order_is_read_only_when_the_spline_maximum_is_on(self):
@@ -784,6 +1005,40 @@ class ReconstructFormTests(unittest.TestCase):
         self.assertTrue(cfg["harmonic_added"])
         self.assertEqual(cfg["harmonic_sigma"], 0.1)
 
+    def test_protein_harmonic_sigma_is_read_only_while_that_switch_is_on(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            off = parse_job(
+                "reconstruct",
+                self._form(root, use_refmac="on", harmonic_protein_sigma="0"),
+                {},
+                root,
+            )
+            self.assertFalse(off["harmonic_protein"])
+            self.assertEqual(off["harmonic_protein_sigma"], 0.1)
+            with self.assertRaises(FormError):
+                parse_job(
+                    "reconstruct",
+                    self._form(root, use_refmac="on", harmonic_protein="on", harmonic_protein_sigma="0"),
+                    {},
+                    root,
+                )
+            hidden = parse_job(
+                "reconstruct",
+                self._form(root, harmonic_protein="on", harmonic_protein_sigma="0.3"),
+                {},
+                root,
+            )
+            on = parse_job(
+                "reconstruct",
+                self._form(root, use_refmac="on", harmonic_protein="on", harmonic_protein_sigma="0.3"),
+                {},
+                root,
+            )
+        self.assertFalse(hidden["harmonic_protein"])
+        self.assertTrue(on["harmonic_protein"])
+        self.assertEqual(on["harmonic_protein_sigma"], 0.3)
+
     def test_every_reference_atom_can_be_made_eligible(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -809,10 +1064,13 @@ class ReconstructFormTests(unittest.TestCase):
             form["path_light_pdb"] = form["path_dark_pdb"]
             cfg = parse_job("refinement", form, {}, root)
         self.assertNotIn("n_atoms", cfg)
+        self.assertNotIn("density_cutoff", cfg)
         self.assertNotIn("geometry_bonds", cfg)
         self.assertNotIn("n_check_map", cfg)
         self.assertNotIn("harmonic_added", cfg)
         self.assertNotIn("candidate_atoms", cfg)
+        self.assertFalse(cfg["harmonic_protein"])
+        self.assertEqual(cfg["harmonic_protein_sigma"], 0.1)
 
 
 class RefmacRfactorTests(unittest.TestCase):
