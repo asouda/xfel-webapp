@@ -3163,26 +3163,26 @@ LINK         C   FME t   1                 N   GLU t   2     1555   1555  1.42
 LINKR        CAB HEC v 201                 SG  CYS v  37     1555   1555HEC-CYS2
 LINKR        CAC HEC v 201                 SG  CYS v  40     1555   1555HEC-CYS1
 LINK         NE2 HIS A 118                MG   CLA A 610     1555   1555  2.03
-LINK         OD1AASP A 170                MN4 AOEX A 602     1555   1555  1.74
-LINK         OD2AASP A 170                CA1 AOEX A 602     1555   1555  2.420
-LINK         OE1AGLU A 189                CA1 AOEX A 602     1555   1555  2.42
-LINK         OE2AGLU A 189                MN1 AOEX A 602     1555   1555  1.740
+LINK         OD1 ASP A 170                MN4  OEX A 602     1555   1555  1.74
+LINK         OD2 ASP A 170                CA1  OEX A 602     1555   1555  2.420
+LINK         OE1 GLU A 189                CA1  OEX A 602     1555   1555  2.42
+LINK         OE2 GLU A 189                MN1  OEX A 602     1555   1555  1.740
 LINK         NE2 HIS A 198                MG   CLA A 607     1555   1555  2.03
 LINK         NE2 HIS A 215                FE   FE2 A 603     1555   1555  2.00
 LINK         NE2 HIS A 272                FE   FE2 A 603     1555   1555  2.00
-LINK         NE2AHIS A 332                MN1 AOEX A 602     1555   1555  1.78
-LINK         OE1AGLU A 333                MN3 AOEX A 602     1555   1555  1.741
-LINK         OE2AGLU A 333                MN4 AOEX A 602     1555   1555  1.742
-LINK         OD1AASP A 342                MN2 AOEX A 602     1555   1555  1.741
-LINK         OD2AASP A 342                MN1 AOEX A 602     1555   1555  1.742
-LINK         O  AALA A 344                CA1 AOEX A 602     1555   1555  2.42
-LINK         OXTAALA A 344                MN2 AOEX A 602     1555   1555  1.740
-LINK        MN4 AOEX A 602                 O  AHOH A 712     1555   1555  1.74
-LINK        CA1 AOEX A 602                 O  AHOH A 738     1555   1555  2.420
-LINK        MN4 AOEX A 602                 O  AHOH A 814     1555   1555  1.74
-LINK        CA1 AOEX A 602                 O  AHOH A 856     1555   1555  2.420
-LINK        MN2 AOEX A 602                 OE1AGLU C 354     1555   1555  1.74
-LINK        MN3 AOEX A 602                 OE2AGLU C 354     1555   1555  1.740
+LINK         NE2 HIS A 332                MN1  OEX A 602     1555   1555  1.78
+LINK         OE1 GLU A 333                MN3  OEX A 602     1555   1555  1.741
+LINK         OE2 GLU A 333                MN4  OEX A 602     1555   1555  1.742
+LINK         OD1 ASP A 342                MN2  OEX A 602     1555   1555  1.741
+LINK         OD2 ASP A 342                MN1  OEX A 602     1555   1555  1.742
+LINK         O   ALA A 344                CA1  OEX A 602     1555   1555  2.42
+LINK         OXT ALA A 344                MN2  OEX A 602     1555   1555  1.740
+LINK        MN4  OEX A 602                 O   HOH A 712     1555   1555  1.74
+LINK        CA1  OEX A 602                 O   HOH A 738     1555   1555  2.420
+LINK        MN4  OEX A 602                 O   HOH A 814     1555   1555  1.74
+LINK        CA1  OEX A 602                 O   HOH A 856     1555   1555  2.420
+LINK        MN2  OEX A 602                 OE1 GLU C 354     1555   1555  1.74
+LINK        MN3  OEX A 602                 OE2 GLU C 354     1555   1555  1.740
 LINK        FE   FE2 A 603                 O1  BCT A 606     1555   1555  1.96
 LINK        FE   FE2 A 603                 O2  BCT A 606     1555   1555  1.960
 LINK         NE2 HIS D 214                FE   FE2 A 603     1555   1555  2.00
@@ -3225,26 +3225,26 @@ LINK         NE2 HIS F  24                FE   HEM F 101     1555   1555  2.00
 LINK         NE2 HIS V  41                FE   HEC V 201     1555   1555  2.00
 LINK         NE2 HIS V  92                FE   HEC V 201     1555   1555  2.00
 LINK         NE2 HIS a 118                MG   CLA a 610     1555   1555  2.03
-LINK         OD1AASP a 170                MN4 AOEX a 602     1555   1555  1.74
-LINK         OD2AASP a 170                CA1 AOEX a 602     1555   1555  2.420
-LINK         OE1AGLU a 189                CA1 AOEX a 602     1555   1555  2.42
-LINK         OE2AGLU a 189                MN1 AOEX a 602     1555   1555  1.740
+LINK         OD1 ASP a 170                MN4  OEX a 602     1555   1555  1.74
+LINK         OD2 ASP a 170                CA1  OEX a 602     1555   1555  2.420
+LINK         OE1 GLU a 189                CA1  OEX a 602     1555   1555  2.42
+LINK         OE2 GLU a 189                MN1  OEX a 602     1555   1555  1.740
 LINK         NE2 HIS a 198                MG   CLA a 607     1555   1555  2.03
 LINK         NE2 HIS a 215                FE   FE2 a 603     1555   1555  2.00
 LINK         NE2 HIS a 272                FE   FE2 a 603     1555   1555  2.00
-LINK         NE2AHIS a 332                MN1 AOEX a 602     1555   1555  1.78
-LINK         OE1AGLU a 333                MN3 AOEX a 602     1555   1555  1.741
-LINK         OE2AGLU a 333                MN4 AOEX a 602     1555   1555  1.742
-LINK         OD1AASP a 342                MN2 AOEX a 602     1555   1555  1.741
-LINK         OD2AASP a 342                MN1 AOEX a 602     1555   1555  1.742
-LINK         O  AALA a 344                CA1 AOEX a 602     1555   1555  2.42
-LINK         OXTAALA a 344                MN2 AOEX a 602     1555   1555  1.740
-LINK        MN4 AOEX a 602                 O  AHOH a 702     1555   1555  1.74
-LINK        CA1 AOEX a 602                 O  AHOH a 729     1555   1555  2.420
-LINK        MN4 AOEX a 602                 O  AHOH a 765     1555   1555  1.74
-LINK        CA1 AOEX a 602                 O  AHOH a 816     1555   1555  2.420
-LINK        MN2 AOEX a 602                 OE1AGLU c 354     1555   1555  1.74
-LINK        MN3 AOEX a 602                 OE2AGLU c 354     1555   1555  1.740
+LINK         NE2 HIS a 332                MN1  OEX a 602     1555   1555  1.78
+LINK         OE1 GLU a 333                MN3  OEX a 602     1555   1555  1.741
+LINK         OE2 GLU a 333                MN4  OEX a 602     1555   1555  1.742
+LINK         OD1 ASP a 342                MN2  OEX a 602     1555   1555  1.741
+LINK         OD2 ASP a 342                MN1  OEX a 602     1555   1555  1.742
+LINK         O   ALA a 344                CA1  OEX a 602     1555   1555  2.42
+LINK         OXT ALA a 344                MN2  OEX a 602     1555   1555  1.740
+LINK        MN4  OEX a 602                 O   HOH a 702     1555   1555  1.74
+LINK        CA1  OEX a 602                 O   HOH a 729     1555   1555  2.420
+LINK        MN4  OEX a 602                 O   HOH a 765     1555   1555  1.74
+LINK        CA1  OEX a 602                 O   HOH a 816     1555   1555  2.420
+LINK        MN2  OEX a 602                 OE1 GLU c 354     1555   1555  1.74
+LINK        MN3  OEX a 602                 OE2 GLU c 354     1555   1555  1.740
 LINK        FE   FE2 a 603                 O1  BCT a 606     1555   1555  1.96
 LINK        FE   FE2 a 603                 O2  BCT a 606     1555   1555  1.960
 LINK         NE2 HIS d 214                FE   FE2 a 603     1555   1555  2.00

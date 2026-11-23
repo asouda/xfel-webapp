@@ -4,8 +4,8 @@ This README records the atoms omitted from the original `9z35` PDB structures. T
 
 | Conformation | Original PDB | Omit PDB | Missing-atom CSV |
 |---|---|---|---|
-| A (35%) | `9z35_confA.pdb` | `9z35_confA_omitOEXsidechains6HOH.pdb` | [`9z35_missing_atoms.csv`](9z35_missing_atoms.csv) |
-| B (65%) | `9z35_confB.pdb` | `9z35_confB_omitOEYsidechains6HOH.pdb` | [`9z35_confB_missing_atoms.csv`](9z35_confB_missing_atoms.csv) |
+| A (35%) | `9z35_confA.pdb` | `9z35_confA_omitOEXsidechains7HOH.pdb` | [`9z35_missing_atoms.csv`](9z35_missing_atoms.csv) |
+| B (65%) | `9z35_confB.pdb` | `9z35_confB_omitOEYsidechains7HOH.pdb` | [`9z35_confB_missing_atoms.csv`](9z35_confB_missing_atoms.csv) |
 
 ## Missing-atom summary
 
@@ -13,8 +13,8 @@ This README records the atoms omitted from the original `9z35` PDB structures. T
 |---|---:|---:|
 | Protein atoms | 13 | 13 |
 | OEC cofactor atoms | 10 | 11 |
-| Water oxygen atoms | 6 | 6 |
-| **Total missing atoms** | **29** | **30** |
+| Water oxygen atoms | 7 | 7 |
+| **Total missing atoms** | **30** | **31** |
 
 The same 13 protein atom identities and six water oxygen identities are removed from both conformations. Conformation B additionally omits **O6** from the OEY cofactor, so it has 30 missing atoms compared with 29 in conformation A.
 
@@ -48,6 +48,7 @@ The same 13 protein atom identities and six water oxygen identities are removed 
 | A | HOH 738 | O |
 | A | HOH 776 | O |
 | A | HOH 814 | O |
+| A | HOH 817 | O |
 | A | HOH 856 | O |
 
 All six waters listed in the supplied README—including HOH A 705 and HOH A 776, previously shown in parentheses—are confirmed as removed by the PDB comparison.
@@ -69,7 +70,7 @@ MN1 Cartesian coordinates extracted from the original PDB atom records (Å):
 |---|---:|---:|
 | Original `ATOM` + `HETATM` count | 53,199 | 53,201 |
 | Omit-file `ATOM` + `HETATM` count | 53,170 | 53,171 |
-| Removed records | 29 | 30 |
+| Removed records | 30 | 31 |
 | Additional atom records in omit file | 0 | 0 |
 | Modified retained atom records | 0 | 0 |
 | `ANISOU` records in either file | 0 | 0 |

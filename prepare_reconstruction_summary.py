@@ -1257,6 +1257,8 @@ def prepare(run_dir: Path, residues: list[Residue] | None = None) -> Path:
     run_dir = run_dir.expanduser().resolve()
     if not run_dir.is_dir():
         raise SystemExit(f"Run directory not found: {run_dir}")
+    if ITERATION_RE.match(run_dir.name) and not (run_dir / "inputs").is_dir():
+        run_dir = run_dir.parent
     inputs = run_dir / "inputs"
     if not inputs.is_dir():
         raise SystemExit(f"No inputs directory in {run_dir}")
