@@ -531,6 +531,10 @@ def _omit_config(
     """Omit-map settings for one iteration, plus harmonic restraints on atoms already added."""
     child = _iteration_config(cfg, omit_pdb, output_dir)
     child["render_png"] = render_png
+    # The starting model is refined before any atom is added. Later steps,
+    # including the residual map of the finished model, keep refmac_ncyc.
+    if not added and "initial_refmac_ncyc" in cfg:
+        child["refmac_ncyc"] = int(cfg["initial_refmac_ncyc"])
     if cfg.get("harmonic_added") and added:
         child["harmonic_atoms"] = [
             {
@@ -1021,11 +1025,13 @@ def run_reconstruct(cfg: dict, emit, pause=None, omit_runner=None, report_step=N
         f"Density cutoff: {density_cutoff:.4f}. "
         "A located peak below this value is treated as noise and stops the run."
     )
-    if int(cfg.get("refmac_ncyc") or 0) > 0:
+    step_cycles = int(cfg.get("refmac_ncyc") or 0)
+    initial_cycles = int(cfg.get("initial_refmac_ncyc", step_cycles) or 0)
+    if initial_cycles or step_cycles:
         emit(
-            "REFMAC cycles is greater than zero. Each map is calculated after refinement. "
-            "The new atom is inserted into those refined coordinates, "
-            "and the next iteration starts from that model."
+            f"The initial omit model is refined for {initial_cycles} cycles. "
+            f"Each later reconstruction step, including the residual map, uses {step_cycles} cycles. "
+            "A new atom is inserted into the refined coordinates, and the next iteration starts from that model."
         )
     link_records = configured_link_records(cfg, emit)
     if link_records:
@@ -1063,24 +1069,22 @@ def run_reconstruct(cfg: dict, emit, pause=None, omit_runner=None, report_step=N
         # The script is written for every iteration. PyMOL runs only when this
         # step will wait for the 3D viewer, which is a map-check pause.
         checks_map = bool(n_check) and iteration % n_check == 0
+        step_cfg = _omit_config(
+            cfg,
+            snapshot,
+            iter_dir,
+            added,
+            render_png=checks_map and pause is not None,
+        )
         result = _stamp_iteration_outputs(
             iter_dir,
             iteration,
-            omit_runner(
-                _omit_config(
-                    cfg,
-                    snapshot,
-                    iter_dir,
-                    added,
-                    render_png=checks_map and pause is not None,
-                ),
-                log,
-            ),
+            omit_runner(step_cfg, log),
         )
         fragment = Path(result["fragment"])
         if not fragment.is_file():
             raise FileNotFoundError(f"The omit-map clip was not written: {fragment}")
-        r_factor, r_free = read_refmac_rfactors(_refmac_log(iter_dir, cfg))
+        r_factor, r_free = read_refmac_rfactors(_refmac_log(iter_dir, step_cfg))
 
         peak = locate_peak(
             fragment,
@@ -1323,15 +1327,13 @@ def run_reconstruct(cfg: dict, emit, pause=None, omit_runner=None, report_step=N
                 f"Replaced the LINK records in {snapshot.name} with "
                 f"{_link_count_text(len(link_records))} before refinement."
             )
+        step_cfg = _omit_config(cfg, snapshot, iter_dir, added, render_png=False)
         result = _stamp_iteration_outputs(
             iter_dir,
             iteration,
-            omit_runner(
-                _omit_config(cfg, snapshot, iter_dir, added, render_png=False),
-                log,
-            ),
+            omit_runner(step_cfg, log),
         )
-        r_factor, r_free = read_refmac_rfactors(_refmac_log(iter_dir, cfg))
+        r_factor, r_free = read_refmac_rfactors(_refmac_log(iter_dir, step_cfg))
         steps.append(
             _step_row(
                 iteration,

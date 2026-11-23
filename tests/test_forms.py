@@ -30,6 +30,7 @@ from xfel_web.forms import (
     parse_copies,
     parse_dihedral_restraints,
     parse_distance_restraints,
+    parse_exclude_restraints,
     parse_extra_residues,
     parse_job,
     parse_viewer_sigma,
@@ -203,8 +204,16 @@ class ParseTests(unittest.TestCase):
             parse_dihedral_restraints("MN1 O5 MN4 CA1 180 10"),
             [("MN1", "O5", "MN4", "CA1", 180.0, 10.0)],
         )
+        self.assertEqual(
+            parse_exclude_restraints("A 416 *\n# comment\na 189 ca, cb CG\n"),
+            [("A", 416, ("*",)), ("a", 189, ("CA", "CB", "CG"))],
+        )
         with self.assertRaises(FormError):
             parse_extra_residues("AB 189")
+        with self.assertRaises(FormError):
+            parse_exclude_restraints("A 416 * CA")
+        with self.assertRaises(FormError):
+            parse_exclude_restraints("AA 416 *")
 
     def test_viewer_sigma_range(self):
         self.assertEqual(parse_viewer_sigma({"viewer_sigma_min": "-5", "viewer_sigma_max": "5"}), (-5.0, 5.0))
@@ -422,6 +431,7 @@ class RefinementFormTests(unittest.TestCase):
         self.assertEqual(cfg["refmac_type"], "REST")
         self.assertFalse(cfg["harmonic_protein"])
         self.assertEqual(cfg["harmonic_protein_sigma"], 0.1)
+        self.assertEqual(cfg["exclude_restraints"], [])
         self.assertEqual(cfg["map_center"], "residue")
         self.assertIsNone(cfg["map_center_xyz"])
 
@@ -614,6 +624,51 @@ class RefinementFormTests(unittest.TestCase):
         self.assertEqual(cfg["refmac_type"], "REST")
         self.assertFalse(cfg["harmonic_protein"])
         self.assertEqual(cfg["distance_restraints"], [])
+        self.assertEqual(cfg["exclude_restraints"], [])
+
+    def test_exclude_restraints_follow_the_switch(self):
+        text = "A 416 *\nA 189 CA CB CG"
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            hidden = parse_job(
+                "refinement",
+                self._form(root, use_exclude_restraints="on", exclude_restraints=text),
+                {},
+                root,
+            )
+            off = parse_job(
+                "refinement",
+                self._form(root, use_refmac="on", exclude_restraints=text),
+                {},
+                root,
+            )
+            on = parse_job(
+                "refinement",
+                self._form(
+                    root,
+                    use_refmac="on",
+                    use_exclude_restraints="on",
+                    exclude_restraints=text,
+                ),
+                {},
+                root,
+            )
+            with self.assertRaises(FormError) as caught:
+                parse_job(
+                    "refinement",
+                    self._form(
+                        root,
+                        use_refmac="on",
+                        use_exclude_restraints="on",
+                        exclude_restraints="A xyz *",
+                    ),
+                    {},
+                    root,
+                )
+        self.assertEqual(hidden["exclude_restraints"], [])
+        self.assertEqual(off["exclude_restraints"], [])
+        self.assertEqual(on["exclude_restraints"], [("A", 416, ("*",)), ("A", 189, ("CA", "CB", "CG"))])
+        self.assertIn("residue number", str(caught.exception))
 
     def test_protein_harmonic_sigma_follows_the_switch(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -770,6 +825,23 @@ class RefmacKeywordTests(unittest.TestCase):
         self.assertTrue(text.startswith("exte dist first chain A\nMAKE -"))
         self.assertNotIn("LIBIN", text)
         self.assertNotIn("libin", text)
+
+    def test_excluded_residues_are_written_before_the_cycle_count(self):
+        text = refmac_keywords(
+            4,
+            "exte dist first chain A",
+            bref="ISOT",
+            exclude=[("A", 416, ("*",)), ("A", 189, ("CA", "CB", "CG"))],
+        )
+        self.assertTrue(text.startswith("exte dist first chain A\nMAKE -"))
+        self.assertIn(
+            "WEIGHT -\n    AUTO\n"
+            "RESTRAINT EXCLUDE RESIDUE 416 A ATOMS *\n"
+            "RESTRAINT EXCLUDE RESIDUE 189 A ATOMS CA CB CG\n"
+            "NCYC 4\nEND",
+            text,
+        )
+        self.assertNotIn("RESTRAINT EXCLUDE", refmac_keywords(4, exclude=[]))
 
 
 def _write_map(path, values, *, nxyz, starts, axes, cell, symops, arms):

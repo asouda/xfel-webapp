@@ -14,6 +14,8 @@ from xfel_web.ccp4 import fft_grid_resolution
 
 ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.+\-]{0,80}$")
 LABEL_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,20}$")
+# PDB atom names, including primes written as * or ' and charged names such as N1+.
+_ATOM_NAME_RE = re.compile(r"^[A-Za-z0-9*'+-]{1,4}$")
 
 PHASE_SOURCES = ("light_validation", "dark_validation", "light_refmac", "dark_refmac")
 
@@ -285,6 +287,45 @@ def parse_dihedral_restraints(text: str) -> list[tuple]:
     return specs
 
 
+def parse_exclude_restraints(text: str) -> list[tuple[str, int, tuple[str, ...]]]:
+    """Lines of ``chain residue atoms``. ``*`` means every atom in the residue."""
+    specs = []
+    for line_no, raw in enumerate(text.splitlines(), start=1):
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        parts = line.replace(",", " ").split()
+        if len(parts) < 3:
+            raise FormError(
+                f"Exclude-restraint line {line_no} should be 'chain residue atoms', "
+                "for example 'A 416 *' or 'A 189 CA CB CG'."
+            )
+        chain, resi_text, *atoms = parts
+        if len(chain) != 1 or not chain.isalnum():
+            raise FormError(
+                f"Exclude-restraint line {line_no}: chain must be a single letter or digit."
+            )
+        try:
+            resi = int(resi_text)
+        except ValueError as exc:
+            raise FormError(
+                f"Exclude-restraint line {line_no}: residue number is not an integer."
+            ) from exc
+        if any(atom == "*" for atom in atoms) and atoms != ["*"]:
+            raise FormError(
+                f"Exclude-restraint line {line_no}: '*' means every atom and must be the only atom token."
+            )
+        normalized = []
+        for atom in atoms:
+            if atom != "*" and not _ATOM_NAME_RE.match(atom):
+                raise FormError(
+                    f"Exclude-restraint line {line_no}: atom {atom!r} is not a PDB atom name."
+                )
+            normalized.append("*" if atom == "*" else atom.upper())
+        specs.append((chain, resi, tuple(normalized)))
+    return specs
+
+
 def _restraint_block(form, flag: str, parser, text_name: str, sigma_name: str, sigma_label: str, default_sigma: float):
     """Restraints for one switch. Off keeps the default sigma and applies nothing."""
     if not _flag(form, flag):
@@ -316,6 +357,13 @@ def _active_restraints(form, refine: bool):
         "dihedral_restraints", "dihedral_sigma", "Dihedral sigma", 10.0,
     )
     return distances, distance_sigma, angles, angle_sigma, dihedrals, dihedral_sigma
+
+
+def _exclude_restraints(form, refine: bool) -> list[tuple[str, int, tuple[str, ...]]]:
+    """Residues left out of REFMAC restraints. The switch is read only while REFMAC is on."""
+    if not refine or not _flag(form, "use_exclude_restraints"):
+        return []
+    return parse_exclude_restraints(_text(form, "exclude_restraints"))
 
 
 def _link_record_file(form, files, output_dir: Path, project: Path) -> Path | None:
@@ -505,6 +553,28 @@ def _refmac_settings(form) -> tuple[int, str, str, bool]:
     return cycles, bref, kind, True
 
 
+def _initial_refmac_cycles(form, refine: bool, step_cycles: int) -> int:
+    """Cycles for the starting omit model. A blank field follows the later steps.
+
+    The field is read only while REFMAC refinement is on. Off means zero cycles.
+    """
+    if not refine:
+        return 0
+    if not _text(form, "initial_refmac_ncyc"):
+        return step_cycles
+    cycles = _int(
+        form,
+        "initial_refmac_ncyc",
+        "Number of refinement cycles for the initial omit model",
+    )
+    if cycles < 0:
+        raise FormError(
+            "Number of refinement cycles for the initial omit model cannot be negative. "
+            "Use 0 to calculate that map without moving atoms."
+        )
+    return cycles
+
+
 def _common(form, project: Path) -> dict:
     output_dir = resolve_output_dir(_text(form, "output_dir"), project)
     ccp4_root = Path(_text(form, "ccp4_root") or "/Applications/ccp4-9").expanduser()
@@ -610,6 +680,7 @@ def parse_job(workflow: str, form, files, project: Path) -> dict:
                 "refmac_ncyc": cycles,
                 "refmac_bref": bref,
                 "refmac_type": refi_type,
+                "exclude_restraints": _exclude_restraints(form, refine),
                 "harmonic_protein": harmonic_protein,
                 "harmonic_protein_sigma": harmonic_protein_sigma,
                 "map_center": center_mode,
@@ -654,6 +725,7 @@ def parse_job(workflow: str, form, files, project: Path) -> dict:
         custom_dictionary = _custom_dictionary(form, files, output_dir, project) if refine else None
         harmonic_added = refine and _flag(form, "harmonic_added")
         harmonic_protein, harmonic_protein_sigma = _protein_harmonic(form, refine)
+        exclude_restraints = _exclude_restraints(form, refine)
         restore_links = _flag(form, "restore_links")
         cfg["show_oec_bonds"] = False
         cfg["ray_trace"] = True
@@ -664,6 +736,7 @@ def parse_job(workflow: str, form, files, project: Path) -> dict:
                 "dark_id": _identifier(form, "dark_id", "Omit-model name"),
                 "light_id": _identifier(form, "light_id", "Observed-data name"),
                 "refmac_ncyc": cycles,
+                "initial_refmac_ncyc": _initial_refmac_cycles(form, refine, cycles),
                 "refmac_bref": bref,
                 "refmac_type": refi_type,
                 "map_center": center_mode,
@@ -674,6 +747,7 @@ def parse_job(workflow: str, form, files, project: Path) -> dict:
                 "angle_sigma": angle_sigma,
                 "dihedral_restraints": dihedrals,
                 "dihedral_sigma": dihedral_sigma,
+                "exclude_restraints": exclude_restraints,
                 "custom_dictionary": custom_dictionary,
                 "positive_levels": positive,
                 "negative_levels": negative,

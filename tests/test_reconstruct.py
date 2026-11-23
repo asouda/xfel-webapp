@@ -456,6 +456,9 @@ class LoopTests(unittest.TestCase):
         link_records=None,
         drop_links=False,
         extra_refined_lines=(),
+        refmac_ncyc=0,
+        initial_refmac_ncyc=None,
+        cycle_counts=None,
     ):
         source = root / "spike.ccp4"
         _spike_map(source)
@@ -494,6 +497,8 @@ class LoopTests(unittest.TestCase):
                     existing.rstrip("\n") + "\n" + "\n".join(extra_refined_lines) + "\n",
                     encoding="utf-8",
                 )
+            if cycle_counts is not None:
+                cycle_counts.append(int(cfg["refmac_ncyc"]))
             log_path = Path(cfg["output_dir"]) / (
                 f"{cfg['dark_id']}_vs_{cfg['light_id']}_refmac{int(cfg['refmac_ncyc'])}.log"
             )
@@ -535,9 +540,11 @@ class LoopTests(unittest.TestCase):
             "harmonic_added": harmonic,
             "harmonic_sigma": 0.1,
             "candidate_atoms": candidate_atoms,
-            "refmac_ncyc": 0,
+            "refmac_ncyc": refmac_ncyc,
             "files": {"dark_pdb": omit, "light_pdb": reference, "light_sf": reference},
         }
+        if initial_refmac_ncyc is not None:
+            job["initial_refmac_ncyc"] = initial_refmac_ncyc
         if restore_links is not None:
             job["restore_links"] = restore_links
         if link_records is not None:
@@ -551,6 +558,23 @@ class LoopTests(unittest.TestCase):
             report_row=report_row,
         )
         return result, calls, logs
+
+    def test_the_initial_omit_model_uses_its_own_cycle_count(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "spike.ccp4"
+            _spike_map(source)
+            peak = locate_peak(source, 3, False, 3)
+            cycles = []
+            self._run(
+                root,
+                peak["xyz"],
+                [],
+                refmac_ncyc=2,
+                initial_refmac_ncyc=8,
+                cycle_counts=cycles,
+            )
+        self.assertEqual(cycles, [8, 2])
 
     def test_the_finished_table_is_written_as_csv_and_excel(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1170,6 +1194,7 @@ class ReconstructFormTests(unittest.TestCase):
             with self.assertRaises(FormError):
                 parse_job("reconstruct", self._form(root, density_cutoff="nan"), {}, root)
         self.assertEqual(cfg["refmac_ncyc"], 0)
+        self.assertEqual(cfg["initial_refmac_ncyc"], 0)
         self.assertEqual(cfg["refmac_bref"], "ISOT")
         self.assertEqual(cfg["refmac_type"], "REST")
         self.assertEqual(cfg["neighborhood_size"], 3)
@@ -1188,6 +1213,7 @@ class ReconstructFormTests(unittest.TestCase):
         self.assertEqual(cfg["harmonic_sigma"], 0.1)
         self.assertFalse(cfg["harmonic_protein"])
         self.assertEqual(cfg["harmonic_protein_sigma"], 0.1)
+        self.assertEqual(cfg["exclude_restraints"], [])
         self.assertEqual(cfg["candidate_atoms"], "missing")
         self.assertTrue(cfg["restore_links"])
         self.assertIsNone(cfg["link_records"])
@@ -1256,6 +1282,84 @@ class ReconstructFormTests(unittest.TestCase):
         self.assertFalse(hidden["harmonic_protein"])
         self.assertTrue(on["harmonic_protein"])
         self.assertEqual(on["harmonic_protein_sigma"], 0.3)
+
+    def test_exclude_restraints_follow_the_switch(self):
+        text = "B 601 *\nA 189 O5"
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            hidden = parse_job(
+                "reconstruct",
+                self._form(root, use_exclude_restraints="on", exclude_restraints=text),
+                {},
+                root,
+            )
+            on = parse_job(
+                "reconstruct",
+                self._form(
+                    root,
+                    use_refmac="on",
+                    use_exclude_restraints="on",
+                    exclude_restraints=text,
+                ),
+                {},
+                root,
+            )
+            with self.assertRaises(FormError) as caught:
+                parse_job(
+                    "reconstruct",
+                    self._form(
+                        root,
+                        use_refmac="on",
+                        use_exclude_restraints="on",
+                        exclude_restraints="A 189",
+                    ),
+                    {},
+                    root,
+                )
+        self.assertEqual(hidden["exclude_restraints"], [])
+        self.assertEqual(on["exclude_restraints"], [("B", 601, ("*",)), ("A", 189, ("O5",))])
+        self.assertIn("chain residue atoms", str(caught.exception))
+
+    def test_initial_omit_model_cycles_are_separate_from_later_steps(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            hidden = parse_job(
+                "reconstruct",
+                self._form(root, initial_refmac_ncyc="8", refmac_ncyc="2"),
+                {},
+                root,
+            )
+            blank = parse_job(
+                "reconstruct",
+                self._form(root, use_refmac="on", refmac_ncyc="2"),
+                {},
+                root,
+            )
+            on = parse_job(
+                "reconstruct",
+                self._form(
+                    root,
+                    use_refmac="on",
+                    refmac_ncyc="2",
+                    initial_refmac_ncyc="8",
+                ),
+                {},
+                root,
+            )
+            with self.assertRaises(FormError) as caught:
+                parse_job(
+                    "reconstruct",
+                    self._form(root, use_refmac="on", initial_refmac_ncyc="-1"),
+                    {},
+                    root,
+                )
+        self.assertEqual(hidden["refmac_ncyc"], 0)
+        self.assertEqual(hidden["initial_refmac_ncyc"], 0)
+        self.assertEqual(blank["refmac_ncyc"], 2)
+        self.assertEqual(blank["initial_refmac_ncyc"], 2)
+        self.assertEqual(on["refmac_ncyc"], 2)
+        self.assertEqual(on["initial_refmac_ncyc"], 8)
+        self.assertIn("initial omit model", str(caught.exception))
 
     def test_an_external_link_file_is_optional_and_must_contain_link_records(self):
         with tempfile.TemporaryDirectory() as tmp:

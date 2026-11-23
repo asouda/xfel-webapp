@@ -60,23 +60,41 @@ WEIGHT -
     AUTO"""
 
 
+def exclude_restraint_keywords(specs) -> str:
+    """``RESTRAINT EXCLUDE RESIDUE`` lines for residues left out of restraints.
+
+    Each spec is ``(chain, residue, atoms)``. An atom list of ``*`` means every
+    atom in that residue.
+    """
+    lines = []
+    for chain, resi, atoms in specs or []:
+        atom_text = " ".join(str(atom) for atom in atoms)
+        lines.append(f"RESTRAINT EXCLUDE RESIDUE {int(resi)} {chain} ATOMS {atom_text}")
+    return "\n".join(lines)
+
+
 def refmac_keywords(
     ncyc: int,
     leading: str = "",
     bref: str = "ANIS",
     refi_type: str = "REST",
+    exclude=None,
 ) -> str:
     """REFMAC standard input.
 
     External restraints, when present, come first, so they replace matching
     distances and angles from the CCP4 monomer library and from a ``libin``
-    dictionary assigned on the command line. The fixed protocol and ``NCYC``
-    come last.
+    dictionary assigned on the command line. The fixed protocol follows.
+    ``RESTRAINT EXCLUDE`` lines, when present, come after that protocol.
+    ``NCYC`` comes last.
 
     ``bref`` and ``refi_type`` are the ``REFI BREF`` and ``REFI TYPE`` tokens.
     The defaults keep the Fo−Fo zero-cycle job on anisotropic restrained
     refinement. Omit maps and reconstruction pass the form values, whose
     defaults are isotropic and restrained.
+
+    ``exclude`` is a list of ``(chain, residue, atoms)`` specs. An atom list of
+    ``*`` means every atom in that residue.
     """
     bref = str(bref).upper()
     refi_type = str(refi_type).upper()
@@ -90,6 +108,9 @@ def refmac_keywords(
     if leading and leading.strip():
         parts.append(leading.strip())
     parts.append(protocol.strip())
+    excluded = exclude_restraint_keywords(exclude)
+    if excluded:
+        parts.append(excluded)
     return "\n".join(parts) + f"\nNCYC {int(ncyc)}\nEND"
 
 
@@ -710,6 +731,10 @@ def run_refinement(cfg: dict, emit) -> dict:
         restraint_text = "\n".join(
             part for part in (geometry_text, harmonic_text, protein_text) if part
         )
+        exclude_specs = list(cfg.get("exclude_restraints") or [])
+        exclude_text = exclude_restraint_keywords(exclude_specs)
+        if exclude_text:
+            session.emit("REFMAC will leave these atoms out of restraints:\n" + exclude_text)
         if restraint_text:
             restraint_path = out / f"{dark_id}_external_restraints.txt"
             restraint_path.write_text(restraint_text + "\n")
@@ -727,6 +752,7 @@ def run_refinement(cfg: dict, emit) -> dict:
                 restraint_text,
                 bref=cfg.get("refmac_bref", "ISOT"),
                 refi_type=cfg.get("refmac_type", "REST"),
+                exclude=exclude_specs,
             ),
             out / f"{dark_id}_vs_{light_id}_refmac{int(cfg['refmac_ncyc'])}.log",
         )
