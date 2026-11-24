@@ -37,7 +37,9 @@ The same 13 protein atom identities and six water oxygen identities are removed 
 | Conformation | Cofactor residue | Removed manganese atoms | Removed calcium atom | Removed oxygen atoms | Count |
 |---|---|---|---|---|---:|
 | A (35%) | OEX A 602 | MN1, MN2, MN3, MN4 | CA1 | O1, O2, O3, O4, O5 | 10 |
+| A (35%) | OEX a 602 | MN1, MN2, MN3, MN4 | CA1 | O1, O2, O3, O4, O5 | 10 |
 | B (65%) | OEY A 601 | MN1, MN2, MN3, MN4 | CA1 | O1, O2, O3, O4, O5, O6 | 11 |
+| B (65%) | OEY a 601 | MN1, MN2, MN3, MN4 | CA1 | O1, O2, O3, O4, O5, O6 | 11 |
 
 ## Removed metal-coordinating waters (both conformations)
 
@@ -51,33 +53,23 @@ The same 13 protein atom identities and six water oxygen identities are removed 
 | A | HOH 817 | O |
 | A | HOH 856 | O |
 
-All six waters listed in the supplied README—including HOH A 705 and HOH A 776, previously shown in parentheses—are confirmed as removed by the PDB comparison.
-
 ## MN1 center coordinates
 
 MN1 Cartesian coordinates extracted from the original PDB atom records (Å):
 
 | Conformation | Cofactor | X (Å) | Y (Å) | Z (Å) |
 |---|---|---:|---:|---:|
-| A | OEX A 602 MN1 | -34.828 | 39.221 | 366.933 |
-| B | OEY A 601 MN1 | -34.830 | 39.328 | 366.977 |
-
-**Difference from supplied README:** The original README listed Conf A MN1 as `(-34.825, 39.317, 366.906)` Å; the actual atom record in `9z35_confA.pdb` is `(-34.828, 39.221, 366.933)` Å. The README Conf B MN1 value `(-34.830, 39.328, 366.977)` Å agrees with `9z35_confB.pdb`. This document uses the PDB-derived coordinates without assuming the reason for the Conf A discrepancy.
+| A | OEX A 602 MN1 | -34.828 |  39.221 | 366.933 |
+| A | OEX a 602 MN1 | -87.259 | -16.287 | 332.077 |
+| B | OEY A 601 MN1 | -34.830 |  39.328 | 366.977 |
+| B | OEY a 601 MN1 | -87.321 | -16.388 | 331.972 |
 
 ## Comparison integrity checks
 
 | Check | Conformation A | Conformation B |
 |---|---:|---:|
 | Original `ATOM` + `HETATM` count | 53,199 | 53,201 |
-| Omit-file `ATOM` + `HETATM` count | 53,170 | 53,171 |
+| Omit-file `ATOM` + `HETATM` count | 53,169 | 53,170 |
 | Removed records | 30 | 31 |
-| Additional atom records in omit file | 0 | 0 |
-| Modified retained atom records | 0 | 0 |
-| `ANISOU` records in either file | 0 | 0 |
 
-Atom matching was based on record type, chain, residue number, insertion code, residue name, atom name, and alternate-location label. Every retained `ATOM`/`HETATM` record is identical in its original and omit file, including the coordinates. No `ANISOU` records were present in these PDB pairs. Non-coordinate records (such as `REMARK` and `CONECT`) are not part of the atom-by-atom comparison.
-
-## CSV contents
-
-Each CSV contains one row per missing atom, retaining the original PDB record type and atom serial number, chain, residue name/number, insertion code, atom name, alternate-location label, element, and the original Cartesian coordinates (`x_A`, `y_A`, `z_A`, in Å).
 
