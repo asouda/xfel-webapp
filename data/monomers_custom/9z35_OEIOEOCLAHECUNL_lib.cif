@@ -1415,7 +1415,7 @@ _chem_comp_chir.volume_sign
  CLA      chir_02          C3A    C2A    C4A    CMA       negativ
  CLA      chir_03          ND     MG     C1D    C4D       positiv
  CLA      chir_04          CBD    CHA    CAD    CGD       positiv
- CLA      chir_05          C8     C7     C9     C10       positiv
+ CLA      chir_05          C8     C7     C9     C10       negativ
  CLA      chir_06          C13    C12    C14    C15       positiv
  CLA      chir_07          C18    C17    C19    C20       negativ
 loop_

@@ -128,7 +128,7 @@ class HarmonicTests(unittest.TestCase):
             "extra_residues": [{"chain": "A", "resi": 189, "label": "GLU189"}],
             "harmonic_protein_sigma": 0.2,
         }
-        self.assertEqual(site_and_additional_residues(cfg), [("A", 416), ("D", 416), ("A", 189)])
+        self.assertEqual(site_and_additional_residues(cfg), [("A", 416), ("D", 416)])
         lines = [
             _polymer_line(1, "N", "N", chain="B", resi=10),
             _polymer_line(2, "CA", "C", chain="B", resi=10),
@@ -164,13 +164,26 @@ class HarmonicTests(unittest.TestCase):
         self.assertIn("exte harm chain C residue 20 atom SE sigma 0.200", text)
         self.assertIn("exte harm chain C residue 30 atom P sigma 0.200", text)
         self.assertNotIn("residue 416", text)
-        self.assertNotIn("residue 189", text)
+        self.assertIn("exte harm chain A residue 189 atom CA sigma 0.200", text)
+        self.assertIn("exte harm chain A residue 189 insertion A atom CA sigma 0.200", text)
         self.assertNotIn("HOH", text)
         self.assertNotIn("OEX", text)
         self.assertNotIn("residue 1 atom", text)
         self.assertNotIn("residue 31", text)
         self.assertNotIn("chain B residue 10 atom CA", held)
         self.assertIn("chain B residue 10 atom N", held)
+
+    def test_the_additional_site_is_left_free(self):
+        cfg = {
+            "site_copies": [("A", 10)],
+            "extra_residues": [],
+            "additional_site": {
+                "chain": "B",
+                "resi": 20,
+                "extra_residues": [{"chain": "B", "resi": 21, "label": "B21"}],
+            },
+        }
+        self.assertEqual(site_and_additional_residues(cfg), [("A", 10), ("B", 20)])
 
     def test_an_empty_protein_selection_adds_no_line(self):
         cfg = {"site_copies": [("A", 10)], "extra_residues": [], "harmonic_protein_sigma": 0.1}
@@ -1428,6 +1441,8 @@ class ReconstructFormTests(unittest.TestCase):
         self.assertNotIn("geometry_bonds", cfg)
         self.assertNotIn("n_check_map", cfg)
         self.assertNotIn("harmonic_added", cfg)
+        self.assertEqual(cfg["harmonic_atoms"], [])
+        self.assertEqual(cfg["harmonic_sigma"], 0.1)
         self.assertNotIn("candidate_atoms", cfg)
         self.assertFalse(cfg["harmonic_protein"])
         self.assertEqual(cfg["harmonic_protein_sigma"], 0.1)

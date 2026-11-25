@@ -64,7 +64,7 @@ def _pdb_coordinates(path: Path, label: str) -> Path:
 def _harmonic_sigma(form) -> float:
     raw = _text(form, "harmonic_sigma")
     sigma = 0.1 if not raw else _float(form, "harmonic_sigma", "Harmonic sigma")
-    if _flag(form, "harmonic_added") and sigma <= 0:
+    if (_flag(form, "harmonic_added") or _flag(form, "use_harmonic_atoms")) and sigma <= 0:
         raise FormError("Harmonic sigma must be positive.")
     return sigma
 
@@ -106,28 +106,33 @@ def _odd_neighborhood(form) -> int:
     return size
 
 
-def _map_center(form) -> tuple[str, tuple[float, float, float] | None]:
-    """How the omit-map clip is centered: the site residue, or an explicit point."""
-    mode = _text(form, "map_center") or "residue"
+def _map_center_fields(
+    form,
+    mode_key: str,
+    x_key: str,
+    y_key: str,
+    z_key: str,
+    label: str,
+) -> tuple[str, tuple[float, float, float] | None]:
+    """How a clip is centered: the site residue, or an explicit point."""
+    mode = _text(form, mode_key) or "residue"
     if mode not in {"residue", "cartesian"}:
-        raise FormError("Map center must be the site residue or a Cartesian point.")
+        raise FormError(f"{label} must be the site residue or a Cartesian point.")
     if mode == "residue":
         return mode, None
     point = (
-        _float(form, "center_x", "Map center X"),
-        _float(form, "center_y", "Map center Y"),
-        _float(form, "center_z", "Map center Z"),
+        _float(form, x_key, f"{label} X"),
+        _float(form, y_key, f"{label} Y"),
+        _float(form, z_key, f"{label} Z"),
     )
     if not all(math.isfinite(value) for value in point):
-        raise FormError("Map center coordinates must be finite numbers, in ångströms.")
+        raise FormError(f"{label} coordinates must be finite numbers, in ångströms.")
     return mode, point
 
 
-def _chain(form) -> str:
-    chain = _text(form, "site_chain")
-    if len(chain) != 1 or not chain.isalnum():
-        raise FormError("Site chain must be a single letter or digit, as stored in the PDB file.")
-    return chain
+def _map_center(form) -> tuple[str, tuple[float, float, float] | None]:
+    """How the omit-map clip is centered: the site residue, or an explicit point."""
+    return _map_center_fields(form, "map_center", "center_x", "center_y", "center_z", "Map center")
 
 
 def _levels(text: str, label: str) -> list[float]:
@@ -165,7 +170,7 @@ def _optional_levels(text: str, fallback: list[float], label: str) -> list[float
     return sorted(levels)
 
 
-def parse_extra_residues(text: str) -> list[dict]:
+def parse_extra_residues(text: str, *, what: str = "Extra residue") -> list[dict]:
     extras = []
     for line_no, raw in enumerate(text.splitlines(), start=1):
         line = raw.strip()
@@ -173,117 +178,188 @@ def parse_extra_residues(text: str) -> list[dict]:
             continue
         parts = line.replace(",", " ").split()
         if len(parts) < 2:
-            raise FormError(f"Extra residue line {line_no} needs a chain and a residue number.")
+            raise FormError(f"{what} line {line_no} needs a chain and a residue number.")
         chain, resi_text = parts[0], parts[1]
         if len(chain) != 1:
-            raise FormError(f"Extra residue line {line_no}: chain must be one character.")
+            raise FormError(f"{what} line {line_no}: chain must be one character.")
         try:
             resi = int(resi_text)
         except ValueError as exc:
-            raise FormError(f"Extra residue line {line_no}: residue number is not an integer.") from exc
+            raise FormError(f"{what} line {line_no}: residue number is not an integer.") from exc
         label = parts[2] if len(parts) > 2 else f"{chain}{resi}"
         if not LABEL_RE.match(label):
             raise FormError(
-                f"Extra residue label {label!r} must start with a letter and use only letters, digits, and underscores."
+                f"{what} label {label!r} must start with a letter and use only letters, digits, and underscores."
             )
         extras.append({"chain": chain, "resi": resi, "label": label})
     return extras
 
 
-def parse_copies(chain: str, resi: int, text: str) -> list[tuple[str, int]]:
-    copies = [(chain, resi)]
-    for line_no, raw in enumerate(text.splitlines(), start=1):
-        line = raw.strip()
-        if not line or line.startswith("#"):
-            continue
-        parts = line.replace(",", " ").split()
-        if len(parts) < 2:
-            raise FormError(f"Additional copy line {line_no} needs a chain and a residue number.")
-        copy_chain = parts[0]
-        if len(copy_chain) != 1:
-            raise FormError(f"Additional copy line {line_no}: chain must be one character.")
-        try:
-            copy_resi = int(parts[1])
-        except ValueError as exc:
-            raise FormError(f"Additional copy line {line_no}: residue number is not an integer.") from exc
-        pair = (copy_chain, copy_resi)
-        if pair not in copies:
-            copies.append(pair)
-    return copies
+def _site_chain_value(text: str, label: str) -> str:
+    chain = text.strip()
+    if len(chain) != 1 or not chain.isalnum():
+        raise FormError(f"{label} must be a single letter or digit, as stored in the PDB file.")
+    return chain
 
 
-def parse_distance_restraints(text: str) -> list[tuple]:
+def _site_label_value(text: str, label: str) -> str:
+    value = text.strip() or "site"
+    if not LABEL_RE.match(value):
+        raise FormError(f"{label} must start with a letter and use only letters, digits, and underscores.")
+    return value
+
+
+def additional_site_from_form(form) -> dict | None:
+    """The optional second site, or None when its switch is off."""
+    if not _flag(form, "use_additional_site"):
+        return None
+    chain = _site_chain_value(_text(form, "alt_site_chain"), "Additional site chain")
+    resi = _int(form, "alt_site_resi", "Additional site residue")
+    label = _site_label_value(_text(form, "alt_site_label"), "Additional site label")
+    if "alt_map_center" in form:
+        mode, point = _map_center_fields(
+            form,
+            "alt_map_center",
+            "alt_center_x",
+            "alt_center_y",
+            "alt_center_z",
+            "Additional map center",
+        )
+    else:
+        mode, point = "residue", None
+    return {
+        "chain": chain,
+        "resi": resi,
+        "label": label,
+        "map_center": mode,
+        "map_center_xyz": point,
+        "extra_residues": parse_extra_residues(
+            _text(form, "alt_extra_residues"),
+            what="Additional neighbouring residue",
+        ),
+    }
+
+
+def _values(form, name: str) -> list[str]:
+    """Every submitted value for one field, including repeated row inputs."""
+    if hasattr(form, "getlist"):
+        values = form.getlist(name)
+    else:
+        raw = form.get(name, [])
+        if raw is None or raw == "":
+            values = []
+        elif isinstance(raw, (list, tuple)):
+            values = list(raw)
+        else:
+            values = [raw]
+    return [str(item).strip() for item in values]
+
+
+def _form_rows(form, names: tuple[str, ...]) -> list[tuple[str, ...]]:
+    columns = [_values(form, name) for name in names]
+    width = max((len(column) for column in columns), default=0)
+    rows = []
+    for index in range(width):
+        rows.append(tuple(column[index] if index < len(column) else "" for column in columns))
+    return rows
+
+
+def _atom_field(text: str, label: str) -> dict | None:
+    """``chain residue atom``, or None when the field is blank."""
+    if not text:
+        return None
+    parts = text.replace(",", " ").split()
+    if len(parts) != 3:
+        raise FormError(f"{label} should be 'chain residue atom', for example 'A 602 MN1'.")
+    chain, resi_text, name = parts
+    if len(chain) != 1 or not chain.isalnum():
+        raise FormError(f"{label}: chain must be a single letter or digit.")
+    try:
+        resi = int(resi_text)
+    except ValueError as exc:
+        raise FormError(f"{label}: residue number is not an integer.") from exc
+    if not _ATOM_NAME_RE.match(name):
+        raise FormError(f"{label}: atom {name!r} is not a PDB atom name.")
+    return {"chain": chain, "resi": resi, "name": name.upper()}
+
+
+def _optional_number(text: str, label: str):
+    if not text:
+        return None
+    try:
+        return float(text)
+    except ValueError as exc:
+        raise FormError(f"{label} must be a number.") from exc
+
+
+def parse_distance_restraints(rows: list[tuple[str, ...]]) -> list[dict]:
+    """Rows of two atoms, an optional distance, and an optional sigma."""
     specs = []
-    for line_no, raw in enumerate(text.splitlines(), start=1):
-        line = raw.strip()
-        if not line or line.startswith("#"):
+    for index, row in enumerate(rows, start=1):
+        atom1_text, atom2_text, value_text, sigma_text = (list(row) + ["", "", "", ""])[:4]
+        label = f"Distance row {index}"
+        atom1 = _atom_field(atom1_text, f"{label}, first atom")
+        atom2 = _atom_field(atom2_text, f"{label}, second atom")
+        if atom1 is None and atom2 is None and not value_text and not sigma_text:
             continue
-        parts = line.replace(",", " ").split()
-        if len(parts) not in {2, 3, 4}:
-            raise FormError(
-                f"Distance line {line_no} should be 'ATOM1 ATOM2', "
-                "'ATOM1 ATOM2 distance', or 'ATOM1 ATOM2 distance sigma'."
-            )
-        atom_a, atom_b = parts[0].upper(), parts[1].upper()
-        try:
-            if len(parts) == 2:
-                specs.append((atom_a, atom_b))
-            elif len(parts) == 3:
-                specs.append((atom_a, atom_b, float(parts[2])))
-            else:
-                specs.append((atom_a, atom_b, float(parts[2]), float(parts[3])))
-        except ValueError as exc:
-            raise FormError(f"Distance line {line_no}: distance and sigma must be numbers.") from exc
+        if atom1 is None or atom2 is None:
+            raise FormError(f"{label} needs two atoms, each as 'chain residue atom'.")
+        specs.append(
+            {
+                "atom1": atom1,
+                "atom2": atom2,
+                "distance": _optional_number(value_text, f"{label} distance"),
+                "sigma": _optional_number(sigma_text, f"{label} sigma"),
+            }
+        )
     return specs
 
 
-def parse_angle_restraints(text: str) -> list[tuple]:
+def parse_angle_restraints(rows: list[tuple[str, ...]]) -> list[dict]:
+    """Rows of three atoms, an optional angle, and an optional sigma."""
     specs = []
-    for line_no, raw in enumerate(text.splitlines(), start=1):
-        line = raw.strip()
-        if not line or line.startswith("#"):
+    for index, row in enumerate(rows, start=1):
+        texts = (list(row) + ["", "", "", "", ""])[:5]
+        label = f"Angle row {index}"
+        atoms = [
+            _atom_field(texts[0], f"{label}, first atom"),
+            _atom_field(texts[1], f"{label}, vertex"),
+            _atom_field(texts[2], f"{label}, third atom"),
+        ]
+        if all(atom is None for atom in atoms) and not texts[3] and not texts[4]:
             continue
-        parts = line.replace(",", " ").split()
-        if len(parts) not in {3, 4, 5}:
-            raise FormError(
-                f"Angle line {line_no} should be 'ATOM1 VERTEX ATOM3', "
-                "optionally followed by the angle and a sigma, both in degrees."
-            )
-        atom_a, vertex, atom_c = (part.upper() for part in parts[:3])
-        try:
-            if len(parts) == 3:
-                specs.append((atom_a, vertex, atom_c))
-            elif len(parts) == 4:
-                specs.append((atom_a, vertex, atom_c, float(parts[3])))
-            else:
-                specs.append((atom_a, vertex, atom_c, float(parts[3]), float(parts[4])))
-        except ValueError as exc:
-            raise FormError(f"Angle line {line_no}: angle and sigma must be numbers, in degrees.") from exc
+        if any(atom is None for atom in atoms):
+            raise FormError(f"{label} needs three atoms, each as 'chain residue atom'.")
+        specs.append(
+            {
+                "atom1": atoms[0],
+                "vertex": atoms[1],
+                "atom3": atoms[2],
+                "angle_deg": _optional_number(texts[3], f"{label} angle"),
+                "sigma_deg": _optional_number(texts[4], f"{label} sigma"),
+            }
+        )
     return specs
 
 
-def parse_dihedral_restraints(text: str) -> list[tuple]:
+def parse_dihedral_restraints(rows: list[tuple[str, ...]]) -> list[dict]:
+    """Rows of four atoms, an optional angle, and an optional sigma."""
     specs = []
-    for line_no, raw in enumerate(text.splitlines(), start=1):
-        line = raw.strip()
-        if not line or line.startswith("#"):
+    for index, row in enumerate(rows, start=1):
+        texts = (list(row) + ["", "", "", "", "", ""])[:6]
+        label = f"Dihedral row {index}"
+        atoms = [_atom_field(texts[offset], f"{label}, atom {offset + 1}") for offset in range(4)]
+        if all(atom is None for atom in atoms) and not texts[4] and not texts[5]:
             continue
-        parts = line.replace(",", " ").split()
-        if len(parts) not in {4, 5, 6}:
-            raise FormError(
-                f"Dihedral line {line_no} should be 'ATOM1 ATOM2 ATOM3 ATOM4', "
-                "optionally followed by the angle and a sigma, both in degrees."
-            )
-        atoms = tuple(part.upper() for part in parts[:4])
-        try:
-            if len(parts) == 4:
-                specs.append(atoms)
-            elif len(parts) == 5:
-                specs.append((*atoms, float(parts[4])))
-            else:
-                specs.append((*atoms, float(parts[4]), float(parts[5])))
-        except ValueError as exc:
-            raise FormError(f"Dihedral line {line_no}: angle and sigma must be numbers, in degrees.") from exc
+        if any(atom is None for atom in atoms):
+            raise FormError(f"{label} needs four atoms, each as 'chain residue atom'.")
+        specs.append(
+            {
+                "atoms": atoms,
+                "angle_deg": _optional_number(texts[4], f"{label} angle"),
+                "sigma_deg": _optional_number(texts[5], f"{label} sigma"),
+            }
+        )
     return specs
 
 
@@ -326,12 +402,71 @@ def parse_exclude_restraints(text: str) -> list[tuple[str, int, tuple[str, ...]]
     return specs
 
 
-def _restraint_block(form, flag: str, parser, text_name: str, sigma_name: str, sigma_label: str, default_sigma: float):
+def parse_harmonic_atoms(text: str) -> list[dict]:
+    """Lines of ``chain residue atom``, with an optional altloc."""
+    atoms = []
+    seen: set[tuple] = set()
+    for line_no, raw in enumerate(text.splitlines(), start=1):
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        parts = line.replace(",", " ").split()
+        if len(parts) not in {3, 4}:
+            raise FormError(
+                f"Harmonic-atom line {line_no} should be 'chain residue atom', "
+                "for example 'A 416 MN1' or 'A 416 O5 B'."
+            )
+        chain, resi_text, name, *rest = parts
+        if len(chain) != 1 or not chain.isalnum():
+            raise FormError(
+                f"Harmonic-atom line {line_no}: chain must be a single letter or digit."
+            )
+        try:
+            resi = int(resi_text)
+        except ValueError as exc:
+            raise FormError(
+                f"Harmonic-atom line {line_no}: residue number is not an integer."
+            ) from exc
+        if not _ATOM_NAME_RE.match(name):
+            raise FormError(
+                f"Harmonic-atom line {line_no}: atom {name!r} is not a PDB atom name."
+            )
+        alt = rest[0] if rest else ""
+        if alt and (len(alt) != 1 or not alt.isalnum()):
+            raise FormError(
+                f"Harmonic-atom line {line_no}: altloc must be a single letter or digit."
+            )
+        atom = {
+            "chain": chain,
+            "resi": resi,
+            "name": name.upper(),
+            "alt": alt.upper(),
+            "icode": "",
+        }
+        key = (atom["chain"], atom["resi"], atom["name"], atom["alt"])
+        if key in seen:
+            continue
+        seen.add(key)
+        atoms.append(atom)
+    return atoms
+
+
+def _specified_harmonic(form, refine: bool) -> tuple[list[dict], float]:
+    """Atoms the omit-model form holds with an external harmonic restraint."""
+    if not refine or not _flag(form, "use_harmonic_atoms"):
+        return [], 0.1
+    atoms = parse_harmonic_atoms(_text(form, "harmonic_atom_lines"))
+    if not atoms:
+        raise FormError("Harmonic restraints need at least one atom, such as 'A 416 MN1'.")
+    return atoms, _harmonic_sigma(form)
+
+
+def _restraint_block(form, flag: str, parser, field_names: tuple[str, ...], sigma_name: str, sigma_label: str, default_sigma: float):
     """Restraints for one switch. Off keeps the default sigma and applies nothing."""
     if not _flag(form, flag):
         return [], default_sigma
     try:
-        specs = parser(_text(form, text_name))
+        specs = parser(_form_rows(form, field_names))
     except ValueError as exc:
         raise FormError(str(exc)) from exc
     sigma = _float(form, sigma_name, sigma_label)
@@ -346,15 +481,21 @@ def _active_restraints(form, refine: bool):
         return [], 0.5, [], 25.0, [], 10.0
     distances, distance_sigma = _restraint_block(
         form, "use_distance_restraints", parse_distance_restraints,
-        "distance_restraints", "distance_sigma", "Distance sigma", 0.5,
+        ("distance_atom_1", "distance_atom_2", "distance_value", "distance_row_sigma"),
+        "distance_sigma", "Distance sigma", 0.5,
     )
     angles, angle_sigma = _restraint_block(
         form, "use_angle_restraints", parse_angle_restraints,
-        "angle_restraints", "angle_sigma", "Angle sigma", 25.0,
+        ("angle_atom_1", "angle_atom_2", "angle_atom_3", "angle_value", "angle_row_sigma"),
+        "angle_sigma", "Angle sigma", 25.0,
     )
     dihedrals, dihedral_sigma = _restraint_block(
         form, "use_dihedral_restraints", parse_dihedral_restraints,
-        "dihedral_restraints", "dihedral_sigma", "Dihedral sigma", 10.0,
+        (
+            "dihedral_atom_1", "dihedral_atom_2", "dihedral_atom_3", "dihedral_atom_4",
+            "dihedral_value", "dihedral_row_sigma",
+        ),
+        "dihedral_sigma", "Dihedral sigma", 10.0,
     )
     return distances, distance_sigma, angles, angle_sigma, dihedrals, dihedral_sigma
 
@@ -583,11 +724,9 @@ def _common(form, project: Path) -> dict:
         raise FormError("Resolution source must be the structure-factor file or explicit cutoffs.")
     lowres, dmin = _resolution_limits(form, resolution_source)
     fft_dmin = _fft_grid(form, resolution_source, lowres, dmin)
-    chain = _chain(form)
+    chain = _site_chain_value(_text(form, "site_chain"), "Site chain")
     resi = _int(form, "site_resi", "Site residue")
-    label = _text(form, "site_label") or "site"
-    if not LABEL_RE.match(label):
-        raise FormError("Site label must start with a letter and use only letters, digits, and underscores.")
+    label = _site_label_value(_text(form, "site_label"), "Site label")
     contour_mode = _text(form, "contour_mode") or "sigma"
     surface = _text(form, "surface") or "mesh"
     if contour_mode not in {"sigma", "absolute"}:
@@ -610,7 +749,8 @@ def _common(form, project: Path) -> dict:
         "site_chain": chain,
         "site_resi": resi,
         "site_label": label,
-        "site_copies": parse_copies(chain, resi, _text(form, "extra_copies")),
+        "site_copies": [(chain, resi)],
+        "additional_site": additional_site_from_form(form),
         "extra_residues": parse_extra_residues(_text(form, "extra_residues")),
         "export_radius": _float(form, "export_radius", "Export radius"),
         "carve": _float(form, "carve", "Carve radius"),
@@ -673,6 +813,7 @@ def parse_job(workflow: str, form, files, project: Path) -> dict:
         center_mode, center_xyz = _map_center(form)
         custom_dictionary = _custom_dictionary(form, files, output_dir, project) if refine else None
         harmonic_protein, harmonic_protein_sigma = _protein_harmonic(form, refine)
+        harmonic_atoms, harmonic_sigma = _specified_harmonic(form, refine)
         cfg.update(
             {
                 "dark_id": _identifier(form, "dark_id", "Omit-model name"),
@@ -681,6 +822,8 @@ def parse_job(workflow: str, form, files, project: Path) -> dict:
                 "refmac_bref": bref,
                 "refmac_type": refi_type,
                 "exclude_restraints": _exclude_restraints(form, refine),
+                "harmonic_atoms": harmonic_atoms,
+                "harmonic_sigma": harmonic_sigma,
                 "harmonic_protein": harmonic_protein,
                 "harmonic_protein_sigma": harmonic_protein_sigma,
                 "map_center": center_mode,

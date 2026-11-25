@@ -1086,6 +1086,7 @@ def run_reconstruct(cfg: dict, emit, pause=None, omit_runner=None, report_step=N
             raise FileNotFoundError(f"The omit-map clip was not written: {fragment}")
         r_factor, r_free = read_refmac_rfactors(_refmac_log(iter_dir, step_cfg))
 
+        # Peaks are taken from the main site clip. The additional site map is not searched.
         peak = locate_peak(
             fragment,
             int(cfg["neighborhood_size"]),

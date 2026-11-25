@@ -1448,6 +1448,7 @@ class Ccp4Session:
         difference: bool,
         recompute: bool,
         center: tuple[float, float, float] | None = None,
+        script_stem: str = "coot_site_export",
     ) -> Path:
         chain, resi = site_copies[0]
         fragment = self.output_dir / (
@@ -1463,7 +1464,7 @@ class Ccp4Session:
         else:
             center_py = f"({center[0]:.4f}, {center[1]:.4f}, {center[2]:.4f})"
         diff_flag = 1 if difference else 0
-        script = self.output_dir / "coot_site_export.py"
+        script = self.output_dir / f"{script_stem}.py"
         script.write_text(
             f'''#!/usr/bin/env python
 import os
@@ -1521,10 +1522,10 @@ except NameError:
     pass
 '''
         )
-        self.emit("→ coot  (coot_site_export.log)")
+        self.emit(f"→ coot  ({script_stem}.log)")
         env = os.environ.copy()
         env["COOT_VERBOSITY_LEVEL"] = "0"
-        log_path = self.output_dir / "coot_site_export.log"
+        log_path = self.output_dir / f"{script_stem}.log"
         try:
             self.run_command(
                 [str(self.coot), "--no-graphics", "--script", str(script)],

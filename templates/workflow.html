@@ -23,7 +23,7 @@
     <h2>How it is calculated</h2>
     <ol>
       <li>An observed mmCIF is converted to MTZ with <code>cif2mtz</code>. An MTZ entered for the reflections is used as that file. <code>ctruncate</code> turns intensities <code>I, SIGI</code> into amplitudes, and <code>cad</code> copies the <code>FREE</code> flag onto those amplitudes. An MTZ that already contains amplitudes skips <code>ctruncate</code>.</li>
-      <li>The REFMAC refinement section starts off, which runs zero cycles and does not move atoms. Turn it on to set the cycle count, <code>REFI BREF</code> (isotropic, anisotropic, mixed, or overall), and <code>REFI TYPE</code> (restrained or unrestrained). Distance, angle, and dihedral lines are external restraints. Each group is used only when its switch is on, and those lines replace the CCP4 monomer library for those atoms. A value written on a line replaces the sigma field for that restraint. When the exclude-restraints switch is on, each line names a chain, a residue, and the atoms left out of REFMAC restraints. A star means every atom in that residue. Each line is sent as <code>RESTRAINT EXCLUDE RESIDUE</code>. When the protein harmonic switch is on, every protein atom in every chain is held at its coordinates in the model, except atoms in the site residue, the additional copies, and the neighbouring residues. The sigma is the value in that field. A custom dictionary is used only when its switch is on and the cycle count is greater than zero, and the external restraints are read after it. Harmonic restraints are used only when the cycle count is greater than zero.</li>
+      <li>The REFMAC refinement section starts off, which runs zero cycles and does not move atoms. Turn it on to set the cycle count, <code>REFI BREF</code> (isotropic, anisotropic, mixed, or overall), and <code>REFI TYPE</code> (restrained or unrestrained). Distance, angle, and dihedral restraints each name their atoms by chain, residue, and atom name. Each group is used only when its switch is on, and those restraints replace the CCP4 monomer library for those atoms. A value written on a line replaces the sigma field for that restraint. When the exclude-restraints switch is on, each line names a chain, a residue anywhere in the model, and the atoms left out of REFMAC restraints. A star means every atom in that residue. Each line is sent as <code>RESTRAINT EXCLUDE RESIDUE</code>. Harmonic restraints hold the atoms listed in that section at their coordinates. When the protein harmonic switch is on, every protein atom in every chain is held at its coordinates in the model, except atoms in the main site and the additional site. The sigma is the value in that field. A custom dictionary applies to the whole model and is used only when its switch is on and the cycle count is greater than zero, and the external restraints are read after it. Harmonic restraints are used only when the cycle count is greater than zero.</li>
       <li><code>fft</code> transforms <code>DELFWT</code> / <code>PHDELWT</code> between the resolution limits above. An optional finer grid resolution asks <code>fft</code> for the sampling of that higher resolution. Reciprocal-space points beyond the coefficients are absent from the MTZ and contribute zero amplitude, so the real-space grid is denser. The map is then padded around the refined model. When the whole-cell grid is too large for <code>fft</code>, that same sum is evaluated on a cube centered on the map center and wide enough for the clip radius. The sigma stays the full-cell value.</li>
       <li>Coot clips the site from that difference map. The clip is centered on the site residue, or on a Cartesian point when you set one. PyMOL draws the refined coordinates and the ±nσ surfaces, saves the PNG and the <code>.pml</code> script beside the map, and centers that image on the same point as the clipped map.</li>
     </ol>
@@ -33,7 +33,7 @@
     <p>The starting omit model is rebuilt one heavy atom at a time. Each iteration refines the current omit model and calculates its mFo−DFc map. The highest peak of the clipped map is matched to the nearest eligible heavy atom in the reference model, and that atom’s PDB record is added to the refined coordinates at the Cartesian position of the peak. That structure is the omit model of the next iteration. A peak whose voxel density is below the density cutoff is treated as noise: no atom is added, and the reconstruction stops. By default an atom already in the omit model is not eligible. The form can include every heavy atom in the reference model instead. When that choice selects an atom whose identity is already in the working model, the existing record is removed and the reference record is written at the peak, which moves that atom. Hydrogens are not candidates.</p>
     <h2>How it is calculated</h2>
     <ol>
-      <li>The omit-map workflow refines the current omit model and calculates its clipped mFo−DFc map. The REFMAC refinement section starts off, which runs zero cycles and leaves the heavy atoms where they are. Turn it on to set the REFMAC protocol and two cycle counts. The initial omit model, before any atom is added, uses its own count. Each later reconstruction step, including the residual map of the finished model, uses the other count. When the exclude-restraints switch is on, each line names a chain, a residue, and the atoms left out of REFMAC restraints. A star means every atom in that residue. Each line is sent as <code>RESTRAINT EXCLUDE RESIDUE</code>. The refined coordinates are saved as the omit-model name followed by <code>_refined_stepNN.pdb</code>. When <strong>Copy LINK records before each refinement</strong> is on, which is the default, the LINK records from the starting omit model replace the LINK records in each step’s omit model, including the initial omit model, before that refinement. A repeated record is written once. An optional file replaces those records in every omit model, including the initial one. The records include the ones that name atoms added in earlier steps. REFMAC leaves a LINK record out of the coordinates it writes while either atom is still missing, so the chosen records replace the LINK records again at the next step. A custom dictionary is read only when its switch is on and the cycle count is greater than zero. When the harmonic switch is on, each atom added in an earlier iteration is held at the coordinates written into the omit model. The default sigma is 0.1 Å. When the protein harmonic switch is on, every protein atom in every chain is held at its coordinates in the model, except atoms in the site residue, the additional copies, and the neighbouring residues. Those restraints are used only when the cycle count is greater than zero.</li>
+      <li>The omit-map workflow refines the current omit model and calculates its clipped mFo−DFc map. The REFMAC refinement section starts off, which runs zero cycles and leaves the heavy atoms where they are. Turn it on to set the REFMAC protocol and two cycle counts. The initial omit model, before any atom is added, uses its own count. Each later reconstruction step, including the residual map of the finished model, uses the other count. When the exclude-restraints switch is on, each line names a chain, a residue, and the atoms left out of REFMAC restraints. A star means every atom in that residue. Each line is sent as <code>RESTRAINT EXCLUDE RESIDUE</code>. The refined coordinates are saved as the omit-model name followed by <code>_refined_stepNN.pdb</code>. When <strong>Copy LINK records before each refinement</strong> is on, which is the default, the LINK records from the starting omit model replace the LINK records in each step’s omit model, including the initial omit model, before that refinement. A repeated record is written once. An optional file replaces those records in every omit model, including the initial one. The records include the ones that name atoms added in earlier steps. REFMAC leaves a LINK record out of the coordinates it writes while either atom is still missing, so the chosen records replace the LINK records again at the next step. A custom dictionary is read only when its switch is on and the cycle count is greater than zero. When the harmonic switch is on, each atom added in an earlier iteration is held at the coordinates written into the omit model. The default sigma is 0.1 Å. Distance, angle, and dihedral restraints name each atom by chain, residue, and atom name. When the protein harmonic switch is on, every protein atom in every chain is held at its coordinates in the model, except atoms in the main site and the additional site. Those restraints are used only when the cycle count is greater than zero.</li>
       <li>When the map-check interval is a positive integer, the calculation pauses after that many iterations. The 3D viewer shows the site from the refined omit model, named with <code>_refined_stepNN.pdb</code>, and that iteration’s difference map. PyMOL writes a script in the iteration folder at every step, and it runs that script to save a PNG only for a step that pauses here. When a highest-density voxel was found, a small magenta octahedron marks its coordinates. A note in the lower-left corner of the viewer gives the step, the closest reference atom, and its distance from that voxel. <strong>Continue iterations</strong> resumes the search. An interval of 0 shows only the finished model and its residual map, and does not run PyMOL.</li>
       <li>The peak is the strongest voxel that is a local maximum inside a cubic neighborhood of the map calculated after REFMAC. When the spline maximum is on, the point moves to the spline maximum inside that neighborhood. The default neighborhood is 3 and the default spline order is 3.</li>
       <li>Density profiles through that point, from −2 Å to +2 Å, are written in the iteration directory. The offset is the distance in Ångstroms along the line. The columns are the Cartesian x, y, and z axes, the six face diagonals of the cube, and the four body diagonals. If that voxel’s density is below the density cutoff, the peak is treated as noise and the reconstruction stops without adding an atom. Otherwise the nearest eligible heavy atom in the reference model is identified. A distance beyond 1 Å is a warning. A distance beyond 3 Å stops the reconstruction without adding that atom.</li>
@@ -208,175 +208,7 @@
       {% endif %}
     </div>
 
-    {% if spec.slug in ['refinement', 'reconstruct'] %}
-    {% set distance_on = (defaults.distance_restraints or '')|trim %}
-    {% set angle_on = (defaults.angle_restraints or '')|trim %}
-    {% set dihedral_on = (defaults.dihedral_restraints or '')|trim %}
-    {% set exclude_on = (defaults.exclude_restraints or '')|trim %}
-    <h2>REFMAC refinement</h2>
-    <div class="fields">
-      <label class="check">
-        <input type="checkbox" name="use_refmac" class="panel-switch" aria-controls="refmac-fields">
-        Refine the model with REFMAC
-      </label>
-      <p class="hint wide">Turn this on to set cycles, the B-factor model, the refinement type, external restraints, residues excluded from restraints, protein harmonic restraints, and a custom dictionary. Turn it off to calculate the map with zero cycles.</p>
-      <div id="refmac-fields" class="panel-fields wide" hidden>
-        {% if spec.slug == 'reconstruct' %}
-        <label>Number of refinement cycles for the initial omit model
-          <input name="initial_refmac_ncyc" type="number" min="0" step="1" value="{{ defaults.initial_refmac_ncyc }}" disabled>
-          <span class="hint">Used for the first refinement, before any atom is added. Zero leaves those atoms where they are.</span>
-        </label>
-        <label>Number of refinement cycles at each reconstruction step
-          <input name="refmac_ncyc" type="number" min="0" step="1" value="{{ defaults.refmac_ncyc }}" disabled>
-          <span class="hint">Used after the first atom is added, including the residual map of the finished model. Zero calculates each of those maps without moving atoms.</span>
-        </label>
-        {% else %}
-        <label>REFMAC cycles
-          <input name="refmac_ncyc" type="number" min="0" step="1" value="{{ defaults.refmac_ncyc }}" disabled>
-          <span class="hint">Zero cycles calculate the map without moving atoms.</span>
-        </label>
-        {% endif %}
-        <label>B-factor refinement
-          <select name="refmac_bref" disabled>
-            <option value="ISOT" selected>ISOTropic</option>
-            <option value="ANIS">ANISotropic</option>
-            <option value="MIXE">MIXEd</option>
-            <option value="OVER">OVERall</option>
-          </select>
-          <span class="hint">REFMAC keyword <code>REFI BREF</code>. Isotropic is the default.</span>
-        </label>
-        <label>Refinement type
-          <select name="refmac_type" disabled>
-            <option value="REST" selected>RESTrained</option>
-            <option value="UNRE">UNREstrained</option>
-          </select>
-          <span class="hint">REFMAC keyword <code>REFI TYPE</code>. Restrained is the default. Unrestrained refinement ignores geometry.</span>
-        </label>
-        <fieldset>
-          <legend>Distance restraints</legend>
-          <label class="check">
-            <input type="checkbox" name="use_distance_restraints" class="panel-switch" aria-controls="distance-fields"{% if distance_on %} checked{% endif %} disabled>
-            Use distance restraints
-          </label>
-          <p class="hint">Turn this on to edit the distances. Turn it off to apply none.</p>
-          <div id="distance-fields" class="panel-fields" hidden>
-            <label>Distance sigma (Å)
-              <input name="distance_sigma" type="number" step="any" value="{{ defaults.distance_sigma }}" disabled>
-              <span class="hint">Used when a distance line does not give its own sigma.</span>
-            </label>
-            <label>Distance lines
-              <textarea name="distance_restraints" disabled>{{ defaults.distance_restraints }}</textarea>
-              <span class="hint">One pair per line: <code>MN3 O5</code>, <code>MN1 O5 2.40</code>, or <code>MN1 O5 2.40 0.50</code>. A missing distance keeps the distance in the starting model. A missing sigma uses Distance sigma. A distance and sigma on the line replace those fields for that pair. REFMAC uses the line instead of the CCP4 monomer library for the same atoms.</span>
-            </label>
-          </div>
-        </fieldset>
-        <fieldset>
-          <legend>Angle restraints</legend>
-          <label class="check">
-            <input type="checkbox" name="use_angle_restraints" class="panel-switch" aria-controls="angle-fields"{% if angle_on %} checked{% endif %} disabled>
-            Use angle restraints
-          </label>
-          <p class="hint">Turn this on to edit the angles. Turn it off to apply none.</p>
-          <div id="angle-fields" class="panel-fields" hidden>
-            <label>Angle sigma (degrees)
-              <input name="angle_sigma" type="number" step="any" value="{{ defaults.angle_sigma }}" disabled>
-              <span class="hint">Used when an angle line does not give its own sigma.</span>
-            </label>
-            <label>Angle lines
-              <textarea name="angle_restraints" disabled>{{ defaults.angle_restraints }}</textarea>
-              <span class="hint">The middle atom is the vertex: <code>MN3 O5 MN4</code>, optionally followed by the angle and sigma in degrees. A missing angle keeps the angle in the starting model. A missing sigma uses Angle sigma. Values on the line replace those fields for that angle, and replace the monomer-library angle for the same atoms.</span>
-            </label>
-          </div>
-        </fieldset>
-        <fieldset>
-          <legend>Dihedral restraints</legend>
-          <label class="check">
-            <input type="checkbox" name="use_dihedral_restraints" class="panel-switch" aria-controls="dihedral-fields"{% if dihedral_on %} checked{% endif %} disabled>
-            Use dihedral restraints
-          </label>
-          <p class="hint">Turn this on to edit the dihedrals. Turn it off to apply none.</p>
-          <div id="dihedral-fields" class="panel-fields" hidden>
-            <label>Dihedral sigma (degrees)
-              <input name="dihedral_sigma" type="number" step="any" value="{{ defaults.dihedral_sigma }}" disabled>
-              <span class="hint">Used when a dihedral line does not give its own sigma.</span>
-            </label>
-            <label>Dihedral lines
-              <textarea name="dihedral_restraints" disabled>{{ defaults.dihedral_restraints }}</textarea>
-              <span class="hint">Four atoms per line: <code>MN1 O5 MN4 CA1</code>, optionally followed by the angle and sigma in degrees. The torsion is the angle between the plane of the first three atoms and the plane of the last three. A missing angle keeps the angle in the starting model. A missing sigma uses Dihedral sigma. Values on the line replace those fields for that dihedral.</span>
-            </label>
-          </div>
-        </fieldset>
-        <fieldset>
-          <legend>Exclude restraints</legend>
-          <label class="check">
-            <input type="checkbox" name="use_exclude_restraints" class="panel-switch" aria-controls="exclude-restraint-fields"{% if exclude_on %} checked{% endif %} disabled>
-            Exclude restraints on chosen residues
-          </label>
-          <p class="hint">Turn this on to leave the listed atoms out of REFMAC restraints. Turn it off to restrain every atom.</p>
-          <div id="exclude-restraint-fields" class="panel-fields" hidden>
-            <label>Residues excluded from restraints
-              <textarea name="exclude_restraints" disabled>{{ defaults.exclude_restraints }}</textarea>
-              <span class="hint">One residue per line: <code>chain residue atoms</code>, for example <code>A 416 *</code> or <code>A 189 CA CB CG</code>. <code>*</code> means every atom in the residue. Each line adds <code>RESTRAINT EXCLUDE RESIDUE residue chain ATOMS atoms</code>.</span>
-            </label>
-          </div>
-        </fieldset>
-        {% if spec.slug == 'reconstruct' %}
-        <fieldset>
-          <legend>Harmonic restraints</legend>
-          <label class="check">
-            <input type="checkbox" name="harmonic_added" id="harmonic-added" class="panel-switch" aria-controls="harmonic-fields" disabled>
-            Restrain atoms added in earlier iterations
-          </label>
-          <p class="hint">Turn this on to hold those atoms at the coordinates in the omit model. Turn it off to apply none. The restraint is used only when the cycle count is greater than zero.</p>
-          <div id="harmonic-fields" class="panel-fields" hidden>
-            <label>Harmonic sigma (Å)
-              <input name="harmonic_sigma" id="harmonic-sigma" type="number" step="any" min="0" value="{{ defaults.harmonic_sigma }}" disabled>
-              <span class="hint">REFMAC holds each atom added in an earlier iteration at the coordinates in the omit model. The default sigma is 0.1 Å.</span>
-            </label>
-          </div>
-        </fieldset>
-        {% endif %}
-        <fieldset>
-          <legend>Protein harmonic restraints</legend>
-          <label class="check">
-            <input type="checkbox" name="harmonic_protein" id="harmonic-protein" class="panel-switch" aria-controls="harmonic-protein-fields" disabled>
-            Restrain protein atoms outside the site
-          </label>
-          <p class="hint">Turn this on to hold every protein atom, in every chain, at its coordinates in the model. Atoms in the site residue, the additional copies, and the neighbouring residues stay free. Waters, ligands, and other non-protein residues are left out. Turn it off to apply none. The restraint is used only when the cycle count is greater than zero.</p>
-          <div id="harmonic-protein-fields" class="panel-fields" hidden>
-            <label>Protein harmonic sigma (Å)
-              <input name="harmonic_protein_sigma" id="harmonic-protein-sigma" type="number" step="any" min="0" value="{{ defaults.harmonic_protein_sigma }}" disabled>
-              <span class="hint">REFMAC external harmonic sigma for those protein atoms. The default is 0.1 Å. A smaller sigma holds each atom more tightly.</span>
-            </label>
-          </div>
-        </fieldset>
-        <fieldset>
-          <legend>Custom dictionary</legend>
-          <label class="check">
-            <input type="checkbox" name="use_custom_dictionary" class="panel-switch" aria-controls="custom-dictionary-fields" disabled>
-            Use a custom dictionary
-          </label>
-          <p class="hint">Turn this on to choose a monomer library. Turn it off to use none, including after a file was chosen.</p>
-          <div id="custom-dictionary-fields" class="panel-fields" hidden>
-            <p class="hint">REFMAC reads the file only when the cycle count is greater than zero. With zero cycles this file is ignored. Distance, angle, and dihedral restraints are read after this file, so they replace matching geometry in the dictionary.</p>
-            <div class="file-actions">
-              <label class="file-btn" aria-pressed="false">
-                <input type="file" name="file_custom_dictionary" accept=".cif,.lib,.gz" disabled>
-                <span>Choose file</span>
-              </label>
-              <button type="button" class="file-btn path-toggle" aria-pressed="false" aria-controls="path_custom_dictionary">Specify full path</button>
-            </div>
-            <div class="path-entry" hidden>
-              <label class="path-label" for="path_custom_dictionary">Full path</label>
-              <input id="path_custom_dictionary" name="path_custom_dictionary" value="" placeholder="/path/to/dictionary.cif" autocomplete="off" disabled>
-            </div>
-          </div>
-        </fieldset>
-      </div>
-    </div>
-    {% endif %}
-
-    <h2>Site and figure</h2>
+    <h2>{% if spec.slug in ['refinement', 'reconstruct'] %}Site of interest{% else %}Site and figure{% endif %}</h2>
     <div class="fields">
       <label>Chain<input name="site_chain" value="{{ defaults.site_chain }}" maxlength="1" required></label>
       <label>Residue<input name="site_resi" type="number" step="1" value="{{ defaults.site_resi }}" required></label>
@@ -403,10 +235,46 @@
         <textarea name="extra_residues">{{ defaults.extra_residues }}</textarea>
         <span class="hint">One per line: <code>chain residue label</code>, for example <code>A 189 GLU189</code>. Drawn as sticks. The 3D viewer has a show/hide button for each residue. Leave blank for none.</span>
       </label>
-      <label class="wide">Additional copies
-        <textarea name="extra_copies" placeholder="D 416"></textarea>
-        <span class="hint">Optional extra <code>chain residue</code> lines. Coot writes one fragment per copy. The figure uses the chain and residue above.</span>
-      </label>
+      <fieldset class="wide">
+        <legend>Additional site</legend>
+        <label class="check">
+          <input type="checkbox" name="use_additional_site" class="panel-switch" aria-controls="additional-site-fields">
+          Calculate a map at an additional site
+        </label>
+        {% if spec.slug in ['refinement', 'reconstruct'] %}
+        <p class="hint">Turn this on to calculate a second map centered on another residue, or on a Cartesian point. The map is saved in the output directory, and the 3D viewer can switch between the two sites.{% if spec.slug == 'reconstruct' %} The reconstruction searches peaks in the main site map only.{% endif %}</p>
+        {% else %}
+        <p class="hint">Turn this on to calculate a second map centered on another residue. The map is saved in the output directory, and the 3D viewer can switch between the two sites.</p>
+        {% endif %}
+        <div id="additional-site-fields" class="panel-fields" hidden>
+          <div class="site-row">
+            <label>Chain<input name="alt_site_chain" maxlength="1" autocomplete="off" data-site-field></label>
+            <label>Residue<input name="alt_site_resi" type="number" step="1" autocomplete="off" data-site-field></label>
+            <label>Label<input name="alt_site_label" autocomplete="off" data-site-field></label>
+          </div>
+          {% if spec.slug in ['refinement', 'reconstruct'] %}
+          <label>Map center
+            <select name="alt_map_center" id="alt-map-center">
+              <option value="residue" selected>Geometric center of the site residue</option>
+              <option value="cartesian">Cartesian point</option>
+            </select>
+            <span class="hint">Ångströms in the model frame. The additional clip uses this point.</span>
+          </label>
+          <div class="map-center-xyz" id="alt-map-center-xyz" hidden>
+            <label>X (Å)<input name="alt_center_x" type="number" step="any" value="0"></label>
+            <label>Y (Å)<input name="alt_center_y" type="number" step="any" value="0"></label>
+            <label>Z (Å)<input name="alt_center_z" type="number" step="any" value="0"></label>
+          </div>
+          {% endif %}
+          <label>Neighbouring residues
+            <textarea name="alt_extra_residues"></textarea>
+            <span class="hint">One per line: <code>chain residue label</code>, for example <code>A 189 GLU189</code>. Drawn as sticks when this site is shown. Leave blank for none.</span>
+          </label>
+        </div>
+      </fieldset>
+      <fieldset class="wide viz-frame">
+        <legend>Map visualization parameters</legend>
+        <div class="fields">
       <label>Clip radius (Å)<input name="export_radius" type="number" step="any" value="{{ defaults.export_radius }}"></label>
       <label>Carve radius (Å)<input name="carve" type="number" step="any" value="{{ defaults.carve }}"></label>
       <label>PNG sigma levels
@@ -455,7 +323,232 @@
       <label class="check"><input type="checkbox" name="recompute_map" checked> Recompute the map if one is already in the output directory</label>
       <label class="check"><input type="checkbox" name="recompute_fragment" checked> Recompute the Coot fragment</label>
       {% endif %}
+        </div>
+      </fieldset>
     </div>
+
+    {% if spec.slug in ['refinement', 'reconstruct'] %}
+    {% set distance_on = (defaults.distance_restraints or '')|trim %}
+    {% set angle_on = (defaults.angle_restraints or '')|trim %}
+    {% set dihedral_on = (defaults.dihedral_restraints or '')|trim %}
+    {% set exclude_on = (defaults.exclude_restraints or '')|trim %}
+    <h2>REFMAC refinement</h2>
+    <div class="fields">
+      <label class="check">
+        <input type="checkbox" name="use_refmac" class="panel-switch" aria-controls="refmac-fields">
+        Refine the model with REFMAC
+      </label>
+      <p class="hint wide">Turn this on to set cycles, the B-factor model, the refinement type, external restraints, residues excluded from restraints, harmonic restraints, protein harmonic restraints, and a custom dictionary. Distance, angle, and dihedral restraints name atoms anywhere in the model. Exclude restraints and the custom dictionary apply to the whole model. Turn it off to calculate the map with zero cycles.</p>
+      <div id="refmac-fields" class="panel-fields wide" hidden>
+        {% if spec.slug == 'reconstruct' %}
+        <label>Number of refinement cycles for the initial omit model
+          <input name="initial_refmac_ncyc" type="number" min="0" step="1" value="{{ defaults.initial_refmac_ncyc }}" disabled>
+          <span class="hint">Used for the first refinement, before any atom is added. Zero leaves those atoms where they are.</span>
+        </label>
+        <label>Number of refinement cycles at each reconstruction step
+          <input name="refmac_ncyc" type="number" min="0" step="1" value="{{ defaults.refmac_ncyc }}" disabled>
+          <span class="hint">Used after the first atom is added, including the residual map of the finished model. Zero calculates each of those maps without moving atoms.</span>
+        </label>
+        {% else %}
+        <label>REFMAC cycles
+          <input name="refmac_ncyc" type="number" min="0" step="1" value="{{ defaults.refmac_ncyc }}" disabled>
+          <span class="hint">Zero cycles calculate the map without moving atoms.</span>
+        </label>
+        {% endif %}
+        <label>B-factor refinement
+          <select name="refmac_bref" disabled>
+            <option value="ISOT" selected>ISOTropic</option>
+            <option value="ANIS">ANISotropic</option>
+            <option value="MIXE">MIXEd</option>
+            <option value="OVER">OVERall</option>
+          </select>
+          <span class="hint">REFMAC keyword <code>REFI BREF</code>. Isotropic is the default.</span>
+        </label>
+        <label>Refinement type
+          <select name="refmac_type" disabled>
+            <option value="REST" selected>RESTrained</option>
+            <option value="UNRE">UNREstrained</option>
+          </select>
+          <span class="hint">REFMAC keyword <code>REFI TYPE</code>. Restrained is the default. Unrestrained refinement ignores geometry.</span>
+        </label>
+        <fieldset>
+          <legend>Distance restraints</legend>
+          <label class="check">
+            <input type="checkbox" name="use_distance_restraints" class="panel-switch" aria-controls="distance-fields"{% if distance_on %} checked{% endif %} disabled>
+            Use distance restraints
+          </label>
+          <p class="hint">Turn this on to edit the distances. Turn it off to apply none.</p>
+          <div id="distance-fields" class="panel-fields" hidden>
+            <label>Distance sigma (Å)
+              <input name="distance_sigma" type="number" step="any" value="{{ defaults.distance_sigma }}" disabled>
+              <span class="hint">Used when a row leaves sigma blank.</span>
+            </label>
+            <div class="restraint-list restraint-distance" id="distance-rows">
+              <div class="restraint-head" aria-hidden="true"><span>Atom 1</span><span>Atom 2</span><span>Distance (Å)</span><span>Sigma (Å)</span><span></span></div>
+              {% for line in (defaults.distance_restraints or '').splitlines() or [' | | | '] %}
+              {% set parts = (line.split('|') + ['', '', '', ''])[:4] %}
+              <div class="restraint-row">
+                <input name="distance_atom_1" value="{{ parts[0]|trim }}" placeholder="A 602 MN1" aria-label="Atom 1" autocomplete="off" spellcheck="false" disabled>
+                <input name="distance_atom_2" value="{{ parts[1]|trim }}" placeholder="A 602 O1" aria-label="Atom 2" autocomplete="off" spellcheck="false" disabled>
+                <input name="distance_value" type="number" step="any" value="{{ parts[2]|trim }}" placeholder="2.8" aria-label="Distance in angstroms" disabled>
+                <input name="distance_row_sigma" type="number" step="any" value="{{ parts[3]|trim }}" placeholder="0.1" aria-label="Distance sigma in angstroms" disabled>
+                <button type="button" class="pill ghost restraint-remove">Remove</button>
+              </div>
+              {% endfor %}
+            </div>
+            <button type="button" class="pill ghost restraint-add" data-rows="distance-rows">Add distance</button>
+            <p class="hint">Each atom is <code>chain residue atom</code>, for example <code>A 602 MN1</code>. The two atoms can be in different residues. A blank distance keeps the distance in the model. A blank sigma uses Distance sigma. REFMAC uses the row instead of the CCP4 monomer library for the same atoms.</p>
+          </div>
+        </fieldset>
+        <fieldset>
+          <legend>Angle restraints</legend>
+          <label class="check">
+            <input type="checkbox" name="use_angle_restraints" class="panel-switch" aria-controls="angle-fields"{% if angle_on %} checked{% endif %} disabled>
+            Use angle restraints
+          </label>
+          <p class="hint">Turn this on to edit the angles. Turn it off to apply none.</p>
+          <div id="angle-fields" class="panel-fields" hidden>
+            <label>Angle sigma (degrees)
+              <input name="angle_sigma" type="number" step="any" value="{{ defaults.angle_sigma }}" disabled>
+              <span class="hint">Used when a row leaves sigma blank.</span>
+            </label>
+            <div class="restraint-list restraint-angle" id="angle-rows">
+              <div class="restraint-head" aria-hidden="true"><span>Atom 1</span><span>Vertex</span><span>Atom 3</span><span>Angle (°)</span><span>Sigma (°)</span><span></span></div>
+              {% for line in (defaults.angle_restraints or '').splitlines() or [' | | | | '] %}
+              {% set parts = (line.split('|') + ['', '', '', '', ''])[:5] %}
+              <div class="restraint-row">
+                <input name="angle_atom_1" value="{{ parts[0]|trim }}" placeholder="A 602 MN3" aria-label="Atom 1" autocomplete="off" spellcheck="false" disabled>
+                <input name="angle_atom_2" value="{{ parts[1]|trim }}" placeholder="A 602 O5" aria-label="Vertex" autocomplete="off" spellcheck="false" disabled>
+                <input name="angle_atom_3" value="{{ parts[2]|trim }}" placeholder="A 602 MN4" aria-label="Atom 3" autocomplete="off" spellcheck="false" disabled>
+                <input name="angle_value" type="number" step="any" value="{{ parts[3]|trim }}" placeholder="109.5" aria-label="Angle in degrees" disabled>
+                <input name="angle_row_sigma" type="number" step="any" value="{{ parts[4]|trim }}" placeholder="25" aria-label="Angle sigma in degrees" disabled>
+                <button type="button" class="pill ghost restraint-remove">Remove</button>
+              </div>
+              {% endfor %}
+            </div>
+            <button type="button" class="pill ghost restraint-add" data-rows="angle-rows">Add angle</button>
+            <p class="hint">The middle atom is the vertex. Each atom is <code>chain residue atom</code>. The atoms can be in different residues. A blank angle keeps the angle in the model. A blank sigma uses Angle sigma. Values in the row replace the monomer-library angle for the same atoms.</p>
+          </div>
+        </fieldset>
+        <fieldset>
+          <legend>Dihedral restraints</legend>
+          <label class="check">
+            <input type="checkbox" name="use_dihedral_restraints" class="panel-switch" aria-controls="dihedral-fields"{% if dihedral_on %} checked{% endif %} disabled>
+            Use dihedral restraints
+          </label>
+          <p class="hint">Turn this on to edit the dihedrals. Turn it off to apply none.</p>
+          <div id="dihedral-fields" class="panel-fields" hidden>
+            <label>Dihedral sigma (degrees)
+              <input name="dihedral_sigma" type="number" step="any" value="{{ defaults.dihedral_sigma }}" disabled>
+              <span class="hint">Used when a row leaves sigma blank.</span>
+            </label>
+            <div class="restraint-list restraint-dihedral" id="dihedral-rows">
+              <div class="restraint-head" aria-hidden="true"><span>Atom 1</span><span>Atom 2</span><span>Atom 3</span><span>Atom 4</span><span>Angle (°)</span><span>Sigma (°)</span><span></span></div>
+              {% for line in (defaults.dihedral_restraints or '').splitlines() or [' | | | | | '] %}
+              {% set parts = (line.split('|') + ['', '', '', '', '', ''])[:6] %}
+              <div class="restraint-row">
+                <input name="dihedral_atom_1" value="{{ parts[0]|trim }}" placeholder="A 602 MN1" aria-label="Atom 1" autocomplete="off" spellcheck="false" disabled>
+                <input name="dihedral_atom_2" value="{{ parts[1]|trim }}" placeholder="A 602 O5" aria-label="Atom 2" autocomplete="off" spellcheck="false" disabled>
+                <input name="dihedral_atom_3" value="{{ parts[2]|trim }}" placeholder="A 602 MN4" aria-label="Atom 3" autocomplete="off" spellcheck="false" disabled>
+                <input name="dihedral_atom_4" value="{{ parts[3]|trim }}" placeholder="A 189 CA" aria-label="Atom 4" autocomplete="off" spellcheck="false" disabled>
+                <input name="dihedral_value" type="number" step="any" value="{{ parts[4]|trim }}" placeholder="180" aria-label="Dihedral angle in degrees" disabled>
+                <input name="dihedral_row_sigma" type="number" step="any" value="{{ parts[5]|trim }}" placeholder="10" aria-label="Dihedral sigma in degrees" disabled>
+                <button type="button" class="pill ghost restraint-remove">Remove</button>
+              </div>
+              {% endfor %}
+            </div>
+            <button type="button" class="pill ghost restraint-add" data-rows="dihedral-rows">Add dihedral</button>
+            <p class="hint">Four atoms, in order. Each atom is <code>chain residue atom</code>. The atoms can be in different residues. The torsion is the angle between the plane of the first three atoms and the plane of the last three. A blank angle keeps the angle in the model. A blank sigma uses Dihedral sigma.</p>
+          </div>
+        </fieldset>
+        <fieldset>
+          <legend>Exclude restraints</legend>
+          <label class="check">
+            <input type="checkbox" name="use_exclude_restraints" class="panel-switch" aria-controls="exclude-restraint-fields"{% if exclude_on %} checked{% endif %} disabled>
+            Exclude restraints on chosen residues
+          </label>
+          <p class="hint">Turn this on to leave the listed atoms out of REFMAC restraints. Turn it off to restrain every atom.</p>
+          <div id="exclude-restraint-fields" class="panel-fields" hidden>
+            <label>Residues excluded from restraints
+              <textarea name="exclude_restraints" disabled>{{ defaults.exclude_restraints }}</textarea>
+              <span class="hint">One residue per line: <code>chain residue atoms</code>, for example <code>A 416 *</code> or <code>A 189 CA CB CG</code>. <code>*</code> means every atom in the residue. The residue can be anywhere in the model. Each line adds <code>RESTRAINT EXCLUDE RESIDUE residue chain ATOMS atoms</code>.</span>
+            </label>
+          </div>
+        </fieldset>
+        {% if spec.slug == 'reconstruct' %}
+        <fieldset>
+          <legend>Harmonic restraints</legend>
+          <label class="check">
+            <input type="checkbox" name="harmonic_added" id="harmonic-added" class="panel-switch" aria-controls="harmonic-fields" disabled>
+            Restrain atoms added in earlier iterations
+          </label>
+          <p class="hint">Turn this on to hold those atoms at the coordinates in the omit model. Turn it off to apply none. The restraint is used only when the cycle count is greater than zero.</p>
+          <div id="harmonic-fields" class="panel-fields" hidden>
+            <label>Harmonic sigma (Å)
+              <input name="harmonic_sigma" id="harmonic-sigma" type="number" step="any" min="0" value="{{ defaults.harmonic_sigma }}" disabled>
+              <span class="hint">REFMAC holds each atom added in an earlier iteration at the coordinates in the omit model. The default sigma is 0.1 Å.</span>
+            </label>
+          </div>
+        </fieldset>
+        {% elif spec.slug == 'refinement' %}
+        <fieldset>
+          <legend>Harmonic restraints</legend>
+          <label class="check">
+            <input type="checkbox" name="use_harmonic_atoms" id="harmonic-added" class="panel-switch" aria-controls="harmonic-fields" disabled>
+            Restrain specified atoms
+          </label>
+          <p class="hint">Turn this on to hold the listed atoms at their coordinates in the model. Turn it off to apply none. The restraint is used only when the cycle count is greater than zero.</p>
+          <div id="harmonic-fields" class="panel-fields" hidden>
+            <label>Harmonic sigma (Å)
+              <input name="harmonic_sigma" id="harmonic-sigma" type="number" step="any" min="0" value="{{ defaults.harmonic_sigma }}" disabled>
+              <span class="hint">REFMAC external harmonic sigma for the listed atoms. The default is 0.1 Å. A smaller sigma holds each atom more tightly.</span>
+            </label>
+            <label>Atoms
+              <textarea name="harmonic_atom_lines" disabled></textarea>
+              <span class="hint">One atom per line: <code>chain residue atom</code>, for example <code>A 416 MN1</code>. An optional fourth field is the altloc, as in <code>A 416 O5 B</code>. The atom can be anywhere in the model.</span>
+            </label>
+          </div>
+        </fieldset>
+        {% endif %}
+        <fieldset>
+          <legend>Protein harmonic restraints</legend>
+          <label class="check">
+            <input type="checkbox" name="harmonic_protein" id="harmonic-protein" class="panel-switch" aria-controls="harmonic-protein-fields" disabled>
+            Restrain protein atoms outside the sites
+          </label>
+          <p class="hint">Turn this on to hold every protein atom, in every chain, at its coordinates in the model. Atoms in the main site and the additional site stay free. Neighbouring residues are restrained with the rest of the protein. Waters, ligands, and other non-protein residues are left out. Turn it off to apply none. The restraint is used only when the cycle count is greater than zero.</p>
+          <div id="harmonic-protein-fields" class="panel-fields" hidden>
+            <label>Protein harmonic sigma (Å)
+              <input name="harmonic_protein_sigma" id="harmonic-protein-sigma" type="number" step="any" min="0" value="{{ defaults.harmonic_protein_sigma }}" disabled>
+              <span class="hint">REFMAC external harmonic sigma for those protein atoms. The default is 0.1 Å. A smaller sigma holds each atom more tightly.</span>
+            </label>
+          </div>
+        </fieldset>
+        <fieldset>
+          <legend>Custom dictionary</legend>
+          <label class="check">
+            <input type="checkbox" name="use_custom_dictionary" class="panel-switch" aria-controls="custom-dictionary-fields" disabled>
+            Use a custom dictionary
+          </label>
+          <p class="hint">Turn this on to choose a monomer library. Turn it off to use none, including after a file was chosen.</p>
+          <div id="custom-dictionary-fields" class="panel-fields" hidden>
+            <p class="hint">The dictionary applies to the whole model. REFMAC reads the file only when the cycle count is greater than zero. With zero cycles this file is ignored. Distance, angle, and dihedral restraints are read after this file, so they replace matching geometry in the dictionary.</p>
+            <div class="file-actions">
+              <label class="file-btn" aria-pressed="false">
+                <input type="file" name="file_custom_dictionary" accept=".cif,.lib,.gz" disabled>
+                <span>Choose file</span>
+              </label>
+              <button type="button" class="file-btn path-toggle" aria-pressed="false" aria-controls="path_custom_dictionary">Specify full path</button>
+            </div>
+            <div class="path-entry" hidden>
+              <label class="path-label" for="path_custom_dictionary">Full path</label>
+              <input id="path_custom_dictionary" name="path_custom_dictionary" value="" placeholder="/path/to/dictionary.cif" autocomplete="off" disabled>
+            </div>
+          </div>
+        </fieldset>
+      </div>
+    </div>
+    {% endif %}
 
     <h2>Output directory</h2>
     <label class="wide">Folder on this computer
@@ -500,6 +593,14 @@
           <button type="button" class="pill ghost" id="viewer-orientation" aria-pressed="true" disabled>Current orientation</button>
           <button type="button" class="pill ghost" id="viewer-reset">Reset view</button>
         </div>
+      </div>
+      <div class="viewer-neighbours" id="viewer-site-switch" hidden>
+        <span class="viewer-neighbours-label">Site</span>
+        <div class="viewer-style-group" role="group" aria-label="Choose the site map">
+          <button type="button" class="pill" id="viewer-site-main" aria-pressed="true">Main site</button>
+          <button type="button" class="pill" id="viewer-site-alt" aria-pressed="false">Additional site</button>
+        </div>
+        <p class="hint">Each button shows that site’s map, residue, and neighbouring residues.</p>
       </div>
       <p class="hint viewer-help" id="viewer-help">Drag to rotate, scroll to zoom, and right-drag to pan. Add bond and Add distance: click two atoms. Delete: click a stick, or click two atoms to remove the bond and distance between them. Add label: click an atom to show its name, and click it again to remove the label. Distance labels turns the angstrom lengths on the dashed lines on or off. The sigma slider sets the single isosurface, and the number box sets an exact sigma inside the range from the form. Blue / red colors positive density blue and negative density red, darker farther from zero. Temperature colors the low end of the range cold and the high end hot. Solid and Mesh switch the isosurface style. The transparency slider runs from opaque to clear. Save PNG keeps the orientation you are looking at. PyMOL script writes a .pml file in the output directory and downloads a copy. When Current orientation is on, that script uses the rotation, zoom, and pan of the 3D viewer. When Current orientation is off, the script keeps the framing from the calculation.</p>
       <div class="viewer-edit" id="viewer-edit">
@@ -624,5 +725,5 @@
 </script>
 <script src="{{ url_for('static', filename='vendor/ngl-2.5.0.js') }}?v=2"></script>
 <script src="{{ url_for('static', filename='js/sigma-color.js') }}?v=1"></script>
-<script src="{{ url_for('static', filename='js/workflow.js') }}?v=45"></script>
+<script src="{{ url_for('static', filename='js/workflow.js') }}?v=48"></script>
 {% endblock %}

@@ -102,6 +102,8 @@
   let editMode = null;
   let pendingPick = null;
   let sceneNote = "";
+  let baseScene = null;
+  let activeSiteId = "main";
 
   const LABEL_COLOR = "#ff7a18";
   const LABEL_EDGE = "#2a160c";
@@ -123,6 +125,17 @@
     mapCenter.addEventListener("change", syncMapCenter);
     syncMapCenter();
   }
+
+  const altMapCenter = document.getElementById("alt-map-center");
+  if (altMapCenter) {
+    altMapCenter.addEventListener("change", syncAltMapCenter);
+    syncAltMapCenter();
+  }
+
+  const viewerSiteMain = document.getElementById("viewer-site-main");
+  const viewerSiteAlt = document.getElementById("viewer-site-alt");
+  if (viewerSiteMain) viewerSiteMain.addEventListener("click", () => chooseSite("main"));
+  if (viewerSiteAlt) viewerSiteAlt.addEventListener("click", () => chooseSite("additional"));
 
   const resolutionSource = document.getElementById("resolution-source");
   const explicitCutoffs = document.getElementById("explicit-cutoffs");
@@ -203,12 +216,62 @@
       const pathEntry = el.closest(".path-entry");
       el.disabled = ancestorHidden(el) || (pathEntry ? pathEntry.hidden : false);
     });
+    syncAdditionalSiteFields();
+  }
+
+  function syncAltMapCenter() {
+    const select = document.getElementById("alt-map-center");
+    const xyz = document.getElementById("alt-map-center-xyz");
+    if (!select || !xyz) return;
+    const panel = document.getElementById("additional-site-fields");
+    const available = panel && !panel.hidden && !ancestorHidden(select);
+    const cartesian = select.value === "cartesian";
+    xyz.hidden = !cartesian;
+    xyz.querySelectorAll("input").forEach((input) => {
+      input.required = available && cartesian;
+      input.disabled = !available || !cartesian;
+    });
+  }
+
+  function syncAdditionalSiteFields() {
+    const box = form.querySelector('[name="use_additional_site"]');
+    const panel = document.getElementById("additional-site-fields");
+    if (!box || !panel) return;
+    const on = box.checked && !panel.hidden && !ancestorHidden(box);
+    panel.querySelectorAll("[data-site-field]").forEach((input) => {
+      input.required = on && !input.disabled;
+    });
+    syncAltMapCenter();
   }
 
   document.querySelectorAll(".panel-switch").forEach((box) => {
     box.addEventListener("change", () => syncPanel(box));
   });
   document.querySelectorAll(".panel-switch").forEach((box) => syncPanel(box));
+
+  form.addEventListener("click", (event) => {
+    const add = event.target.closest(".restraint-add");
+    if (add) {
+      const list = document.getElementById(add.getAttribute("data-rows"));
+      const rows = list.querySelectorAll(".restraint-row");
+      const row = rows[rows.length - 1].cloneNode(true);
+      row.querySelectorAll("input").forEach((input) => {
+        input.value = "";
+        input.disabled = ancestorHidden(input);
+      });
+      list.appendChild(row);
+      return;
+    }
+    const remove = event.target.closest(".restraint-remove");
+    if (!remove) return;
+    const row = remove.closest(".restraint-row");
+    const list = row.parentElement;
+    if (list.querySelectorAll(".restraint-row").length > 1) {
+      row.remove();
+      return;
+    }
+    row.querySelectorAll("input").forEach((input) => { input.value = ""; });
+  });
 
   const modelNameInput = form.querySelector('[name="dark_id"], [name="pdb_id"]');
   const referenceNameInput = form.querySelector('[name="light_id"]');
@@ -339,6 +402,236 @@
     stopButton.textContent = "Stop calculation";
   }
 
+  // Tags CCP4 and similar logs actually use. Anything else, including
+  // residue names such as <ALA>, stays visible as text.
+  const LOG_TAGS = new Set([
+    "a", "b", "big", "body", "br", "center", "code", "div", "em", "font",
+    "h1", "h2", "h3", "h4", "head", "hr", "html", "i", "li", "ol", "p", "pre",
+    "small", "span", "strong", "sub", "sup", "table", "tbody", "td", "tfoot",
+    "th", "thead", "title", "tr", "tt", "u", "ul",
+  ]);
+  const LOG_VOID = new Set(["br", "hr"]);
+  const LOG_ENTITIES = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", nbsp: "\u00a0" };
+  let logPending = "";
+  let logParents = [logBox];
+
+  function resetLog() {
+    logPending = "";
+    logParents = [logBox];
+    logBox.textContent = "";
+  }
+
+  function appendLog(chunk) {
+    if (!chunk) return;
+    const text = logPending + chunk;
+    logPending = "";
+    let index = 0;
+    while (index < text.length) {
+      const start = text.indexOf("<", index);
+      if (start === -1) {
+        writeLogText(text.slice(index), true);
+        return;
+      }
+      if (start > index) writeLogText(text.slice(index, start), false);
+      const markup = readLogMarkup(text, start);
+      if (markup.kind === "pending") {
+        logPending = text.slice(start);
+        return;
+      }
+      if (markup.kind === "skip") {
+        index = markup.end;
+        continue;
+      }
+      if (markup.kind === "literal") {
+        writeLogText(text.slice(start, markup.end), false);
+        index = markup.end;
+        continue;
+      }
+      openOrCloseLogTag(markup);
+      index = markup.end;
+      if ((markup.name === "br" || markup.name === "hr") && text[index] === "\r") index += 1;
+      if ((markup.name === "br" || markup.name === "hr") && text[index] === "\n") index += 1;
+    }
+  }
+
+  function flushLog() {
+    if (!logPending) return;
+    const tail = logPending;
+    logPending = "";
+    appendLogText(tail);
+  }
+
+  function writeLogText(slice, atEnd) {
+    if (!slice) return;
+    let value = slice;
+    if (atEnd && logParents.length > 1) {
+      const hold = incompleteEntityLength(value);
+      if (hold) {
+        logPending = value.slice(value.length - hold);
+        value = value.slice(0, -hold);
+      }
+    }
+    if (value) appendLogText(value);
+  }
+
+  function appendLogText(value) {
+    const shown = logParents.length > 1 ? decodeLogEntities(value) : value;
+    const parent = logParents[logParents.length - 1];
+    const last = parent.lastChild;
+    if (last && last.nodeType === Node.TEXT_NODE) last.appendData(shown);
+    else parent.appendChild(document.createTextNode(shown));
+  }
+
+  function readLogMarkup(text, index) {
+    const rest = text.slice(index);
+    if (rest.startsWith("<!--")) {
+      const close = rest.indexOf("-->");
+      if (close !== -1 && close <= 500) return { kind: "skip", end: index + close + 3 };
+      if (close === -1 && !rest.includes("\n") && rest.length <= 500) return { kind: "pending" };
+      return { kind: "literal", end: index + 1 };
+    }
+    if (/^<!doctype\b/i.test(rest)) {
+      const close = rest.indexOf(">");
+      if (close === -1) return rest.includes("\n") || rest.length > 500 ? { kind: "literal", end: index + 1 } : { kind: "pending" };
+      return { kind: "skip", end: index + close + 1 };
+    }
+    const match = /^<\s*(\/?)\s*([a-zA-Z][a-zA-Z0-9]*)\b([^<>]*)>/.exec(rest);
+    if (!match) {
+      return couldBePartialTag(rest) ? { kind: "pending" } : { kind: "literal", end: index + 1 };
+    }
+    const name = match[2].toLowerCase();
+    const end = index + match[0].length;
+    if (!LOG_TAGS.has(name)) return { kind: "literal", end };
+    return {
+      kind: "tag",
+      name,
+      closing: match[1] === "/",
+      selfClosing: match[1] !== "/" && /\/\s*$/.test(match[3]),
+      attrs: match[3],
+      raw: match[0],
+      end,
+    };
+  }
+
+  function couldBePartialTag(rest) {
+    if (rest.includes("\n") || rest.includes(">") || rest.length > 500) return false;
+    return /^<\s*(?:\/\s*)?(?:[a-zA-Z][a-zA-Z0-9]*)?$/.test(rest)
+      || /^<\s*(?:\/\s*)?[a-zA-Z][a-zA-Z0-9]*\b[^<>]*$/.test(rest);
+  }
+
+  function openOrCloseLogTag(markup) {
+    if (markup.closing) {
+      closeLogTag(markup);
+      return;
+    }
+    const el = document.createElement(markup.name);
+    applyLogAttributes(el, markup.name, markup.attrs);
+    logParents[logParents.length - 1].appendChild(el);
+    if (!markup.selfClosing && !LOG_VOID.has(markup.name)) logParents.push(el);
+  }
+
+  function closeLogTag(markup) {
+    if (LOG_VOID.has(markup.name)) return;
+    for (let depth = logParents.length - 1; depth > 0; depth -= 1) {
+      if (logParents[depth].tagName.toLowerCase() === markup.name) {
+        logParents.length = depth;
+        return;
+      }
+    }
+    appendLogText(markup.raw);
+  }
+
+  function applyLogAttributes(el, name, source) {
+    const attrs = parseLogAttributes(source);
+    if (name === "a") {
+      const href = safeLogHref(attrs.href);
+      if (href) {
+        el.setAttribute("href", href);
+        el.setAttribute("target", "_blank");
+        el.setAttribute("rel", "noopener noreferrer");
+      }
+    }
+    if (name === "font") {
+      const color = safeLogColor(attrs.color);
+      if (color) el.style.color = color;
+      const size = logFontSize(attrs.size);
+      if (size) el.style.fontSize = size;
+      const face = safeLogFace(attrs.face);
+      if (face) el.style.fontFamily = face;
+    }
+    if (name === "td" || name === "th") {
+      if (/^\d{1,3}$/.test(attrs.colspan || "")) el.colSpan = Number(attrs.colspan);
+      if (/^\d{1,3}$/.test(attrs.rowspan || "")) el.rowSpan = Number(attrs.rowspan);
+    }
+    if (/^(left|right|center|justify)$/i.test(attrs.align || "")) {
+      el.style.textAlign = attrs.align.toLowerCase();
+    }
+  }
+
+  function parseLogAttributes(source) {
+    const attrs = {};
+    const pattern = /([a-zA-Z_:][-a-zA-Z0-9_:.]*)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+)))?/g;
+    let match = pattern.exec(source);
+    while (match) {
+      const key = match[1].toLowerCase();
+      if (!key.startsWith("on")) attrs[key] = match[2] ?? match[3] ?? match[4] ?? "";
+      match = pattern.exec(source);
+    }
+    return attrs;
+  }
+
+  function safeLogHref(value) {
+    const href = (value || "").trim();
+    if (!href || /[\u0000-\u001F\u007F]/.test(href)) return "";
+    if (/^[a-z][a-z0-9+.-]*:/i.test(href)) return /^(https?:|mailto:)/i.test(href) ? href : "";
+    if (href.startsWith("//")) return "";
+    return "";
+  }
+
+  function safeLogColor(value) {
+    const color = (value || "").trim();
+    if (/^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i.test(color)) return color;
+    if (!/^[a-z]{3,20}$/i.test(color)) return "";
+    if (/^(inherit|initial|unset|revert|none|currentcolor|transparent)$/i.test(color)) return "";
+    return color;
+  }
+
+  function logFontSize(value) {
+    const size = (value || "").trim();
+    const absolute = { 1: "0.75em", 2: "0.85em", 3: "1em", 4: "1.15em", 5: "1.35em", 6: "1.6em", 7: "2em" };
+    if (absolute[size]) return absolute[size];
+    const relative = /^([+-])([1-7])$/.exec(size);
+    if (!relative) return "";
+    const step = Number(relative[2]) * (relative[1] === "+" ? 1 : -1);
+    return `${Math.max(0.7, 1 + step * 0.15).toFixed(2)}em`;
+  }
+
+  function safeLogFace(value) {
+    const face = (value || "").trim();
+    if (!/^[-a-zA-Z0-9 ,']{1,80}$/.test(face)) return "";
+    return face;
+  }
+
+  function decodeLogEntities(text) {
+    return text.replace(/&(#x[0-9a-fA-F]+|#\d+|[a-zA-Z]+);/g, (all, body) => {
+      if (body[0] !== "#") return Object.prototype.hasOwnProperty.call(LOG_ENTITIES, body) ? LOG_ENTITIES[body] : all;
+      const hex = body[1] === "x" || body[1] === "X";
+      const code = hex ? Number.parseInt(body.slice(2), 16) : Number.parseInt(body.slice(1), 10);
+      if (!Number.isInteger(code) || code < 0 || code > 0x10ffff) return all;
+      if (code >= 0xd800 && code <= 0xdfff) return all;
+      if (code < 32 && code !== 9 && code !== 10 && code !== 13) return all;
+      return String.fromCodePoint(code);
+    });
+  }
+
+  function incompleteEntityLength(text) {
+    const amp = text.lastIndexOf("&");
+    if (amp < 0) return 0;
+    const tail = text.slice(amp);
+    if (tail.length > 16) return 0;
+    return /^&(?:#x[0-9a-fA-F]{0,6}|#\d{0,7}|[a-zA-Z]{0,8})$/.test(tail) ? tail.length : 0;
+  }
+
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
     const generation = ++pollGeneration;
@@ -354,7 +647,7 @@
     disposeViewer();
     showReconstructionSteps([]);
     resetSummaryAction();
-    logBox.textContent = "";
+    resetLog();
     runPanel.hidden = false;
     runState.textContent = "Starting";
     runButton.disabled = true;
@@ -443,7 +736,7 @@
     if (generation !== pollGeneration) return;
     if (payload.log) {
       const nearBottom = logBox.scrollHeight - logBox.scrollTop - logBox.clientHeight < 40;
-      logBox.textContent += payload.log;
+      appendLog(payload.log);
       if (nearBottom) logBox.scrollTop = logBox.scrollHeight;
     }
     runState.textContent = statusLabel(payload);
@@ -474,7 +767,9 @@
       }
       if (payload.log && payload.log.length >= 120000) {
         poll(id, payload.offset, generation);
+        return;
       }
+      flushLog();
       return;
     }
     window.setTimeout(() => poll(id, payload.offset, generation), 1500);
@@ -668,7 +963,10 @@
     if (data.viewer && data.viewer.voxel && data.iteration != null) {
       data.viewer.voxel.step = data.iteration;
     }
-    loadViewer(data.viewer);
+    baseScene = data.viewer;
+    activeSiteId = "main";
+    syncSiteSwitch();
+    loadViewer(sceneForSite("main"));
     fileList.replaceChildren();
     const rows = [
       ["Output directory", data.output_dir],
@@ -676,6 +974,7 @@
       ["Site fragment", data.fragment],
       ["PyMOL script", data.pymol_script],
     ];
+    if (data.additional_fragment) rows.splice(3, 0, ["Additional site map", data.additional_fragment]);
     rows.forEach(([role, path]) => appendFile(role, path));
     result.hidden = false;
   }
@@ -2121,6 +2420,44 @@
     syncSurfaceControls(false);
     syncSigmaControls(false);
     syncLightControls(false);
+  }
+
+  function sceneForSite(id) {
+    if (!baseScene || id !== "additional" || !baseScene.additional) return baseScene;
+    const alt = baseScene.additional;
+    return {
+      ...baseScene,
+      map_url: alt.map_url,
+      map_file: alt.map_file,
+      site: alt.site,
+      extra_residues: alt.extra_residues || [],
+      bonds: [],
+      distances: [],
+      light_bonds: alt.light_bonds || null,
+      voxel: null,
+    };
+  }
+
+  function syncSiteSwitch() {
+    const box = document.getElementById("viewer-site-switch");
+    const mainButton = document.getElementById("viewer-site-main");
+    const altButton = document.getElementById("viewer-site-alt");
+    if (!box || !mainButton || !altButton) return;
+    const alt = baseScene && baseScene.additional;
+    box.hidden = !alt;
+    if (!alt) return;
+    mainButton.textContent = baseScene.site_label ? `Main site · ${baseScene.site_label}` : "Main site";
+    altButton.textContent = alt.label ? `Additional site · ${alt.label}` : "Additional site";
+    mainButton.setAttribute("aria-pressed", activeSiteId === "main" ? "true" : "false");
+    altButton.setAttribute("aria-pressed", activeSiteId === "additional" ? "true" : "false");
+  }
+
+  function chooseSite(id) {
+    if (!baseScene || id === activeSiteId) return;
+    if (id === "additional" && !baseScene.additional) return;
+    activeSiteId = id;
+    syncSiteSwitch();
+    loadViewer(sceneForSite(id));
   }
 
   async function loadViewer(scene) {

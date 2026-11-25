@@ -122,10 +122,11 @@ WORKFLOWS = {
             "distance_sigma": "0.5",
             "angle_sigma": "25",
             "dihedral_sigma": "10",
-            "distance_restraints": "MN1 O5\nMN3 O5\nMN4 O5\nCA1 O5",
-            "angle_restraints": "MN3 O5 MN4\nMN3 O5 CA1\nMN4 O5 CA1\nO5 CA1 O1\nO2 MN3 O5\nO3 MN3 O5\nO4 MN3 O5\nO4 MN4 O5",
+            "distance_restraints": "A 416 MN1 | A 416 O5 | |\nA 416 MN3 | A 416 O5 | |\nA 416 MN4 | A 416 O5 | |\nA 416 CA1 | A 416 O5 | |",
+            "angle_restraints": "A 416 MN3 | A 416 O5 | A 416 MN4 | |\nA 416 MN3 | A 416 O5 | A 416 CA1 | |\nA 416 MN4 | A 416 O5 | A 416 CA1 | |\nA 416 O5 | A 416 CA1 | A 416 O1 | |\nA 416 O2 | A 416 MN3 | A 416 O5 | |\nA 416 O3 | A 416 MN3 | A 416 O5 | |\nA 416 O4 | A 416 MN3 | A 416 O5 | |\nA 416 O4 | A 416 MN4 | A 416 O5 | |",
             "dihedral_restraints": "",
             "exclude_restraints": "",
+            "harmonic_sigma": "0.1",
             "harmonic_protein_sigma": "0.1",
             "lowres": "30",
             "dmin": "1.89",
@@ -230,7 +231,6 @@ SHARED_DEFAULTS = {
     "contour_mode": "sigma",
     "viewer_sigma_min": "-5",
     "viewer_sigma_max": "5",
-    "extra_copies": "",
 }
 
 
@@ -616,6 +616,13 @@ def job_status(job_id: str):
                 viewer["carve"] = links["carve"]
             if viewer.get("light_model"):
                 viewer["light_model_url"] = f"/api/jobs/{job_id}/viewer/light"
+            additional = viewer.get("additional")
+            if additional and additional.get("map"):
+                viewer["additional"] = {
+                    **additional,
+                    "map_url": f"/api/jobs/{job_id}/viewer/altmap",
+                    "map_file": Path(additional["map"]).name,
+                }
         figure = Path(result.get("figure") or "")
         public_result = {
             "caption": result["caption"],
@@ -623,6 +630,7 @@ def job_status(job_id: str):
             "final_map": result["final_map"],
             "fragment": result["fragment"],
             "pymol_script": result["pymol_script"],
+            "additional_fragment": result.get("additional_fragment"),
             "figure_url": f"/api/jobs/{job_id}/figure" if figure.is_file() else None,
             "viewer": viewer,
             "files": result["files"],
@@ -835,10 +843,16 @@ def job_viewer_asset(job_id: str, asset: str):
     """Serve only the model and clipped map that belong to this finished job."""
     job = _get_job(job_id)
     scene = (job.get("result") or {}).get("viewer")
-    if not scene or asset not in {"model", "map", "light"}:
+    if not scene or asset not in {"model", "map", "light", "altmap"}:
         abort(404)
     if asset == "map":
         path = _viewer_map_file(job.get("result") or {}, _script_links(job.get("result") or {}))
+    elif asset == "altmap":
+        additional = scene.get("additional") or {}
+        raw = additional.get("map")
+        if not raw:
+            abort(404)
+        path = Path(raw)
     elif asset == "light":
         raw = scene.get("light_model")
         if not raw:

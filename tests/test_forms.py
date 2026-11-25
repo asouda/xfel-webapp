@@ -27,10 +27,10 @@ from xfel_web.forms import (
     FormError,
     decompress_gzip,
     parse_angle_restraints,
-    parse_copies,
     parse_dihedral_restraints,
     parse_distance_restraints,
     parse_exclude_restraints,
+    parse_harmonic_atoms,
     parse_extra_residues,
     parse_job,
     parse_viewer_sigma,
@@ -197,13 +197,52 @@ class ParseTests(unittest.TestCase):
     def test_residue_lines(self):
         extras = parse_extra_residues("A 189 GLU189\n# comment\n")
         self.assertEqual(extras, [{"chain": "A", "resi": 189, "label": "GLU189"}])
-        self.assertEqual(parse_copies("A", 416, "D 416\nA 416"), [("A", 416), ("D", 416)])
-        self.assertEqual(parse_distance_restraints("MN1 O5\nMN4 O5 2.4 0.5"), [("MN1", "O5"), ("MN4", "O5", 2.4, 0.5)])
-        self.assertEqual(parse_angle_restraints("MN3 O5 MN4 109.5"), [("MN3", "O5", "MN4", 109.5)])
         self.assertEqual(
-            parse_dihedral_restraints("MN1 O5 MN4 CA1 180 10"),
-            [("MN1", "O5", "MN4", "CA1", 180.0, 10.0)],
+            parse_distance_restraints([
+                ("A 416 MN1", "A 416 O5", "", ""),
+                ("A 602 MN4", "A 602 O5", "2.4", "0.5"),
+                ("", "", "", ""),
+            ]),
+            [
+                {
+                    "atom1": {"chain": "A", "resi": 416, "name": "MN1"},
+                    "atom2": {"chain": "A", "resi": 416, "name": "O5"},
+                    "distance": None,
+                    "sigma": None,
+                },
+                {
+                    "atom1": {"chain": "A", "resi": 602, "name": "MN4"},
+                    "atom2": {"chain": "A", "resi": 602, "name": "O5"},
+                    "distance": 2.4,
+                    "sigma": 0.5,
+                },
+            ],
         )
+        self.assertEqual(
+            parse_angle_restraints([("A 416 MN3", "A 416 O5", "A 189 MN4", "109.5", "")]),
+            [{
+                "atom1": {"chain": "A", "resi": 416, "name": "MN3"},
+                "vertex": {"chain": "A", "resi": 416, "name": "O5"},
+                "atom3": {"chain": "A", "resi": 189, "name": "MN4"},
+                "angle_deg": 109.5,
+                "sigma_deg": None,
+            }],
+        )
+        self.assertEqual(
+            parse_dihedral_restraints([("A 416 MN1", "A 416 O5", "A 416 MN4", "A 189 CA", "180", "10")]),
+            [{
+                "atoms": [
+                    {"chain": "A", "resi": 416, "name": "MN1"},
+                    {"chain": "A", "resi": 416, "name": "O5"},
+                    {"chain": "A", "resi": 416, "name": "MN4"},
+                    {"chain": "A", "resi": 189, "name": "CA"},
+                ],
+                "angle_deg": 180.0,
+                "sigma_deg": 10.0,
+            }],
+        )
+        with self.assertRaises(FormError):
+            parse_distance_restraints([("MN1", "A 416 O5", "", "")])
         self.assertEqual(
             parse_exclude_restraints("A 416 *\n# comment\na 189 ca, cb CG\n"),
             [("A", 416, ("*",)), ("a", 189, ("CA", "CB", "CG"))],
@@ -343,38 +382,134 @@ class ParseTests(unittest.TestCase):
             + "END\n"
         )
         try:
-            text = external_distance_keywords(path, [("A", 416)], [("MN1", "O5")], 0.5)
+            def located(chain, resi, name):
+                return {"chain": chain, "resi": resi, "name": name}
+
+            text = external_distance_keywords(
+                path,
+                [{
+                    "atom1": located("A", 416, "MN1"),
+                    "atom2": located("A", 416, "O5"),
+                    "distance": None,
+                    "sigma": None,
+                }],
+                0.5,
+            )
             self.assertIn("exte dist first chain A resi 416 atom MN1", text)
             self.assertIn("value 1.000 sigma 0.500", text)
             explicit = external_distance_keywords(
                 path,
-                [("A", 416)],
-                [("MN1", "O5", 2.4, 0.05), ("O5", "MN4")],
+                [
+                    {
+                        "atom1": located("A", 416, "MN1"),
+                        "atom2": located("A", 416, "O5"),
+                        "distance": 2.4,
+                        "sigma": 0.05,
+                    },
+                    {
+                        "atom1": located("A", 416, "O5"),
+                        "atom2": located("A", 416, "MN4"),
+                        "distance": None,
+                        "sigma": None,
+                    },
+                ],
                 0.5,
             )
             self.assertIn("atom MN1 second chain A resi 416 atom O5 value 2.400 sigma 0.050", explicit)
             self.assertIn("atom O5 second chain A resi 416 atom MN4 value 1.000 sigma 0.500", explicit)
-            angle = external_angle_keywords(path, [("A", 416)], [("MN1", "O5", "MN4")], 25)
+            angle = external_angle_keywords(
+                path,
+                [{
+                    "atom1": located("A", 416, "MN1"),
+                    "vertex": located("A", 416, "O5"),
+                    "atom3": located("A", 416, "MN4"),
+                    "angle_deg": None,
+                    "sigma_deg": None,
+                }],
+                25,
+            )
             self.assertIn("exte angle first chain A resi 416 atom MN1", angle)
             self.assertIn("value 90.000 sigma 25.000", angle)
             explicit_angle = external_angle_keywords(
-                path, [("A", 416)], [("MN1", "O5", "MN4", 100.0, 5.0)], 25
+                path,
+                [{
+                    "atom1": located("A", 416, "MN1"),
+                    "vertex": located("A", 416, "O5"),
+                    "atom3": located("A", 416, "MN4"),
+                    "angle_deg": 100.0,
+                    "sigma_deg": 5.0,
+                }],
+                25,
             )
             self.assertIn("value 100.000 sigma 5.000", explicit_angle)
             self.assertNotIn("sigma 25.000", explicit_angle)
-            torsion = external_dihedral_keywords(path, [("A", 416)], [("MN1", "O5", "MN4", "CA1")], 10)
+            torsion = external_dihedral_keywords(
+                path,
+                [{
+                    "atoms": [
+                        located("A", 416, "MN1"),
+                        located("A", 416, "O5"),
+                        located("A", 416, "MN4"),
+                        located("A", 416, "CA1"),
+                    ],
+                    "angle_deg": None,
+                    "sigma_deg": None,
+                }],
+                10,
+            )
             self.assertIn("exte torsion first chain A resi 416 atom MN1", torsion)
             self.assertIn("next chain A resi 416 atom CA1", torsion)
             self.assertIn("value 90.000 sigma 10.000 period 1", torsion)
             with self.assertRaises(ValueError):
                 external_dihedral_keywords(
                     path,
-                    [("A", 416)],
-                    [("MN1", "O5", "MN4", "CA1"), ("CA1", "MN4", "O5", "MN1")],
+                    [
+                        {
+                            "atoms": [
+                                located("A", 416, "MN1"),
+                                located("A", 416, "O5"),
+                                located("A", 416, "MN4"),
+                                located("A", 416, "CA1"),
+                            ],
+                            "angle_deg": None,
+                            "sigma_deg": None,
+                        },
+                        {
+                            "atoms": [
+                                located("A", 416, "CA1"),
+                                located("A", 416, "MN4"),
+                                located("A", 416, "O5"),
+                                located("A", 416, "MN1"),
+                            ],
+                            "angle_deg": None,
+                            "sigma_deg": None,
+                        },
+                    ],
                     10,
                 )
             conformers = residue_conformers(path, "A", 416)
             self.assertIn("MN1", conformers[""])
+            original = path.read_text()
+            copied = []
+            for line in original.splitlines(keepends=True):
+                if line.startswith("HETATM") and len(line) > 26:
+                    copied.append(line[:21] + "D" + " 500" + line[26:])
+                else:
+                    copied.append(line)
+            path.write_text(original + "".join(copied))
+            spanned = external_distance_keywords(
+                path,
+                [{
+                    "atom1": {"chain": "A", "resi": 416, "name": "MN1"},
+                    "atom2": {"chain": "D", "resi": 500, "name": "O5"},
+                    "distance": 2.8,
+                    "sigma": 0.1,
+                }],
+                0.5,
+            )
+            self.assertIn("first chain A resi 416 atom MN1", spanned)
+            self.assertIn("second chain D resi 500 atom O5 value 2.800 sigma 0.100", spanned)
+            self.assertEqual(spanned.count("exte dist"), 1)
         finally:
             path.unlink(missing_ok=True)
 
@@ -434,6 +569,54 @@ class RefinementFormTests(unittest.TestCase):
         self.assertEqual(cfg["exclude_restraints"], [])
         self.assertEqual(cfg["map_center"], "residue")
         self.assertIsNone(cfg["map_center_xyz"])
+        self.assertIsNone(cfg["additional_site"])
+        self.assertEqual(cfg["site_copies"], [("A", 416)])
+
+    def test_additional_site_keeps_its_own_center_and_neighbours(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cfg = parse_job(
+                "refinement",
+                self._form(
+                    root,
+                    use_additional_site="on",
+                    alt_site_chain="D",
+                    alt_site_resi="189",
+                    alt_site_label="GLU",
+                    alt_map_center="cartesian",
+                    alt_center_x="1.5",
+                    alt_center_y="-2",
+                    alt_center_z="3.25",
+                    alt_extra_residues="D 190 ASP190\n",
+                ),
+                {},
+                root,
+            )
+        site = cfg["additional_site"]
+        self.assertEqual(site["chain"], "D")
+        self.assertEqual(site["resi"], 189)
+        self.assertEqual(site["label"], "GLU")
+        self.assertEqual(site["map_center"], "cartesian")
+        self.assertEqual(site["map_center_xyz"], (1.5, -2.0, 3.25))
+        self.assertEqual(site["extra_residues"], [{"chain": "D", "resi": 190, "label": "ASP190"}])
+        self.assertEqual(cfg["site_copies"], [("A", 416)])
+
+    def test_additional_site_switch_off_ignores_its_fields(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cfg = parse_job(
+                "refinement",
+                self._form(root, alt_site_chain="D", alt_site_resi="189", alt_site_label="GLU"),
+                {},
+                root,
+            )
+        self.assertIsNone(cfg["additional_site"])
+
+    def test_additional_site_requires_a_chain(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with self.assertRaises(FormError):
+                parse_job("refinement", self._form(root, use_additional_site="on"), {}, root)
 
     def test_cartesian_map_center_is_kept(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -531,9 +714,15 @@ class RefinementFormTests(unittest.TestCase):
             root = Path(tmp)
             posted = self._form(
                 root,
-                distance_restraints="MN1 O5",
-                angle_restraints="MN1 O5 MN4",
-                dihedral_restraints="MN1 O5 MN4 CA1",
+                distance_atom_1=["A 416 MN1"],
+                distance_atom_2=["A 416 O5"],
+                angle_atom_1=["A 416 MN1"],
+                angle_atom_2=["A 416 O5"],
+                angle_atom_3=["A 416 MN4"],
+                dihedral_atom_1=["A 416 MN1"],
+                dihedral_atom_2=["A 416 O5"],
+                dihedral_atom_3=["A 416 MN4"],
+                dihedral_atom_4=["A 189 CA"],
             )
             off = parse_job("refinement", posted, {}, root)
             self.assertEqual(off["distance_restraints"], [])
@@ -548,17 +737,29 @@ class RefinementFormTests(unittest.TestCase):
                     use_distance_restraints="on",
                     use_angle_restraints="on",
                     use_dihedral_restraints="on",
-                    distance_restraints="MN1 O5",
-                    angle_restraints="MN1 O5 MN4",
-                    dihedral_restraints="MN1 O5 MN4 CA1 180",
+                    distance_atom_1=["A 416 MN1"],
+                    distance_atom_2=["A 416 O5"],
+                    distance_value=["2.8"],
+                    distance_row_sigma=["0.1"],
+                    angle_atom_1=["A 416 MN1"],
+                    angle_atom_2=["A 416 O5"],
+                    angle_atom_3=["A 416 MN4"],
+                    dihedral_atom_1=["A 416 MN1"],
+                    dihedral_atom_2=["A 416 O5"],
+                    dihedral_atom_3=["A 416 MN4"],
+                    dihedral_atom_4=["A 189 CA"],
+                    dihedral_value=["180"],
                     dihedral_sigma="10",
                 ),
                 {},
                 root,
             )
-            self.assertEqual(on["distance_restraints"], [("MN1", "O5")])
-            self.assertEqual(on["angle_restraints"], [("MN1", "O5", "MN4")])
-            self.assertEqual(on["dihedral_restraints"], [("MN1", "O5", "MN4", "CA1", 180.0)])
+            self.assertEqual(on["distance_restraints"][0]["atom1"]["name"], "MN1")
+            self.assertEqual(on["distance_restraints"][0]["distance"], 2.8)
+            self.assertEqual(on["distance_restraints"][0]["sigma"], 0.1)
+            self.assertEqual(on["angle_restraints"][0]["vertex"]["name"], "O5")
+            self.assertEqual(on["dihedral_restraints"][0]["atoms"][3]["resi"], 189)
+            self.assertEqual(on["dihedral_restraints"][0]["angle_deg"], 180.0)
             with self.assertRaises(FormError):
                 parse_job(
                     "refinement",
@@ -697,6 +898,68 @@ class RefinementFormTests(unittest.TestCase):
             )
         self.assertTrue(cfg["harmonic_protein"])
         self.assertEqual(cfg["harmonic_protein_sigma"], 0.25)
+
+    def test_specified_harmonic_atoms_follow_the_switch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.assertEqual(
+                parse_harmonic_atoms("A 416 MN1\n# note\na 189 o5 b\nA 416 MN1\n"),
+                [
+                    {"chain": "A", "resi": 416, "name": "MN1", "alt": "", "icode": ""},
+                    {"chain": "a", "resi": 189, "name": "O5", "alt": "B", "icode": ""},
+                ],
+            )
+            hidden = parse_job(
+                "refinement",
+                self._form(root, harmonic_atom_lines="A 416 MN1", harmonic_sigma="0.2"),
+                {},
+                root,
+            )
+            off = parse_job(
+                "refinement",
+                self._form(root, use_refmac="on", harmonic_atom_lines="A 416 MN1"),
+                {},
+                root,
+            )
+            with self.assertRaises(FormError) as empty:
+                parse_job(
+                    "refinement",
+                    self._form(root, use_refmac="on", use_harmonic_atoms="on", harmonic_atom_lines=""),
+                    {},
+                    root,
+                )
+            with self.assertRaises(FormError) as bad_sigma:
+                parse_job(
+                    "refinement",
+                    self._form(
+                        root,
+                        use_refmac="on",
+                        use_harmonic_atoms="on",
+                        harmonic_atom_lines="A 416 MN1",
+                        harmonic_sigma="0",
+                    ),
+                    {},
+                    root,
+                )
+            cfg = parse_job(
+                "refinement",
+                self._form(
+                    root,
+                    use_refmac="on",
+                    use_harmonic_atoms="on",
+                    harmonic_atom_lines="A 416 MN1\nA 189 O5 B",
+                    harmonic_sigma="0.2",
+                ),
+                {},
+                root,
+            )
+        self.assertEqual(hidden["harmonic_atoms"], [])
+        self.assertEqual(off["harmonic_atoms"], [])
+        self.assertIn("at least one atom", str(empty.exception))
+        self.assertIn("Harmonic sigma", str(bad_sigma.exception))
+        self.assertEqual(cfg["harmonic_sigma"], 0.2)
+        self.assertEqual(cfg["harmonic_atoms"][0]["name"], "MN1")
+        self.assertEqual(cfg["harmonic_atoms"][1]["alt"], "B")
 
     def test_refmac_keywords_follow_the_form(self):
         with tempfile.TemporaryDirectory() as tmp:

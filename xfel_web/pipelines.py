@@ -137,6 +137,88 @@ def _cartesian_center(cfg: dict) -> tuple[float, float, float] | None:
     return (float(point[0]), float(point[1]), float(point[2]))
 
 
+def _additional_center(site: dict, pdb_path: Path) -> tuple[float, float, float]:
+    """Center of the additional-site map: an explicit point, or the residue centroid."""
+    if site.get("map_center") == "cartesian" and site.get("map_center_xyz"):
+        x, y, z = site["map_center_xyz"]
+        return (float(x), float(y), float(z))
+    try:
+        return residue_centroid(pdb_path, str(site["chain"]), int(site["resi"]))
+    except ValueError as exc:
+        raise ValueError(f"Additional site: {exc}") from exc
+
+
+def _additional_cube(session, cfg: dict, pdb_path: Path, extended_map: Path, direct_cube: dict) -> Path:
+    """A fine-grid cube around the additional site when the whole cell was not written."""
+    site = cfg["additional_site"]
+    center = _additional_center(site, pdb_path)
+    cube = extended_map.with_name(
+        f"{extended_map.stem}_{site['label']}_{site['chain']}{int(site['resi'])}_cube.ccp4"
+    )
+    session.emit(
+        "The whole-cell transform was replaced by a cube around the main site. "
+        f"The additional site is written as its own cube: {cube.name}"
+    )
+    text = direct_site_cube(
+        direct_cube["mtz"],
+        cube,
+        direct_cube["f"],
+        direct_cube["phi"],
+        direct_cube["low"],
+        direct_cube["high"],
+        direct_cube["sampling"],
+        center,
+        cfg["export_radius"],
+        None,
+        emit=session.emit,
+    )
+    cube.with_suffix(".log").write_text(text)
+    return cube
+
+
+def _export_additional_fragment(
+    session,
+    cfg: dict,
+    source_map: Path,
+    pdb_path: Path,
+    sigma: float,
+    difference: bool,
+) -> Path | None:
+    """Clip and save the additional-site map. The peak search keeps the main clip."""
+    site = cfg.get("additional_site")
+    if not site:
+        return None
+    session.emit(
+        f"Additional site: chain {site['chain']}  residue {site['resi']}  label {site['label']}"
+    )
+    center = None
+    if site.get("map_center") == "cartesian" and site.get("map_center_xyz"):
+        center = _additional_center(site, pdb_path)
+        session.emit(
+            "Additional map center is the Cartesian point: "
+            f"{center[0]:.2f} {center[1]:.2f} {center[2]:.2f} Å"
+        )
+    else:
+        centroid = _additional_center(site, pdb_path)
+        session.emit(
+            "Additional map center is the site centroid: "
+            f"{centroid[0]:.2f} {centroid[1]:.2f} {centroid[2]:.2f} Å"
+        )
+    session.announce("Export the additional site")
+    return session.export_fragment(
+        source_map,
+        pdb_path,
+        [(str(site["chain"]), int(site["resi"]))],
+        str(site["label"]),
+        cfg["export_radius"],
+        sigma,
+        difference=difference,
+        recompute=cfg["recompute_fragment"],
+        center=center,
+        script_stem="coot_additional_export",
+    )
+
+
 def _check_site(pdb_path: Path, chain: str, resi: int, label: str):
     atoms = residue_atom_names(pdb_path, chain, resi)
     if not atoms:
@@ -466,6 +548,14 @@ def run_fofo(cfg: dict, emit) -> dict:
         difference=True,
         recompute=cfg["recompute_fragment"],
     )
+    additional_fragment = _export_additional_fragment(
+        session,
+        cfg,
+        extended_map,
+        files["light_pdb"],
+        cfg["positive_levels"][0],
+        True,
+    )
 
     session.announce("5. Contour isodensity surfaces in PyMOL")
     png_path = out / f"{light_id}_minus_{dark_id}_{cfg['site_label']}_{cfg['site_chain']}{cfg['site_resi']}_diffmap.png"
@@ -506,12 +596,14 @@ def run_fofo(cfg: dict, emit) -> dict:
         fragment,
         pml_path,
         out,
+        additional_fragment=additional_fragment,
         viewer=_viewer_scene(
             model_pdb=files["light_pdb"],
             fragment=fragment,
             cfg=cfg,
             positive_colors=POS_COLORS,
             negative_colors=NEG_COLORS,
+            additional_fragment=additional_fragment,
         ),
     )
 
@@ -576,6 +668,7 @@ def run_refinement(cfg: dict, emit) -> dict:
     diff_map = out / f"{light_id}_DELFWT_{dark_id}{grid_suffix}.ccp4"
     extended_map = out / f"{light_id}_DELFWT_{dark_id}{grid_suffix}_extended.ccp4"
     refined_pdb = out / f"{dark_id}_refined.pdb"
+    direct_cube = None
 
     if extended_map.is_file() and not cfg["recompute_map"]:
         session.emit(f"Reusing existing map: {extended_map}")
@@ -676,20 +769,19 @@ def run_refinement(cfg: dict, emit) -> dict:
         distance_text = _restraints(
             "Distance restraints",
             lambda: external_distance_keywords(
-                files["dark_pdb"], cfg["site_copies"], cfg["distance_restraints"], cfg["distance_sigma"]
+                files["dark_pdb"], cfg["distance_restraints"], cfg["distance_sigma"]
             ),
         )
         angle_text = _restraints(
             "Angle restraints",
             lambda: external_angle_keywords(
-                files["dark_pdb"], cfg["site_copies"], cfg["angle_restraints"], cfg["angle_sigma"]
+                files["dark_pdb"], cfg["angle_restraints"], cfg["angle_sigma"]
             ),
         )
         dihedral_text = _restraints(
             "Dihedral restraints",
             lambda: external_dihedral_keywords(
                 files["dark_pdb"],
-                cfg["site_copies"],
                 cfg.get("dihedral_restraints") or [],
                 cfg.get("dihedral_sigma", 10.0),
             ),
@@ -701,12 +793,12 @@ def run_refinement(cfg: dict, emit) -> dict:
             harmonic_sigma = float(cfg.get("harmonic_sigma", 0.1))
             harmonic_text = external_harmonic_keywords(harmonic_atoms, harmonic_sigma)
             session.emit(
-                f"Harmonic restraints on {len(harmonic_atoms)} added atoms, sigma {harmonic_sigma:.3f} Å. "
+                f"Harmonic restraints on {len(harmonic_atoms)} atoms, sigma {harmonic_sigma:.3f} Å. "
                 "Each atom is held at the coordinates in the input model."
             )
         elif harmonic_atoms:
             session.emit(
-                "Harmonic restraints on the added atoms were not applied. REFMAC cycles is 0."
+                "Harmonic restraints were not applied. REFMAC cycles is 0."
             )
         protein_text = ""
         if cfg.get("harmonic_protein") and int(cfg["refmac_ncyc"]) > 0:
@@ -787,14 +879,14 @@ def run_refinement(cfg: dict, emit) -> dict:
             if diff_map.is_file():
                 diff_map.unlink()
             center = explicit_center or residue_centroid(refined_pdb, cfg["site_chain"], cfg["site_resi"])
-            extra_centers = []
-            for chain, resi in cfg["site_copies"][1:]:
-                try:
-                    extra_centers.append(residue_centroid(refined_pdb, chain, resi))
-                except ValueError as exc:
-                    if explicit_center is None:
-                        raise
-                    session.emit(f"{exc} That copy is left out of the cube.")
+            direct_cube = {
+                "mtz": omit_mtz,
+                "f": delfwt_lab,
+                "phi": phdelwt_lab,
+                "low": low,
+                "high": grid_high,
+                "sampling": sampling,
+            }
             direct_log = out / f"direct_{light_id}_DELFWT_{dark_id}.log"
             text = direct_site_cube(
                 omit_mtz,
@@ -806,7 +898,7 @@ def run_refinement(cfg: dict, emit) -> dict:
                 sampling,
                 center,
                 cfg["export_radius"],
-                extra_centers,
+                None,
                 emit=session.emit,
             )
             direct_log.write_text(text)
@@ -836,6 +928,17 @@ def run_refinement(cfg: dict, emit) -> dict:
         difference=True,
         recompute=cfg["recompute_fragment"],
         center=explicit_center,
+    )
+    additional_source = extended_map
+    if direct_cube and cfg.get("additional_site"):
+        additional_source = _additional_cube(session, cfg, refined_pdb, extended_map, direct_cube)
+    additional_fragment = _export_additional_fragment(
+        session,
+        cfg,
+        additional_source,
+        refined_pdb,
+        cfg["positive_levels"][0],
+        True,
     )
 
     session.announce("5. Contour isodensity surfaces in PyMOL")
@@ -893,6 +996,7 @@ def run_refinement(cfg: dict, emit) -> dict:
         pml_path,
         out,
         extra=[refined_pdb],
+        additional_fragment=additional_fragment,
         viewer=_viewer_scene(
             model_pdb=refined_pdb,
             fragment=fragment,
@@ -900,6 +1004,7 @@ def run_refinement(cfg: dict, emit) -> dict:
             positive_colors=POS_COLORS,
             negative_colors=NEG_COLORS,
             light_pdb=files["light_pdb"],
+            additional_fragment=additional_fragment,
         ),
     )
 
@@ -996,6 +1101,14 @@ def run_twofofc(cfg: dict, emit) -> dict:
         difference=False,
         recompute=cfg["recompute_fragment"],
     )
+    additional_fragment = _export_additional_fragment(
+        session,
+        cfg,
+        extended_map,
+        files["pdb"],
+        cfg["sigma_levels"][0],
+        False,
+    )
 
     session.announce("5. Contour isodensity surfaces in PyMOL")
     png_path = out / f"{pdb_id}_2fofc_{b_tag}_{cfg['site_label']}_{cfg['site_chain']}{cfg['site_resi']}.png"
@@ -1035,12 +1148,14 @@ def run_twofofc(cfg: dict, emit) -> dict:
         fragment,
         pml_path,
         out,
+        additional_fragment=additional_fragment,
         viewer=_viewer_scene(
             model_pdb=files["pdb"],
             fragment=fragment,
             cfg=cfg,
             positive_colors=MAP_COLORS,
             negative_colors=[],
+            additional_fragment=additional_fragment,
         ),
     )
 
@@ -1074,6 +1189,7 @@ def _viewer_scene(
     positive_colors: list[str],
     negative_colors: list[str],
     light_pdb: Path | None = None,
+    additional_fragment: Path | None = None,
 ) -> dict:
     """Return the data needed to recreate the local PyMOL scene in WebGL.
 
@@ -1090,6 +1206,7 @@ def _viewer_scene(
         "model": str(model_pdb),
         "model_ext": model_pdb.suffix.lstrip(".").lower() or "pdb",
         "map": str(fragment),
+        "site_label": cfg.get("site_label") or "",
         "site": {"chain": cfg["site_chain"], "resi": cfg["site_resi"]},
         "extra_residues": cfg["extra_residues"],
         "positive_levels": levels,
@@ -1117,20 +1234,47 @@ def _viewer_scene(
                 int(cfg["site_resi"]),
                 cfg.get("extra_residues"),
             )
+    site = cfg.get("additional_site")
+    if additional_fragment is not None and site:
+        additional = {
+            "label": site["label"],
+            "map": str(additional_fragment),
+            "site": {"chain": site["chain"], "resi": int(site["resi"])},
+            "extra_residues": site.get("extra_residues") or [],
+        }
+        if light_pdb is not None and cfg.get("geometry_bonds"):
+            additional["light_bonds"] = reasonable_bond_specs(
+                light_pdb,
+                str(site["chain"]),
+                int(site["resi"]),
+                site.get("extra_residues"),
+            )
+        scene["additional"] = additional
     return scene
 
 
-def _result(caption, png_path, extended_map, fragment, pml_path, output_dir, extra=None, viewer=None) -> dict:
+def _result(
+    caption,
+    png_path,
+    extended_map,
+    fragment,
+    pml_path,
+    output_dir,
+    extra=None,
+    viewer=None,
+    additional_fragment: Path | None = None,
+) -> dict:
     named = [
         ("Figure", png_path),
         ("Extended map", extended_map),
         ("Site fragment", fragment),
+        ("Additional site map", additional_fragment),
         ("PyMOL script", pml_path),
         ("PyMOL render script", pml_path.with_name(pml_path.stem + "_render.pml")),
     ]
     if extra:
         named.extend(("Refined coordinates" if path.name.endswith("_refined.pdb") else "Output", path) for path in extra)
-    files = [{"role": role, "path": str(path)} for role, path in named if path.is_file()]
+    files = [{"role": role, "path": str(path)} for role, path in named if path is not None and path.is_file()]
     manifest = {
         "caption": caption,
         "output_dir": str(output_dir),
@@ -1148,6 +1292,7 @@ def _result(caption, png_path, extended_map, fragment, pml_path, output_dir, ext
         "output_dir": str(output_dir),
         "files": files,
         "viewer": viewer,
+        "additional_fragment": str(additional_fragment) if additional_fragment else None,
     }
 
 

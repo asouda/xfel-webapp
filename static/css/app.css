@@ -348,6 +348,20 @@ input:focus, select:focus, textarea:focus {
   font-size: 12px;
   line-height: 1.45;
 }
+.log :is(b, strong) { font-weight: 700; }
+.log :is(i, em) { font-style: italic; }
+.log a { color: var(--blue); text-decoration: underline; }
+.log sub, .log sup { font-size: 0.8em; line-height: 0; position: relative; }
+.log sub { bottom: -0.2em; }
+.log sup { top: -0.4em; }
+.log hr { border: 0; border-top: 1px solid var(--line); margin: 0.6em 0; }
+.log :is(table, p, div, ul, ol, li, h1, h2, h3, h4, center) { white-space: normal; }
+.log table { border-collapse: collapse; margin: 0.3em 0; }
+.log :is(td, th) { border: 1px solid var(--line); padding: 2px 6px; vertical-align: top; }
+.log :is(ul, ol) { margin: 0.3em 0 0.3em 1.4em; }
+.log :is(h1, h2, h3, h4) { font-size: 1em; margin: 0.5em 0 0.2em; font-weight: 700; }
+.log p { margin: 0.4em 0; }
+.log center { display: block; text-align: center; }
 figure { margin: 18px 0 0; }
 figure img {
   width: 100%;
@@ -509,6 +523,16 @@ label.viewer-sigma-exact { flex-direction: row; align-items: center; gap: 4px; c
 .viewer-sigma .pill[aria-pressed="true"] { background: var(--pill-solid-bg); color: var(--pill-solid-fg); border-color: var(--pill-solid-bg); font-weight: 600; }
 .viewer-sigma input:disabled { opacity: 0.55; }
 .viewer-sigma-note { margin: 0; font-size: 12px; line-height: 1.35; }
+.site-row { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px 16px; }
+.restraint-list { display: flex; flex-direction: column; gap: 8px; }
+.restraint-head, .restraint-row { display: grid; gap: 8px; align-items: center; }
+.restraint-head { color: var(--muted); font-size: 12px; }
+.restraint-distance .restraint-head, .restraint-distance .restraint-row { grid-template-columns: minmax(0, 1.5fr) minmax(0, 1.5fr) minmax(76px, 0.7fr) minmax(76px, 0.7fr) auto; }
+.restraint-angle .restraint-head, .restraint-angle .restraint-row { grid-template-columns: minmax(0, 1.2fr) minmax(0, 1.2fr) minmax(0, 1.2fr) minmax(76px, 0.7fr) minmax(76px, 0.7fr) auto; }
+.restraint-dihedral .restraint-head, .restraint-dihedral .restraint-row { grid-template-columns: repeat(4, minmax(0, 1fr)) minmax(68px, 0.6fr) minmax(68px, 0.6fr) auto; }
+.restraint-row input { width: 100%; min-width: 0; }
+.restraint-remove { padding: 8px 12px; }
+.viz-frame > .fields { margin-top: 8px; }
 .map-center-xyz { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px 16px; }
 .map-center-xyz[hidden] { display: none; }
 .viewer-range { display: grid; grid-template-columns: 1fr 1fr; gap: 14px 16px; }
@@ -566,5 +590,9 @@ tbody tr:hover { background: var(--hover); }
   .files div { grid-template-columns: 1fr; }
   .viewer-style, .viewer-stage { --viewer-side: 112px; }
   .viewer-stage { height: 520px; min-height: 520px; }
-  .map-center-xyz, .viewer-range { grid-template-columns: 1fr; }
+  .map-center-xyz, .viewer-range, .site-row,
+  .restraint-distance .restraint-head, .restraint-distance .restraint-row,
+  .restraint-angle .restraint-head, .restraint-angle .restraint-row,
+  .restraint-dihedral .restraint-head, .restraint-dihedral .restraint-row { grid-template-columns: 1fr; }
+  .restraint-head { display: none; }
 }
